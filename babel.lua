@@ -68,7 +68,25 @@ function babel()
       print('\nhf: ' .. #df.global.world.history.figures .. '>' .. hist_figure_next_id)
       for i = hist_figure_next_id, #df.global.world.history.figures - 1 do
         if unprocessed_historical_figure(i) then
-          df.global.world.history.figures[i].name.nickname = 'Hf' .. i
+          local figure = df.global.world.history.figures[i]
+          figure.name.nickname = 'Hf' .. i
+          local _, civ = utils.linear_index(df.global.world.entities.all,
+                                            figure.civ_id, 'id')
+          if civ then
+            for i = 0, #civ.entity_links - 1 do
+              if civ.entity_links[i].type == 1 then  -- CHILD
+                local _, language = utils.linear_index(df.global.world.entities.all,
+                                                       civ.entity_links[i].target,
+                                                       'id')
+                if language and language.name.nickname ~= '' then
+                  figure.entity_links:insert('#', {new=true,
+                                                   entity_id=language.id,
+                                                   link_strength=100})
+                  break
+                end
+              end
+            end
+          end
         end
       end
       dfhack.persistent.save({key='babel',
