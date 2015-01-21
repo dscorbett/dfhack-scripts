@@ -2,7 +2,8 @@ local utils = require 'utils'
 
 -- TODO: clear announcements on reloading world
 
-local FLUENCY_THRESHOLD = 100
+local MINIMUM_FLUENCY = -32768
+local MAXIMUM_FLUENCY = 32767
 
 if enabled == nil then
   enabled = false
@@ -23,6 +24,7 @@ function make_languages()
       print('Creating language for civ ' .. civ.id)
       df.global.world.entities.all:insert(0,
                                           {new=true,
+                                           type=1,  -- SiteGovernment
                                            id=df.global.entity_next_id,
                                            name={new=true, nickname='Lg' .. i},
                                            entity_links={new=true,
@@ -61,6 +63,10 @@ end
 function get_hf_l1(hf)
   local _, civ = utils.linear_index(df.global.world.entities.all, hf.civ_id,
                                     'id')
+  return get_civ_l1(civ)
+end
+
+function get_civ_l1(civ)
   if civ then
     for i = 0, #civ.entity_links - 1 do
       if civ.entity_links[i].type == 1 then  -- CHILD
@@ -74,10 +80,18 @@ function get_hf_l1(hf)
   end
 end
 
-function get_hf_languages(hf)
+function get_unit_languages(unit)
   local languages = {}
+  local _, hf = utils.linear_index(df.global.world.history.figures,
+                                   unit.id, 'unit_id')
+  if not hf then
+    print('unit has no hf')
+    local _, civ = utils.linear_index(df.global.world.entities.all, unit.civ_id,
+                                      'id')
+    return {get_civ_l1(civ)}
+  end
   for i = 0, #hf.entity_links - 1 do
-    if hf.entity_links[i].link_strength >= FLUENCY_THRESHOLD then
+    if hf.entity_links[i].link_strength == MAXIMUM_FLUENCY then
       local _, language = utils.linear_index(df.global.world.entities.all,
                                              hf.entity_links[i].entity_id, 'id')
       if language and language.name.nickname ~= '' then
@@ -89,16 +103,15 @@ function get_hf_languages(hf)
 end
 
 function get_report_language(report)
-  local _, hf = utils.linear_index(df.global.world.history.figures,
-                                   report.unk_v40_3, 'unit_id')
+  local _, unit = utils.linear_index(df.global.world.units.all,
+                                     report.unk_v40_3, 'id')
   -- TODO: Take listener's language knowledge into account.
-  if hf then
-    local languages = get_hf_languages(hf)
-    if #languages then
+  if unit then
+    local languages = get_unit_languages(unit)
+    if #languages ~= 0 then
       return languages[1]  -- TODO: Don't always choose the first one.
     end
   end
-  -- TODO: Return the local language if the unit is not historical.
 end
 
 function in_list(element, list)
@@ -121,15 +134,16 @@ function babel()
     if #df.global.world.history.figures > hist_figure_next_id then
       print('\nhf: ' .. #df.global.world.history.figures .. '>' .. hist_figure_next_id)
       for i = hist_figure_next_id, #df.global.world.history.figures - 1 do
+        local hf = df.global.world.history.figures[i]
         if unprocessed_historical_figure(i) then
-          local hf = df.global.world.history.figures[i]
           hf.name.nickname = 'Hf' .. i
-          local language = get_hf_l1(hf)
-          if language then
-            hf.entity_links:insert('#', {new=true,
-                                         entity_id=language.id,
-                                         link_strength=100})
-          end
+        end
+        local language = get_hf_l1(hf)
+        if language then
+          print('L1[' .. dfhack.TranslateName(hf.name) .. '] = ' .. language.name.nickname)
+          hf.entity_links:insert('#', {new=true,
+                                       entity_id=language.id,
+                                       link_strength=MAXIMUM_FLUENCY})
         end
       end
       dfhack.persistent.save({key='babel',
@@ -203,7 +217,7 @@ function babel()
           local adventurer = df.global.world.units.active[0]
           local _, adv_hf = utils.linear_index(df.global.world.history.figures,
                                                adventurer.hist_figure_id, 'id')
-          local adv_languages = get_hf_languages(adv_hf)
+          local adv_languages = get_unit_languages(adventurer)
           for i = 1, #adv_languages do
             print('adv knows: ' .. adv_languages[i].name.nickname)
           end
@@ -216,11 +230,15 @@ function babel()
             local _, link = utils.linear_index(adv_hf.entity_links,
                                                report_language.id, 'entity_id')
             if not link then
-              link = {new=true, entity_id=report_language.id, link_strength=0}
+              link = {new=true, entity_id=report_language.id,
+                      link_strength=MINIMUM_FLUENCY}
               adv_hf.entity_links:insert('#', link)
             end
-            printall(link)
-            link.link_strength = link.link_strength + 1
+            local _, unit = utils.linear_index(df.global.world.units.all,
+                                               report.unk_v40_3, 'id')
+            link.link_strength = math.min(
+              MAXIMUM_FLUENCY, link.link_strength +
+              unit.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value)
             print('strength <-- ' .. link.link_strength)
             local conversation_id = report.unk_v40_1
             local n = counts[conversation_id]
