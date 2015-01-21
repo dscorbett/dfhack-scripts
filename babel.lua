@@ -14,8 +14,28 @@ Usage:
 end
 
 function make_languages()
-  print('TODO: make languages')
-  return dfhack.persistent.save({key='babel', ints={0, 0, 0, 0}})
+  local language_count = 0
+  for i = 0, #df.global.world.entities.all - 1 do
+    local civ = df.global.world.entities.all[i + language_count]
+    if civ.type == 0  then -- Civilization
+      print('Creating language for civ ' .. civ.id)
+      df.global.world.entities.all:insert(0,
+                                          {new=true,
+                                           id=df.global.entity_next_id,
+                                           name={new=true, nickname='Lg' .. i},
+                                           entity_links={new=true,
+                                                         type=0,  -- PARENT
+                                                         target=civ.id,
+                                                         strength=100}})
+      civ.entity_links:insert('#', {new=true,
+                                    type=1,  -- CHILD
+                                    target=df.global.entity_next_id,
+                                    strength=100})
+      df.global.entity_next_id = df.global.entity_next_id + 1
+      language_count = language_count + 1
+    end
+  end
+  return dfhack.persistent.save({key='babel', ints={0, 0, language_count, 0}})
 end
 
 -- TODO: reset when world is unloaded
