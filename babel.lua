@@ -2,6 +2,8 @@ local utils = require 'utils'
 
 -- TODO: clear announcements on reloading world
 
+local FLUENCY_THRESHOLD = 100
+
 if enabled == nil then
   enabled = false
 end
@@ -56,6 +58,58 @@ function unprocessed_historical_figure(index)
   return true
 end
 
+function get_hf_l1(hf)
+  local _, civ = utils.linear_index(df.global.world.entities.all, hf.civ_id,
+                                    'id')
+  if civ then
+    for i = 0, #civ.entity_links - 1 do
+      if civ.entity_links[i].type == 1 then  -- CHILD
+        local _, language = utils.linear_index(df.global.world.entities.all,
+                                               civ.entity_links[i].target, 'id')
+        if language and language.name.nickname ~= '' then
+          return language
+        end
+      end
+    end
+  end
+end
+
+function get_hf_languages(hf)
+  local languages = {}
+  for i = 0, #hf.entity_links - 1 do
+    if hf.entity_links[i].link_strength >= FLUENCY_THRESHOLD then
+      local _, language = utils.linear_index(df.global.world.entities.all,
+                                             hf.entity_links[i].entity_id, 'id')
+      if language and language.name.nickname ~= '' then
+        table.insert(languages, language)
+      end
+    end
+  end
+  return languages
+end
+
+function get_report_language(report)
+  local _, hf = utils.linear_index(df.global.world.history.figures,
+                                   report.unk_v40_3, 'unit_id')
+  -- TODO: Take listener's language knowledge into account.
+  if hf then
+    local languages = get_hf_languages(hf)
+    if #languages then
+      return languages[1]  -- TODO: Don't always choose the first one.
+    end
+  end
+  -- TODO: Return the local language if the unit is not historical.
+end
+
+function in_list(element, list)
+  for i = 1, #list do
+    if element == list[i] then
+      return true
+    end
+  end
+  return false
+end
+
 function babel()
   if dfhack.isWorldLoaded() then
     dfhack.with_suspend(function()
@@ -68,24 +122,13 @@ function babel()
       print('\nhf: ' .. #df.global.world.history.figures .. '>' .. hist_figure_next_id)
       for i = hist_figure_next_id, #df.global.world.history.figures - 1 do
         if unprocessed_historical_figure(i) then
-          local figure = df.global.world.history.figures[i]
-          figure.name.nickname = 'Hf' .. i
-          local _, civ = utils.linear_index(df.global.world.entities.all,
-                                            figure.civ_id, 'id')
-          if civ then
-            for i = 0, #civ.entity_links - 1 do
-              if civ.entity_links[i].type == 1 then  -- CHILD
-                local _, language = utils.linear_index(df.global.world.entities.all,
-                                                       civ.entity_links[i].target,
-                                                       'id')
-                if language and language.name.nickname ~= '' then
-                  figure.entity_links:insert('#', {new=true,
-                                                   entity_id=language.id,
-                                                   link_strength=100})
-                  break
-                end
-              end
-            end
+          local hf = df.global.world.history.figures[i]
+          hf.name.nickname = 'Hf' .. i
+          local language = get_hf_l1(hf)
+          if language then
+            hf.entity_links:insert('#', {new=true,
+                                         entity_id=language.id,
+                                         link_strength=100})
           end
         end
       end
@@ -142,54 +185,86 @@ function babel()
       while i < #reports do
         local report = reports[i]
         local announcement_index = utils.linear_index(announcements,
-                                                  report.id, 'id')
-        if report.unk_v40_1 == -1 then
+                                                      report.id, 'id')
+        if report.unk_v40_1 == -1 or df.global.gamemode ~= 1 then  -- ADVENTURE
           print('  not a conversation: ' .. report.text)
           report.id = report.id + id_delta
           i = i + 1
         elseif report.flags.continuation then
           print('  ...: ' .. report.text)
           reports:erase(i)
-          announcements:erase(announcement_index)
+          if announcement_index then
+            announcements:erase(announcement_index)
+          end
           id_delta = id_delta - 1
         else
+          local report_language = get_report_language(report)
           print('  [' .. report.unk_v40_1 .. ']: ' .. report.text)
-          local conversation_id = report.unk_v40_1
-          local n = counts[conversation_id]
-          counts[conversation_id] = counts[conversation_id] - 1
-          local conversation_index = utils.linear_index(
-            df.global.world.activities.all, conversation_id,
-            'id')
-          local details = df.global.world.activities.all[conversation_index].events[0].anon_9
-          reports:erase(i)
-          announcements:erase(announcement_index)
-          text = '[' .. details[#details - n].anon_3 .. ']: ' .. string.upper(report.text)
-          local continuation = false -- TODO: use in flags
-          while text ~= '' do
-            print('text:' .. text)
-            local size = math.min(string.len(text), 73)
-            new_report = {new=true,
-                          type=report.type,
-                          text=string.sub(text, 1, 73),
-                          color=report.color,
-                          bright=report.bright,
-                          duration=report.duration,
-                          flags={new=true,
-                                 continuation=continuation},
-                          repeat_count=report.repeat_count,
-                          id=report.id + id_delta,
-                          year=report.year,
-                          time=report.time,
-                          unk_v40_1=report.unk_v40_1,
-                          unk_v40_2=report.unk_v40_2,
-                          unk_v40_3=report.unk_v40_3}
-            text = string.sub(text, 74)
-            reports:insert(i, new_report)
-            announcements:insert(announcement_index, new_report)
-            i = i + 1
-            announcement_index = announcement_index + 1
+          local adventurer = df.global.world.units.active[0]
+          local _, adv_hf = utils.linear_index(df.global.world.history.figures,
+                                               adventurer.hist_figure_id, 'id')
+          local adv_languages = get_hf_languages(adv_hf)
+          for i = 1, #adv_languages do
+            print('adv knows: ' .. adv_languages[i].name.nickname)
           end
-        end
+          if report_language then
+            print('speaker is speaking: ' .. report_language.name.nickname)
+          else
+            print('speaker speaks no language')
+          end
+          if report_language and not in_list(report_language, adv_languages) then
+            local _, link = utils.linear_index(adv_hf.entity_links,
+                                               report_language.id, 'entity_id')
+            if not link then
+              link = {new=true, entity_id=report_language.id, link_strength=0}
+              adv_hf.entity_links:insert('#', link)
+            end
+            printall(link)
+            link.link_strength = link.link_strength + 1
+            print('strength <-- ' .. link.link_strength)
+            local conversation_id = report.unk_v40_1
+            local n = counts[conversation_id]
+            counts[conversation_id] = counts[conversation_id] - 1
+            local conversation_index = utils.linear_index(
+              df.global.world.activities.all, conversation_id, 'id')
+            local details = df.global.world.activities.all[conversation_index].events[0].anon_9
+            reports:erase(i)
+            if announcement_index then
+              announcements:erase(announcement_index)
+            end
+            text = '[' .. details[#details - n].anon_3 .. ']: ' .. string.upper(report.text)
+            local continuation = false
+            while not continuation or text ~= '' do
+              print('text:' .. text)
+              local size = math.min(string.len(text), 73)
+              new_report = {new=true,
+                            type=report.type,
+                            text=string.sub(text, 1, 73),
+                            color=report.color,
+                            bright=report.bright,
+                            duration=report.duration,
+                            flags={new=true,
+                                   continuation=continuation},
+                            repeat_count=report.repeat_count,
+                            id=report.id + id_delta,
+                            year=report.year,
+                            time=report.time,
+                            unk_v40_1=report.unk_v40_1,
+                            unk_v40_2=report.unk_v40_2,
+                            unk_v40_3=report.unk_v40_3}
+              text = string.sub(text, 74)
+              continuation = true
+              reports:insert(i, new_report)
+              i = i + 1
+              if announcement_index then
+                announcements:insert(announcement_index, new_report)
+                announcement_index = announcement_index + 1
+              end
+            end
+          else
+            i = i + 1
+          end
+        end -- conversation
       end
       next_report_index = i
       df.global.world.status.next_report_id = i
