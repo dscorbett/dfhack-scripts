@@ -41,7 +41,8 @@ function make_languages()
       language_count = language_count + 1
     end
   end
-  return dfhack.persistent.save({key='babel', ints={0, 0, language_count, 0}})
+  return dfhack.persistent.save({key='babel',
+                                 ints={0, 0, language_count, 0, 0, 0}})
 end
 
 -- TODO: reset when world is unloaded
@@ -180,6 +181,24 @@ function babel()
       end
       dfhack.persistent.save({key='babel',
                         ints={[4]=#df.global.world.world_data.sites}})
+    end
+    local artifact_next_id = entry.ints[5]
+    if #df.global.world.artifacts.all > artifact_next_id then
+      print('\nartifact ' .. #df.global.world.artifacts.all .. '>' .. artifact_next_id)
+      for i = artifact_next_id, #df.global.world.artifacts.all - 1 do
+        df.global.world.artifacts.all[i].name.nickname = 'A' .. i
+      end
+      dfhack.persistent.save({key='babel',
+                        ints={[5]=#df.global.world.artifacts.all}})
+    end
+    local region_next_id = entry.ints[6]
+    if #df.global.world.world_data.regions > region_next_id then
+      print('\nregion ' .. #df.global.world.world_data.regions .. '>' .. region_next_id)
+      for i = region_next_id, #df.global.world.world_data.regions - 1 do
+        df.global.world.world_data.regions[i].name.nickname = 'Reg' .. i
+      end
+      dfhack.persistent.save({key='babel',
+                        ints={[6]=#df.global.world.world_data.regions}})
     end
     local reports = df.global.world.status.reports
     if #reports > next_report_index then
