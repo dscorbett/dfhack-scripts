@@ -19,19 +19,20 @@ end
 
 function make_languages()
   local language_count = 0
-  for i = 0, #df.global.world.entities.all - 1 do
-    local civ = df.global.world.entities.all[i + language_count]
-    if civ.type == 0  then -- Civilization
+  local entities = df.global.world.entities.all
+  for i = 0, #entities - 1 do
+    local civ = entities[i + language_count]
+    if civ.type == 0 then  -- Civilization
       print('Creating language for civ ' .. civ.id)
-      df.global.world.entities.all:insert(0,
-                                          {new=true,
-                                           type=1,  -- SiteGovernment
-                                           id=df.global.entity_next_id,
-                                           name={new=true, nickname='Lg' .. i},
-                                           entity_links={new=true,
-                                                         type=0,  -- PARENT
-                                                         target=civ.id,
-                                                         strength=100}})
+      entities:insert(0,
+                      {new=true,
+                       type=1,  -- SiteGovernment
+                       id=df.global.entity_next_id,
+                       name={new=true, nickname='Lg' .. i},
+                       entity_links={new=true,
+                                     type=0,  -- PARENT
+                                     target=civ.id,
+                                     strength=100}})
       civ.entity_links:insert('#', {new=true,
                                     type=1,  -- CHILD
                                     target=df.global.entity_next_id,
@@ -73,7 +74,7 @@ function get_civ_l1(civ)
       if civ.entity_links[i].type == 1 then  -- CHILD
         local _, language = utils.linear_index(df.global.world.entities.all,
                                                civ.entity_links[i].target, 'id')
-        if language and language.name.nickname ~= '' then
+        if language and string.sub(language.name.nickname, 1, 2) == 'Lg' then
           return language
         end
       end
@@ -95,7 +96,7 @@ function get_unit_languages(unit)
     if hf.entity_links[i].link_strength == MAXIMUM_FLUENCY then
       local _, language = utils.linear_index(df.global.world.entities.all,
                                              hf.entity_links[i].entity_id, 'id')
-      if language and language.name.nickname ~= '' then
+      if language and string.sub(language.name.nickname, 1, 2) == 'Lg' then
         table.insert(languages, language)
       end
     end
@@ -241,6 +242,11 @@ function babel()
               MAXIMUM_FLUENCY, link.link_strength +
               math.ceil(unit.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
             print('strength <-- ' .. link.link_strength)
+            if link.link_strength == MAXIMUM_FLUENCY then
+              dfhack.gui.showAnnouncement(
+                'You have learned ' ..
+                dfhack.TranslateName(report_language.name) .. '.', COLOR_GREEN)
+            end
             local conversation_id = report.unk_v40_1
             local n = counts[conversation_id]
             counts[conversation_id] = counts[conversation_id] - 1
