@@ -4,6 +4,7 @@ local utils = require 'utils'
 
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
+local UTTERANCES_PER_XP = 16
 
 if enabled == nil then
   enabled = false
@@ -238,7 +239,7 @@ function babel()
                                                report.unk_v40_3, 'id')
             link.link_strength = math.min(
               MAXIMUM_FLUENCY, link.link_strength +
-              unit.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value)
+              math.ceil(unit.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
             print('strength <-- ' .. link.link_strength)
             local conversation_id = report.unk_v40_1
             local n = counts[conversation_id]
