@@ -243,14 +243,23 @@ function babel()
             local conversation_id = report.unk_v40_1
             local n = counts[conversation_id]
             counts[conversation_id] = counts[conversation_id] - 1
-            local conversation_index = utils.linear_index(
+            local _, conversation = utils.linear_index(
               df.global.world.activities.all, conversation_id, 'id')
-            local details = df.global.world.activities.all[conversation_index].events[0].anon_9
+            local details = conversation.events[0].anon_9
+            local force_goodbye = false
+            local participants = conversation.events[0].anon_1
+            if #participants > 0 and (participants[0].anon_1 == adventurer.id or (#participants > 1 and conversation.events[0].anon_1[1].anon_1 == adventurer.id)) then
+              conversation.events[0].anon_2 = 7
+              force_goodbye = true
+            end
             reports:erase(i)
             if announcement_index then
               announcements:erase(announcement_index)
             end
-            text = '[' .. details[#details - n].anon_3 .. ']: ' .. string.upper(report.text)
+            local text = '[' .. details[#details - n].anon_3 .. ']: ' .. string.upper(report.text)
+            if force_goodbye then
+              text = '[I DO NOT SPEAK YOUR LANGUAGE. GOODBYE.]'
+            end
             local continuation = false
             while not continuation or text ~= '' do
               print('text:' .. text)
