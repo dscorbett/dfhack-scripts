@@ -17,7 +17,223 @@ Usage:
 ]]
 end
 
+function get_random_word()
+  local consonants = 'bcdfghjklmnpqrstvwxyz\x87\xa4\xe9\xeb'
+  local vowels = 'aeiou\x81\x82\x83\x84\x85\x86\x88\x89\x8a\x8b\x8c\x8d\x91\x93\x94\x95\x96\x97\x98\xa0\xa1\xa2\xa3'
+  local rand1 = math.random(1, consonants:len())
+  local rand2 = math.random(1, vowels:len())
+  local rand3 = math.random(1, consonants:len())
+  local rand4 = math.random(1, vowels:len())
+  return consonants:sub(rand1, rand1) .. vowels:sub(rand2, rand2) ..
+    consonants:sub(rand3, rand3) .. vowels:sub(rand4, rand4)
+end
+
+function update_word(word, noun_sing, noun_plur, adj)
+  -- TODO: n/a and STP and NP
+  if noun_sing ~= '' and noun_sing ~= 'n/a' then
+    word.forms.Noun = noun_sing
+    word.flags.front_compound_noun_sing = true
+    word.flags.rear_compound_noun_sing = true
+    word.flags.the_noun_sing = true
+    word.flags.the_compound_noun_sing = true
+    word.flags.of_noun_sing = true
+  end
+  if noun_plur ~= '' and noun_plur ~= 'NP' then
+    word.forms.NounPlural = noun_plur
+    word.flags.front_compound_noun_plur = true
+    word.flags.rear_compound_noun_plur = true
+    word.flags.the_noun_plur = true
+    word.flags.the_compound_noun_plur = true
+    word.flags.of_noun_plur = true
+  end
+  if adj ~= '' and adj ~= 'n/a' then
+    word.forms.Adjective = adj
+    word.flags.front_compound_adj = true
+    word.flags.rear_compound_adj = true
+    word.flags.the_compound_adj = true
+  end
+  for i = 0, #df.global.world.raws.language.translations - 1 do
+    df.global.world.raws.language.translations[i].words:insert(
+      '#', {new=true, value=get_random_word()})
+  end
+end
+
+function expand_lexicons()
+  local raws = df.global.world.raws
+  local words = raws.language.words
+  -- Inorganic materials
+  local inorganics = raws.inorganics
+  for i = 0, #inorganics - 1 do
+    local noun_sing = inorganics[i].material.state_name.Solid
+    local adj = inorganics[i].material.state_adj.Solid
+    words:insert('#', {new=true, word='INORGANIC:' .. inorganics[i].id})
+    update_word(words[#words - 1], noun_sing, '', adj)
+  end
+  -- Plants
+  local plants = raws.plants.all
+  for i = 0, #plants - 1 do
+    local noun_sing = plants[i].name
+    local noun_plur = plants[i].name_plural
+    local adj = plants[i].adj
+    words:insert('#', {new=true, word='PLANT:' .. plants[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, adj)
+  end
+  -- Tissues
+  local tissues = raws.tissue_templates
+  for i = 0, #tissues - 1 do
+    local noun_sing = tissues[i].tissue_name_singular
+    local noun_plur = tissues[i].tissue_name_plural
+    words:insert('#', {new=true, word='TISSUE_TEMPLATE:' .. tissues[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Creatures
+  local creatures = raws.creatures.all
+  for i = 0, #creatures - 1 do
+    local noun_sing = creatures[i].name[0]
+    local noun_plur = creatures[i].name[1]
+    local adj = creatures[i].name[2]
+    words:insert('#', {new=true, word='CREATURE:' .. creatures[i].creature_id})
+    update_word(words[#words - 1], noun_sing, noun_plur, adj)
+  end
+  -- Weapons
+  local weapons = raws.itemdefs.weapons
+  for i = 0, #weapons - 1 do
+    local noun_sing = weapons[i].name
+    local noun_plur = weapons[i].name_plural
+    words:insert('#', {new=true, word='ITEM_WEAPON:' .. weapons[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Trap components
+  local trapcomps = raws.itemdefs.trapcomps
+  for i = 0, #trapcomps - 1 do
+    local noun_sing = trapcomps[i].name
+    local noun_plur = trapcomps[i].name_plural
+    words:insert('#', {new=true, word='ITEM_TRAPCOMP:' .. trapcomps[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Toys
+  local toys = raws.itemdefs.toys
+  for i = 0, #toys - 1 do
+    local noun_sing = toys[i].name
+    local noun_plur = toys[i].name_plural
+    words:insert('#', {new=true, word='ITEM_TOY:' .. toys[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Tools
+  local tools = raws.itemdefs.tools
+  for i = 0, #tools - 1 do
+    local noun_sing = tools[i].name
+    local noun_plur = tools[i].name_plural
+    words:insert('#', {new=true, word='ITEM_TOOL:' .. tools[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Instruments
+  local instruments = raws.itemdefs.instruments
+  for i = 0, #instruments - 1 do
+    local noun_sing = instruments[i].name
+    local noun_plur = instruments[i].name_plural
+    words:insert('#', {new=true, word='ITEM_INSTRUMENT:' .. instruments[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Armor
+  local armor = raws.itemdefs.armor
+  for i = 0, #armor - 1 do
+    local noun_sing = armor[i].name
+    local noun_plur = armor[i].name_plural
+    words:insert('#', {new=true, word='ITEM_ARMOR:' .. armor[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Ammo
+  local ammo = raws.itemdefs.ammo
+  for i = 0, #ammo - 1 do
+    local noun_sing = ammo[i].name
+    local noun_plur = ammo[i].name_plural
+    words:insert('#', {new=true, word='ITEM_AMMO:' .. ammo[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Siege ammo
+  local siege_ammo = raws.itemdefs.siege_ammo
+  for i = 0, #siege_ammo - 1 do
+    local noun_sing = siege_ammo[i].name
+    local noun_plur = siege_ammo[i].name_plural
+    words:insert('#', {new=true, word='ITEM_SIEGEAMMO:' .. siege_ammo[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Gloves
+  local gloves = raws.itemdefs.gloves
+  for i = 0, #gloves - 1 do
+    local noun_sing = gloves[i].name
+    local noun_plur = gloves[i].name_plural
+    words:insert('#', {new=true, word='ITEM_GLOVES:' .. gloves[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Shoes
+  local shoes = raws.itemdefs.shoes
+  for i = 0, #shoes - 1 do
+    local noun_sing = shoes[i].name
+    local noun_plur = shoes[i].name_plural
+    words:insert('#', {new=true, word='ITEM_SHOES:' .. shoes[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Shields
+  local shields = raws.itemdefs.shields
+  for i = 0, #shields - 1 do
+    local noun_sing = shields[i].name
+    local noun_plur = shields[i].name_plural
+    words:insert('#', {new=true, word='ITEM_SHIELD:' .. shields[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Helms
+  local helms = raws.itemdefs.helms
+  for i = 0, #helms - 1 do
+    local noun_sing = helms[i].name
+    local noun_plur = helms[i].name_plural
+    words:insert('#', {new=true, word='ITEM_HELM:' .. helms[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Pants
+  local pants = raws.itemdefs.pants
+  for i = 0, #pants - 1 do
+    local noun_sing = pants[i].name
+    local noun_plur = pants[i].name_plural
+    words:insert('#', {new=true, word='ITEM_PANTS:' .. pants[i].id})
+    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  end
+  -- Food
+  local food = raws.itemdefs.food
+  for i = 0, #food - 1 do
+    local noun_sing = food[i].name
+    words:insert('#', {new=true, word='ITEM_FOOD:' .. food[i].id})
+    update_word(words[#words - 1], noun_sing, '', '')
+  end
+  -- Buildings
+  local buildings = raws.buildings.all
+  for i = 0, #buildings - 1 do
+    local noun_sing = buildings[i].name
+    words:insert('#', {new=true, word='BUILDING:' .. buildings[i].id})
+    update_word(words[#words - 1], noun_sing, '', '')
+  end
+  -- Built-in materials
+  local builtins = raws.mat_table.builtin
+  for i = 0, #builtins - 1 do
+    if builtins[i] then
+      local noun_sing = builtins[i].state_name.Solid
+      local adj = builtins[i].state_adj.Solid
+      words:insert('#', {new=true, word='BUILTIN:' .. builtins[i].id})
+      update_word(words[#words - 1], noun_sing, '', '')
+    end
+  end
+  -- Syndromes
+  local syndromes = raws.syndromes.all
+  for i = 0, #syndromes - 1 do
+    local noun_sing = syndromes[i].syn_name
+    words:insert('#', {new=true, word='SYNDROME:' .. syndromes[i].id})
+    update_word(words[#words - 1], noun_sing, '', '')
+  end
+end
+
 function make_languages()
+  expand_lexicons()
   local language_count = 0
   local entities = df.global.world.entities.all
   for i = 0, #entities - 1 do
