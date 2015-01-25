@@ -1,6 +1,7 @@
 local utils = require 'utils'
 
 -- TODO: clear announcements on reloading world
+-- TODO: don't crash when saving world
 
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
@@ -15,6 +16,143 @@ function usage()
 Usage:
   TODO
 ]]
+end
+
+function translate(language, topic, topic1, topic2, topic3)
+  print('translate ' .. tostring(topic) .. '/' .. topic1)
+  local word
+  if topic == true then
+    word = 'FORCE_GOODBYE'
+  elseif topic == 0 then  -- Greet
+    word = 'GREETINGS'
+  --[[
+  elseif topic == 1 then  -- Nevermind
+  elseif topic == 2 then  -- Trade
+  elseif topic == 3 then  -- AskJoin
+  elseif topic == 4 then  -- AskSurroundings
+  ]]
+  elseif topic == 5 then  -- SayGoodbye
+    word = 'GOODBYE'
+  --[[
+  elseif topic == 6 then  -- AskStructure
+  elseif topic == 7 then  -- AskFamily
+  elseif topic == 8 then  -- AskProfession
+  elseif topic == 9 then  -- AskPermissionSleep
+  elseif topic == 10 then  -- AccuseNightCreature
+  elseif topic == 11 then  -- AskTroubles
+  elseif topic == 12 then  -- BringUpEvent
+  elseif topic == 13 then  -- SpreadRumor
+  elseif topic == 14 then  -- ReplyGreeting
+  elseif topic == 15 then  -- RefuseConversation
+  elseif topic == 16 then  -- ReplyImpersonate
+  elseif topic == 17 then  -- BringUpIncident
+  elseif topic == 18 then  -- TellNothingChanged
+  elseif topic == 19 then  -- Goodbye2
+  elseif topic == 20 then  -- ReturnTopic
+  elseif topic == 21 then  -- ChangeSubject
+  elseif topic == 22 then  -- AskTargetAction
+  elseif topic == 23 then  -- RequestSuggestAction
+  elseif topic == 24 then  -- AskJoinInsurrection
+  elseif topic == 25 then  -- AskJoinRescue
+  ]]
+  elseif topic == 26 then  -- StateOpinion
+    if topic1 == 0 then
+      word = 'VIOLENT'
+    elseif topic1 == 2 then
+      word = 'INEVITABLE'
+    elseif topic1 == 4 then
+      word = 'TERRIFYING'
+    elseif topic1 == 8 then
+      word = 'DONT_CARE'
+    else
+      -- TODO: more opinions
+      word = 'OPINION'
+    end
+  --[[
+  elseif topic == 29 then  -- AllowPermissionSleep
+  elseif topic == 30 then  -- DenyPermissionSleep
+  elseif topic == 32 then  -- AskJoinAdventure
+  elseif topic == 33 then  -- AskGuideLocation
+  elseif topic == 34 then  -- RespondJoin
+  elseif topic == 35 then  -- RespondJoin2
+  elseif topic == 36 then  -- OfferCondolences
+  elseif topic == 37 then  -- StateNotAcquainted
+  elseif topic == 38 then  -- SuggestTravel
+  elseif topic == 39 then  -- SuggestTalk
+  elseif topic == 40 then  -- SuggestSelfRescue
+  elseif topic == 41 then  -- AskWhatHappened
+  elseif topic == 42 then  -- AskBeRescued
+  elseif topic == 43 then  -- SayNotRemember
+  elseif topic == 45 then  -- SayNoFamily
+  elseif topic == 46 then  -- StateUnitLocation
+  elseif topic == 47 then  -- ReferToElder
+  elseif topic == 48 then  -- AskComeCloser
+  elseif topic == 49 then  -- DoBusiness
+  elseif topic == 50 then  -- AskComeStoreLater
+  elseif topic == 51 then  -- AskComeMarketLater
+  elseif topic == 52 then  -- TellTryShopkeeper
+  elseif topic == 53 then  -- DescribeSurroundings
+  elseif topic == 54 then  -- AskWaitUntilHome
+  elseif topic == 55 then  -- DescribeFamily
+  elseif topic == 56 then  -- StateAge
+  elseif topic == 57 then  -- DescribeProfession
+  elseif topic == 58 then  -- AnnounceNightCreature
+  elseif topic == 59 then  -- StateIncredulity
+  elseif topic == 60 then  -- BypassGreeting
+  elseif topic == 61 then  -- AskCeaseHostilities
+  elseif topic == 62 then  -- DemandYield
+  elseif topic == 63 then  -- HawkWares
+  elseif topic == 64 then  -- YieldTerror
+  elseif topic == 65 then  -- Yield
+  elseif topic == 66 then  -- ExpressOverwhelmingEmotion
+  elseif topic == 67 then  -- ExpressGreatEmotion
+  elseif topic == 68 then  -- ExpressionEmotion
+  elseif topic == 69 then  -- ExpressMinorEmotion
+  elseif topic == 70 then  -- ExpressLackEmotion
+  elseif topic == 71 then  -- OutburstFleeConflict
+  elseif topic == 72 then  -- StateFleeConflict
+  elseif topic == 73 then  -- MentionJourney
+  elseif topic == 74 then  -- SummarizeTroubles
+  elseif topic == 75 then  -- AskAboutIncident
+  elseif topic == 76 then  -- AskDirectionsPerson
+  elseif topic == 77 then  -- AskDirectionsPlace
+  elseif topic == 78 then  -- AskWhereabouts
+  elseif topic == 79 then  -- RequestGuide
+  elseif topic == 80 then  -- RequestGuide2
+  elseif topic == 81 then  -- ProvideDirections
+  elseif topic == 82 then  -- ProvideWhereabouts
+  elseif topic == 83 then  -- TellTargetSelf
+  elseif topic == 84 then  -- TellTargetDead
+  elseif topic == 85 then  -- RecommentGuide
+  elseif topic == 86 then  -- ProfessIgnorance
+  elseif topic == 87 then  -- TellAboutPlace
+  elseif topic == 88 then  -- AskFavorMenu
+  elseif topic == 89 then  -- AskWait
+  elseif topic == 90 then  -- AskFollow
+  elseif topic == 91 then  -- ApologizeBusy
+  elseif topic == 92 then  -- ComplyOrder
+  elseif topic == 93 then  -- AgreeFollow
+  elseif topic == 94 then  -- ExchangeItems
+  elseif topic == 95 then  -- AskComeCloser2
+  elseif topic == 96 then  -- InitiateBarter
+  elseif topic == 97 then  -- AgreeCeaseHostile
+  elseif topic == 98 then  -- RefuseCeaseHostile
+  elseif topic == 99 then  -- RefuseCeaseHostile2
+  ]]
+  else
+    -- TODO: more topics
+    word = 'BLAH_BLAH_BLAH'
+  end
+  local languages = df.global.world.raws.language
+  local word_index, _ = utils.linear_index(languages.words, 'REPORT:' .. word,
+                                           'word')
+  if not word_index then
+    return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
+  end
+  -- TODO: Pick the right translation for the language.
+  local translation_index = 0
+  -- TODO: Capitalize the result.
+  return languages.translations[translation_index].words[word_index].value .. '.'
 end
 
 function get_random_word()
@@ -61,6 +199,12 @@ end
 function expand_lexicons()
   local raws = df.global.world.raws
   local words = raws.language.words
+  -- Words used in conversations
+  for _, word in pairs({'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
+                        'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'}) do
+    words:insert('#', {new=true, word='REPORT:' .. word})
+    update_word(words[#words - 1], '', '', '')
+  end
   -- Inorganic materials
   local inorganics = raws.inorganics
   for i = 0, #inorganics - 1 do
@@ -441,13 +585,6 @@ function babel()
           print('  not a conversation: ' .. report.text)
           report.id = report.id + id_delta
           i = i + 1
-        elseif report.flags.continuation then
-          print('  ...: ' .. report.text)
-          reports:erase(i)
-          if announcement_index then
-            announcements:erase(announcement_index)
-          end
-          id_delta = id_delta - 1
         else
           local report_language = get_report_language(report)
           print('  [' .. report.unk_v40_1 .. ']: ' .. report.text)
@@ -464,70 +601,85 @@ function babel()
             print('speaker speaks no language')
           end
           if report_language and not in_list(report_language, adv_languages) then
-            local _, link = utils.linear_index(adv_hf.entity_links,
-                                               report_language.id, 'entity_id')
-            if not link then
-              link = {new=true, entity_id=report_language.id,
-                      link_strength=MINIMUM_FLUENCY}
-              adv_hf.entity_links:insert('#', link)
-            end
-            local _, unit = utils.linear_index(df.global.world.units.all,
-                                               report.unk_v40_3, 'id')
-            link.link_strength = math.min(
-              MAXIMUM_FLUENCY, link.link_strength +
-              math.ceil(unit.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
-            print('strength <-- ' .. link.link_strength)
-            if link.link_strength == MAXIMUM_FLUENCY then
-              dfhack.gui.showAnnouncement(
-                'You have learned ' ..
-                dfhack.TranslateName(report_language.name) .. '.', COLOR_GREEN)
-            end
-            local conversation_id = report.unk_v40_1
-            local n = counts[conversation_id]
-            counts[conversation_id] = counts[conversation_id] - 1
-            local _, conversation = utils.linear_index(
-              df.global.world.activities.all, conversation_id, 'id')
-            local details = conversation.events[0].anon_9
-            local force_goodbye = false
-            local participants = conversation.events[0].anon_1
-            if #participants > 0 and (participants[0].anon_1 == adventurer.id or (#participants > 1 and conversation.events[0].anon_1[1].anon_1 == adventurer.id)) then
-              conversation.events[0].anon_2 = 7
-              force_goodbye = true
-            end
-            reports:erase(i)
-            if announcement_index then
-              announcements:erase(announcement_index)
-            end
-            local text = '[' .. details[#details - n].anon_3 .. ']: ' .. string.upper(report.text)
-            if force_goodbye then
-              text = '[I DO NOT SPEAK YOUR LANGUAGE. GOODBYE.]'
-            end
-            local continuation = false
-            while not continuation or text ~= '' do
-              print('text:' .. text)
-              local size = math.min(string.len(text), 73)
-              new_report = {new=true,
-                            type=report.type,
-                            text=string.sub(text, 1, 73),
-                            color=report.color,
-                            bright=report.bright,
-                            duration=report.duration,
-                            flags={new=true,
-                                   continuation=continuation},
-                            repeat_count=report.repeat_count,
-                            id=report.id + id_delta,
-                            year=report.year,
-                            time=report.time,
-                            unk_v40_1=report.unk_v40_1,
-                            unk_v40_2=report.unk_v40_2,
-                            unk_v40_3=report.unk_v40_3}
-              text = string.sub(text, 74)
-              continuation = true
-              reports:insert(i, new_report)
-              i = i + 1
+            if report.flags.continuation then
+              print('  ...: ' .. report.text)
+              reports:erase(i)
               if announcement_index then
-                announcements:insert(announcement_index, new_report)
-                announcement_index = announcement_index + 1
+                announcements:erase(announcement_index)
+              end
+              id_delta = id_delta - 1
+            else
+              local _, link = utils.linear_index(adv_hf.entity_links,
+                                                 report_language.id, 'entity_id')
+              if not link then
+                link = {new=true, entity_id=report_language.id,
+                        link_strength=MINIMUM_FLUENCY}
+                adv_hf.entity_links:insert('#', link)
+              end
+              local _, unit = utils.linear_index(df.global.world.units.all,
+                                                 report.unk_v40_3, 'id')
+              link.link_strength = math.min(
+                MAXIMUM_FLUENCY, link.link_strength +
+                math.ceil(adventurer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
+              print('strength <-- ' .. link.link_strength)
+              if link.link_strength == MAXIMUM_FLUENCY then
+                dfhack.gui.showAnnouncement(
+                  'You have learned ' ..
+                  dfhack.TranslateName(report_language.name) .. '.', COLOR_GREEN)
+              end
+              local conversation_id = report.unk_v40_1
+              local n = counts[conversation_id]
+              counts[conversation_id] = counts[conversation_id] - 1
+              local _, conversation = utils.linear_index(
+                df.global.world.activities.all, conversation_id, 'id')
+              local force_goodbye = false
+              local participants = conversation.events[0].anon_1
+              if #participants > 0 and (participants[0].anon_1 == adventurer.id or (#participants > 1 and participants[1].anon_1 == adventurer.id)) then
+                conversation.events[0].anon_2 = 7
+                force_goodbye = true
+              end
+              reports:erase(i)
+              if announcement_index then
+                announcements:erase(announcement_index)
+              end
+              local details = conversation.events[0].anon_9
+              details = details[#details - n]
+              local text = df.profession.attrs[unit.profession].caption
+              if #participants > 1 and participants[1].anon_1 ~= adventurer.id then
+                -- TODO: What if the adventurer knows the participants' names?
+                local _, hearer = utils.linear_index(df.global.world.units.all, participants[1].anon_1, 'id')
+                text = text .. ' (to ' .. df.profession.attrs[unit.profession].caption .. ')'
+              end
+              text = text .. ': '
+                .. translate(report_language, force_goodbye or details.anon_3,
+                             details.anon_11, details.anon_12, details.anon_13)
+              local continuation = false
+              while not continuation or text ~= '' do
+                print('text:' .. text)
+                local size = math.min(string.len(text), 73)
+                new_report = {new=true,
+                              type=report.type,
+                              text=string.sub(text, 1, 73),
+                              color=report.color,
+                              bright=report.bright,
+                              duration=report.duration,
+                              flags={new=true,
+                                     continuation=continuation},
+                              repeat_count=report.repeat_count,
+                              id=report.id + id_delta,
+                              year=report.year,
+                              time=report.time,
+                              unk_v40_1=report.unk_v40_1,
+                              unk_v40_2=report.unk_v40_2,
+                              unk_v40_3=report.unk_v40_3}
+                text = string.sub(text, 74)
+                continuation = true
+                reports:insert(i, new_report)
+                i = i + 1
+                if announcement_index then
+                  announcements:insert(announcement_index, new_report)
+                  announcement_index = announcement_index + 1
+                end
               end
             end
           else
