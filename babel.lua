@@ -432,17 +432,16 @@ function get_civ_translation(civ)
   return translation
 end
 
-function loan_word(civ1, civ2, lang1, lang2, prefixes, types,
-                   resource_functions)
-  for i = 1, #prefixes do
-    for _, id in pairs(resource_functions[i](civ2)) do
+function loan_word(civ1, civ2, lang1, lang2, loans)
+  for i = 1, #loans do
+    for _, id in pairs(loans[i].get(civ2)) do
       local word_index = utils.linear_index(
         df.global.world.raws.language.words,
-        prefixes[i] .. types[i].find(id).id, 'word')
---      print('looking for word at [' .. word_index .. ']: ' .. types[i].find(id).id)
+        loans[i].prefix .. loans[i].type.find(id)[loans[i].id], 'word')
+--      print('looking for word at [' .. word_index .. ']: ' .. loans[i].type.find(id)[loans[i].id])
       if lang1.words[word_index].value == '' then
         local loanword = lang2.words[word_index].value
-        print('Civ ' .. civ1.id .. ' gets "' .. loanword .. '" (' .. prefixes[i] .. types[i].find(id).id .. ') from civ ' .. civ2.id)
+        print('Civ ' .. civ1.id .. ' gets "' .. loanword .. '" (' .. loans[i].prefix .. loans[i].type.find(id)[loans[i].id] .. ') from civ ' .. civ2.id)
         lang1.words[word_index].value = loanword
       end
     end
@@ -450,69 +449,128 @@ function loan_word(civ1, civ2, lang1, lang2, prefixes, types,
 end
 
 function loan_words()
-  print('Loan words')
-  local CIV1 = 1
-  local CIV2 = 2
-  local BOTH = 3
+  local GENERAL = {{prefix='ITEM_GLOVES:', type=df.itemdef_glovesst, id='id',
+                    get=function(civ) return civ.resources.gloves_type end},
+                   {prefix='ITEM_SHOES:', type=df.itemdef_shoesst, id='id',
+                    get=function(civ) return civ.resources.shoes_type end},
+                   {prefix='ITEM_PANTS:', type=df.itemdef_pantsst, id='id',
+                    get=function(civ) return civ.resources.pants_type end},
+                   {prefix='ITEM_TOY:', type=df.itemdef_toyst, id='id',
+                    get=function(civ) return civ.resources.toy_type end},
+                   {prefix='ITEM_INSTRUMENT:', type=df.itemdef_instrumentst, id='id',
+                    get=function(civ) return civ.resources.instrument_type end},
+                   {prefix='ITEM_TOOL:', type=df.itemdef_toolst, id='id',
+                    get=function(civ) return civ.resources.tool_type end},
+                   {prefix='PLANT:', type=df.plant_raw, id='id',
+                    get=function(civ) return civ.resources.tree_fruit_plants end},
+                   {prefix='PLANT:', type=df.plant_raw, id='id',
+                    get=function(civ) return civ.resources.shrub_fruit_plants end},
+                   {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                    get=function(civ) return civ.resources.animals.pet_races end},
+                   {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                    get=function(civ) return civ.resources.animals.mount_races end}}
+  local TRADE = {{prefix='ITEM_WEAPON:', type=df.itemdef_weaponst, id='id',
+                  get=function(civ) return civ.resources.digger_type end},
+                 {prefix='ITEM_WEAPON:', type=df.itemdef_weaponst, id='id',
+                  get=function(civ) return civ.resources.training_weapon_type end},
+                 {prefix='ITEM_GLOVES:', type=df.itemdef_glovesst, id='id',
+                  get=function(civ) return civ.resources.gloves_type end},
+                 {prefix='ITEM_SHOES:', type=df.itemdef_shoesst, id='id',
+                  get=function(civ) return civ.resources.shoes_type end},
+                 {prefix='ITEM_PANTS:', type=df.itemdef_pantsst, id='id',
+                  get=function(civ) return civ.resources.pants_type end},
+                 {prefix='ITEM_TOY:', type=df.itemdef_toyst, id='id',
+                  get=function(civ) return civ.resources.toy_type end},
+                 {prefix='ITEM_INSTRUMENT:', type=df.itemdef_instrumentst, id='id',
+                  get=function(civ) return civ.resources.instrument_type end},
+                 {prefix='ITEM_TOOL:', type=df.itemdef_toolst, id='id',
+                  get=function(civ) return civ.resources.tool_type end},
+                 {prefix='INORGANIC:', type=df.inorganic_raw, id='id',
+                  get=function(civ) return civ.resources.metals end},
+                 {prefix='INORGANIC:', type=df.inorganic_raw, id='id',
+                  get=function(civ) return civ.resources.stones end},
+                 {prefix='INORGANIC:', type=df.inorganic_raw, id='id',
+                  get=function(civ) return civ.resources.gems end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.fish_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.egg_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.pet_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.wagon_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.pack_animal_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.wagon_puller_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.mount_races end},
+                 {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                  get=function(civ) return civ.resources.animals.exotic_pet_races end}}
+  local WAR = {{prefix='ITEM_WEAPON:', type=df.itemdef_weaponst, id='id',
+                get=function(civ) return civ.resources.weapon_type end},
+               {prefix='ITEM_ARMOR:', type=df.itemdef_armorst, id='id',
+                get=function(civ) return civ.resources.armor_type end},
+               {prefix='ITEM_AMMO:', type=df.itemdef_ammost, id='id',
+                get=function(civ) return civ.resources.ammo_type end},
+               {prefix='ITEM_HELM:', type=df.itemdef_helmst, id='id',
+                get=function(civ) return civ.resources.helm_type end},
+               {prefix='ITEM_SHIELD:', type=df.itemdef_shieldst, id='id',
+                get=function(civ) return civ.resources.shield_type end},
+               {prefix='ITEM_SIEGEAMMO:', type=df.itemdef_siegeammost, id='id',
+                get=function(civ) return civ.resources.siegeammo_type end},
+               {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                get=function(civ) return {civ.race} end},
+               {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                get=function(civ) return civ.resources.animals.mount_races end},
+               {prefix='CREATURE:', type=df.creature_raw, id='creature_id',
+                get=function(civ) return civ.resources.animals.minion_races end}}
   for _, event in pairs(df.global.world.history.events) do
+    local loans = {}
     local civ1, civ2
     local topics = {}
     local referrents = {}
     if (df.history_event_war_attacked_sitest:is_instance(event) or
         df.history_event_war_destroyed_sitest:is_instance(event) or
         df.history_event_war_field_battlest:is_instance(event)) then
-      -- attacker_civ and defender_civ share WAR words
-      civ1 = event.attacker_civ
-      civ2 = event.defender_civ
-      topics.war = BOTH
+      table.insert(loans, {event.attacker_civ, event.defender_civ, WAR})
+      table.insert(loans, {event.defender_civ, event.attacker_civ, WAR})
     elseif df.history_event_first_contactst:is_instance(event) then
-      -- contactor and contacted share general and cultural significant words
-      civ1 = event.contactor
-      civ2 = event.contacted
-      topics.general = BOTH
+      table.insert(loans, {event.contactor, event.contacted, GENERAL})
+      table.insert(loans, {event.contacted, event.contactor, GENERAL})
     elseif df.history_event_topicagreement_madest:is_instance(event) then
       -- TODO: should depend on the topic
-      civ1 = event.source
-      civ2 = event.destination
-      topics.trade = BOTH
+      table.insert(loans, {event.source, event.destination, TRADE})
+      table.insert(loans, {event.destination, event.source, TRADE})
     elseif df.history_event_merchantst:is_instance(event) then
-      -- source and destination share TRADE words
-      -- merchants (source?) get more new words
-      -- should depend on flags2
-      civ1 = event.source
-      civ2 = event.destination
-      topics.general = CIV1
-      topics.trade = BOTH
+      -- TODO: should depend on flags2
+      table.insert(loans, {event.source, event.destination, GENERAL})
+      table.insert(loans, {event.source, event.destination, TRADE})
+      table.insert(loans, {event.destination, event.source, TRADE})
     elseif df.history_event_entity_incorporatedst:is_instance(event) then
-      -- migrant_entity no longer speaks their language
-      -- TODO
+      -- TODO: migrant_entity no longer speaks their language
     elseif df.history_event_masterpiece_createdst:is_instance(event) then
-      -- maker_entity coins word for item/building type
-      --[[TODO
+      --[[TODO: maker_entity coins word for item/building type
       civ1 = event.maker_entity
       topics.new = CIV1
       table.insert(referrents, )
       ]]
     elseif df.history_event_war_plundered_sitest:is_instance(event) then
-      -- attacker_civ takes defender_civ's TRADE words
-      civ1 = event.attacker_civ
-      civ2 = event.defender_civ
-      topics.trade = CIV1
+      table.insert(loans, {event.attacker_civ, event.defender_civ, TRADE})
     elseif df.history_event_war_site_taken_overst:is_instance(event) then
-      -- attacker_civ takes some words
-      -- defender_civ takes GOVERNMENT words
+      --[[TODO: What happens to the original inhabitants?
       civ1 = event.attacker_civ
       civ2 = event.defender_civ
       topics.government = CIV2
       topics.general = CIV1
+      ]]
     elseif df.history_event_hist_figure_abductedst:is_instance(event) then
-      -- snatcher's entity takes random words from target's entity
+      --[[TODO: snatcher's entity takes random words from target's entity
       civ1 = df.historical_figure.find(event.target).civ_id
       civ2 = df.historical_figure.find(event.snatcher).civ_id
-      -- TODO
+      ]]
     elseif df.history_event_item_stolenst:is_instance(event) then
-      -- thief (histfig?)'s entity takes item/item_subtype words from entity
-      --[[TODO
+      --[[TODO: thief (histfig?)'s entity takes item/item_subtype words from entity
       civ1 = df.historical_figure.find(event.histfig).civ_id
       civ2 = entity
       topics.specific = CIV1
@@ -520,37 +578,12 @@ function loan_words()
       ]]
     end
     local entities = df.global.world.entities.all
-    if civ1 and civ2 and civ1 ~= -1 and civ2 ~= -1 then
-      civ1 = df.historical_entity.find(civ1)
-      civ2 = df.historical_entity.find(civ2)
+    for _, loan in pairs(loans) do
+      local civ1 = df.historical_entity.find(loan[1])
+      local civ2 = df.historical_entity.find(loan[2])
       local lang1 = get_civ_translation(civ1)
       local lang2 = get_civ_translation(civ2)
-      if topics.war == CIV1 or topics.war == BOTH then
-        loan_word(civ1, civ2, lang1, lang2, {'ITEM_WEAPON:'},
-                  {df.itemdef_weaponst},
-                  {function(civ) return civ.resources.weapon_type end})
-      end
-      if topics.war == CIV2 or topics.war == BOTH then
-        loan_word(civ2, civ1, lang2, lang1, {'ITEM_WEAPON:'},
-                  {df.itemdef_weaponst},
-                  {function(civ) return civ.resources.weapon_type end})
-      end
-      if topics.trade == CIV1 or topics.trade == BOTH then
-        loan_word(civ1, civ2, lang1, lang2,
-                  {'INORGANIC:', 'INORGANIC:', 'INORGANIC:'},
-                  {df.inorganic_raw, df.inorganic_raw, df.inorganic_raw},
-                  {function(civ) return civ.resources.metals end,
-                   function(civ) return civ.resources.stones end,
-                   function(civ) return civ.resources.gems end})
-      end
-      if topics.trade == CIV2 or topics.trade == BOTH then
-        loan_word(civ2, civ1, lang2, lang1,
-                  {'INORGANIC:', 'INORGANIC:', 'INORGANIC:'},
-                  {df.inorganic_raw, df.inorganic_raw, df.inorganic_raw},
-                  {function(civ) return civ.resources.metals end,
-                   function(civ) return civ.resources.stones end,
-                   function(civ) return civ.resources.gems end})
-      end
+      loan_word(civ1, civ2, lang1, lang2, loan[3])
     end
   end
 end
