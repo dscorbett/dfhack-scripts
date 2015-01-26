@@ -155,19 +155,19 @@ function translate(language, topic, topic1, topic2, topic3)
   return languages.translations[translation_index].words[word_index].value .. '.'
 end
 
-function get_random_word()
+function get_random_word(index)
   local consonants = 'bcdfghjklmnpqrstvwxyz\x87\xa4\xe9\xeb'
-  local vowels = 'aeiou\x81\x82\x83\x84\x85\x86\x88\x89\x8a\x8b\x8c\x8d\x91\x93\x94\x95\x96\x97\x98\xa0\xa1\xa2\xa3'
-  local rand1 = math.random(1, consonants:len())
-  local rand2 = math.random(1, vowels:len())
-  local rand3 = math.random(1, consonants:len())
-  local rand4 = math.random(1, vowels:len())
+  local vowels = 'aeiou\x81\x82\x83\x84\x85\x86\x88\x89\x8a\x8b\x8c\x8d\x91\x93\x94\x95\x96\x97\xa0\xa1\xa2\xa3'
+  local rand1 = math.random(consonants:len())
+  local rand2 = math.random(vowels:len())
+  local rand3 = math.random(consonants:len())
   return consonants:sub(rand1, rand1) .. vowels:sub(rand2, rand2) ..
-    consonants:sub(rand3, rand3) .. vowels:sub(rand4, rand4)
+    consonants:sub(rand3, rand3) ..
+    vowels:sub(index % vowels:len(), index % vowels:len())
 end
 
-function update_word(word, noun_sing, noun_plur, adj)
-  -- TODO: n/a and STP and NP
+function update_word(resource_id, word, noun_sing, noun_plur, adj,
+                     resource_functions)
   if noun_sing ~= '' and noun_sing ~= 'n/a' then
     word.forms.Noun = noun_sing
     word.flags.front_compound_noun_sing = true
@@ -191,8 +191,21 @@ function update_word(word, noun_sing, noun_plur, adj)
     word.flags.the_compound_adj = true
   end
   for i = 0, #df.global.world.raws.language.translations - 1 do
-    df.global.world.raws.language.translations[i].words:insert(
-      '#', {new=true, value=get_random_word()})
+    local translation = df.global.world.raws.language.translations[i]
+    local civ
+    local value = ''
+    if translation.name:sub(1, 3) == 'LG:' then
+      _, civ = utils.linear_index(df.global.world.entities.all,
+                               tonumber(translation.name:sub(4)), 'id')
+      for _, f in pairs(resource_functions) do
+        if f == nil or in_list(resource_id, f(civ), 0) then
+          value = get_random_word(i)
+          print('Civ ' .. civ.id .. '\t' .. word.word .. '\t' .. value)
+          break
+        end
+      end
+    end
+    translation.words:insert('#', {new=true, value=value})
   end
 end
 
@@ -203,7 +216,7 @@ function expand_lexicons()
   for _, word in pairs({'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
                         'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'}) do
     words:insert('#', {new=true, word='REPORT:' .. word})
-    update_word(words[#words - 1], '', '', '')
+    update_word(nil, words[#words - 1], '', '', '', {nil})
   end
   -- Inorganic materials
   local inorganics = raws.inorganics
@@ -211,7 +224,10 @@ function expand_lexicons()
     local noun_sing = inorganics[i].material.state_name.Solid
     local adj = inorganics[i].material.state_adj.Solid
     words:insert('#', {new=true, word='INORGANIC:' .. inorganics[i].id})
-    update_word(words[#words - 1], noun_sing, '', adj)
+    update_word(i, words[#words - 1], noun_sing, '', adj,
+                {function(civ) return civ.resources.metals end,
+                 function(civ) return civ.resources.stones end,
+                 function(civ) return civ.resources.gems end})
   end
   -- Plants
   local plants = raws.plants.all
@@ -220,8 +236,11 @@ function expand_lexicons()
     local noun_plur = plants[i].name_plural
     local adj = plants[i].adj
     words:insert('#', {new=true, word='PLANT:' .. plants[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, adj)
+    update_word(plants[i].anon_1, words[#words - 1], noun_sing, noun_plur, adj,
+                {function(civ) return civ.resources.tree_fruit_plants end,
+                 function(civ) return civ.resources.shrub_fruit_plants end})
   end
+  --[[
   -- Tissues
   local tissues = raws.tissue_templates
   for i = 0, #tissues - 1 do
@@ -230,6 +249,7 @@ function expand_lexicons()
     words:insert('#', {new=true, word='TISSUE_TEMPLATE:' .. tissues[i].id})
     update_word(words[#words - 1], noun_sing, noun_plur, '')
   end
+  ]]
   -- Creatures
   local creatures = raws.creatures.all
   for i = 0, #creatures - 1 do
@@ -237,7 +257,19 @@ function expand_lexicons()
     local noun_plur = creatures[i].name[1]
     local adj = creatures[i].name[2]
     words:insert('#', {new=true, word='CREATURE:' .. creatures[i].creature_id})
-    update_word(words[#words - 1], noun_sing, noun_plur, adj)
+    update_word(i, words[#words - 1], noun_sing, noun_plur, adj,
+                {function(civ) return {civ.race} end,
+                 function(civ) return civ.resources.fish_races end,
+                 function(civ) return civ.resources.fish_races end,
+                 function(civ) return civ.resources.egg_races end,
+                 function(civ) return civ.resources.animals.pet_races end,
+                 function(civ) return civ.resources.animals.wagon_races end,
+                 function(civ) return civ.resources.animals.pack_animal_races end,
+                 function(civ) return civ.resources.animals.wagon_puller_races end,
+                 function(civ) return civ.resources.animals.mount_races end,
+                 function(civ) return civ.resources.animals.minion_races end,
+                 function(civ) return civ.resources.animals.exotic_pet_races end
+                })
   end
   -- Weapons
   local weapons = raws.itemdefs.weapons
@@ -245,7 +277,11 @@ function expand_lexicons()
     local noun_sing = weapons[i].name
     local noun_plur = weapons[i].name_plural
     words:insert('#', {new=true, word='ITEM_WEAPON:' .. weapons[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(weapons[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.digger_type end,
+                 function(civ) return civ.resources.weapon_type end,
+                 function(civ) return civ.resources.training_weapon_type end
+                })
   end
   -- Trap components
   local trapcomps = raws.itemdefs.trapcomps
@@ -253,7 +289,8 @@ function expand_lexicons()
     local noun_sing = trapcomps[i].name
     local noun_plur = trapcomps[i].name_plural
     words:insert('#', {new=true, word='ITEM_TRAPCOMP:' .. trapcomps[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(trapcomps[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.trapcomp_type end})
   end
   -- Toys
   local toys = raws.itemdefs.toys
@@ -261,7 +298,8 @@ function expand_lexicons()
     local noun_sing = toys[i].name
     local noun_plur = toys[i].name_plural
     words:insert('#', {new=true, word='ITEM_TOY:' .. toys[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(toys[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.toy_type end})
   end
   -- Tools
   local tools = raws.itemdefs.tools
@@ -269,7 +307,8 @@ function expand_lexicons()
     local noun_sing = tools[i].name
     local noun_plur = tools[i].name_plural
     words:insert('#', {new=true, word='ITEM_TOOL:' .. tools[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(tools[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.toy_type end})
   end
   -- Instruments
   local instruments = raws.itemdefs.instruments
@@ -277,7 +316,8 @@ function expand_lexicons()
     local noun_sing = instruments[i].name
     local noun_plur = instruments[i].name_plural
     words:insert('#', {new=true, word='ITEM_INSTRUMENT:' .. instruments[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(instruments[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.instrument_type end})
   end
   -- Armor
   local armor = raws.itemdefs.armor
@@ -285,7 +325,8 @@ function expand_lexicons()
     local noun_sing = armor[i].name
     local noun_plur = armor[i].name_plural
     words:insert('#', {new=true, word='ITEM_ARMOR:' .. armor[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(armor[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.armor_type end})
   end
   -- Ammo
   local ammo = raws.itemdefs.ammo
@@ -293,7 +334,8 @@ function expand_lexicons()
     local noun_sing = ammo[i].name
     local noun_plur = ammo[i].name_plural
     words:insert('#', {new=true, word='ITEM_AMMO:' .. ammo[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(ammo[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.ammo_type end})
   end
   -- Siege ammo
   local siege_ammo = raws.itemdefs.siege_ammo
@@ -301,7 +343,8 @@ function expand_lexicons()
     local noun_sing = siege_ammo[i].name
     local noun_plur = siege_ammo[i].name_plural
     words:insert('#', {new=true, word='ITEM_SIEGEAMMO:' .. siege_ammo[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(siege_ammo[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.siegeammo_type end})
   end
   -- Gloves
   local gloves = raws.itemdefs.gloves
@@ -309,7 +352,8 @@ function expand_lexicons()
     local noun_sing = gloves[i].name
     local noun_plur = gloves[i].name_plural
     words:insert('#', {new=true, word='ITEM_GLOVES:' .. gloves[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(gloves[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.gloves_type end})
   end
   -- Shoes
   local shoes = raws.itemdefs.shoes
@@ -317,7 +361,8 @@ function expand_lexicons()
     local noun_sing = shoes[i].name
     local noun_plur = shoes[i].name_plural
     words:insert('#', {new=true, word='ITEM_SHOES:' .. shoes[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(shoes[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.shoes_type end})
   end
   -- Shields
   local shields = raws.itemdefs.shields
@@ -325,7 +370,8 @@ function expand_lexicons()
     local noun_sing = shields[i].name
     local noun_plur = shields[i].name_plural
     words:insert('#', {new=true, word='ITEM_SHIELD:' .. shields[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(shields[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.shield_type end})
   end
   -- Helms
   local helms = raws.itemdefs.helms
@@ -333,7 +379,8 @@ function expand_lexicons()
     local noun_sing = helms[i].name
     local noun_plur = helms[i].name_plural
     words:insert('#', {new=true, word='ITEM_HELM:' .. helms[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(helms[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.helm_type end})
   end
   -- Pants
   local pants = raws.itemdefs.pants
@@ -341,8 +388,10 @@ function expand_lexicons()
     local noun_sing = pants[i].name
     local noun_plur = pants[i].name_plural
     words:insert('#', {new=true, word='ITEM_PANTS:' .. pants[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+    update_word(pants[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
+                {function(civ) return civ.resources.helm_type end})
   end
+  --[[
   -- Food
   local food = raws.itemdefs.food
   for i = 0, #food - 1 do
@@ -374,12 +423,143 @@ function expand_lexicons()
     words:insert('#', {new=true, word='SYNDROME:' .. syndromes[i].id})
     update_word(words[#words - 1], noun_sing, '', '')
   end
+  ]]
+end
+
+function get_civ_translation(civ)
+  local _, translation = utils.linear_index(
+    df.global.world.raws.language.translations, 'LG:' .. civ.id, 'name')
+  return translation
+end
+
+function loan_word(civ1, civ2, lang1, lang2, prefixes, types,
+                   resource_functions)
+  for i = 1, #prefixes do
+    for _, id in pairs(resource_functions[i](civ2)) do
+      local word_index = utils.linear_index(
+        df.global.world.raws.language.words,
+        prefixes[i] .. types[i].find(id).id, 'word')
+--      print('looking for word at [' .. word_index .. ']: ' .. types[i].find(id).id)
+      if lang1.words[word_index].value == '' then
+        local loanword = lang2.words[word_index].value
+        print('Civ ' .. civ1.id .. ' gets "' .. loanword .. '" (' .. prefixes[i] .. types[i].find(id).id .. ') from civ ' .. civ2.id)
+        lang1.words[word_index].value = loanword
+      end
+    end
+  end
+end
+
+function loan_words()
+  print('Loan words')
+  local CIV1 = 1
+  local CIV2 = 2
+  local BOTH = 3
+  for _, event in pairs(df.global.world.history.events) do
+    local civ1, civ2
+    local topics = {}
+    local referrents = {}
+    if (df.history_event_war_attacked_sitest:is_instance(event) or
+        df.history_event_war_destroyed_sitest:is_instance(event) or
+        df.history_event_war_field_battlest:is_instance(event)) then
+      -- attacker_civ and defender_civ share WAR words
+      civ1 = event.attacker_civ
+      civ2 = event.defender_civ
+      topics.war = BOTH
+    elseif df.history_event_first_contactst:is_instance(event) then
+      -- contactor and contacted share general and cultural significant words
+      civ1 = event.contactor
+      civ2 = event.contacted
+      topics.general = BOTH
+    elseif df.history_event_topicagreement_madest:is_instance(event) then
+      -- TODO: should depend on the topic
+      civ1 = event.source
+      civ2 = event.destination
+      topics.trade = BOTH
+    elseif df.history_event_merchantst:is_instance(event) then
+      -- source and destination share TRADE words
+      -- merchants (source?) get more new words
+      -- should depend on flags2
+      civ1 = event.source
+      civ2 = event.destination
+      topics.general = CIV1
+      topics.trade = BOTH
+    elseif df.history_event_entity_incorporatedst:is_instance(event) then
+      -- migrant_entity no longer speaks their language
+      -- TODO
+    elseif df.history_event_masterpiece_createdst:is_instance(event) then
+      -- maker_entity coins word for item/building type
+      --[[TODO
+      civ1 = event.maker_entity
+      topics.new = CIV1
+      table.insert(referrents, )
+      ]]
+    elseif df.history_event_war_plundered_sitest:is_instance(event) then
+      -- attacker_civ takes defender_civ's TRADE words
+      civ1 = event.attacker_civ
+      civ2 = event.defender_civ
+      topics.trade = CIV1
+    elseif df.history_event_war_site_taken_overst:is_instance(event) then
+      -- attacker_civ takes some words
+      -- defender_civ takes GOVERNMENT words
+      civ1 = event.attacker_civ
+      civ2 = event.defender_civ
+      topics.government = CIV2
+      topics.general = CIV1
+    elseif df.history_event_hist_figure_abductedst:is_instance(event) then
+      -- snatcher's entity takes random words from target's entity
+      civ1 = df.historical_figure.find(event.target).civ_id
+      civ2 = df.historical_figure.find(event.snatcher).civ_id
+      -- TODO
+    elseif df.history_event_item_stolenst:is_instance(event) then
+      -- thief (histfig?)'s entity takes item/item_subtype words from entity
+      --[[TODO
+      civ1 = df.historical_figure.find(event.histfig).civ_id
+      civ2 = entity
+      topics.specific = CIV1
+      table.insert(referrents, )
+      ]]
+    end
+    local entities = df.global.world.entities.all
+    if civ1 and civ2 and civ1 ~= -1 and civ2 ~= -1 then
+      civ1 = df.historical_entity.find(civ1)
+      civ2 = df.historical_entity.find(civ2)
+      local lang1 = get_civ_translation(civ1)
+      local lang2 = get_civ_translation(civ2)
+      if topics.war == CIV1 or topics.war == BOTH then
+        loan_word(civ1, civ2, lang1, lang2, {'ITEM_WEAPON:'},
+                  {df.itemdef_weaponst},
+                  {function(civ) return civ.resources.weapon_type end})
+      end
+      if topics.war == CIV2 or topics.war == BOTH then
+        loan_word(civ2, civ1, lang2, lang1, {'ITEM_WEAPON:'},
+                  {df.itemdef_weaponst},
+                  {function(civ) return civ.resources.weapon_type end})
+      end
+      if topics.trade == CIV1 or topics.trade == BOTH then
+        loan_word(civ1, civ2, lang1, lang2,
+                  {'INORGANIC:', 'INORGANIC:', 'INORGANIC:'},
+                  {df.inorganic_raw, df.inorganic_raw, df.inorganic_raw},
+                  {function(civ) return civ.resources.metals end,
+                   function(civ) return civ.resources.stones end,
+                   function(civ) return civ.resources.gems end})
+      end
+      if topics.trade == CIV2 or topics.trade == BOTH then
+        loan_word(civ2, civ1, lang2, lang1,
+                  {'INORGANIC:', 'INORGANIC:', 'INORGANIC:'},
+                  {df.inorganic_raw, df.inorganic_raw, df.inorganic_raw},
+                  {function(civ) return civ.resources.metals end,
+                   function(civ) return civ.resources.stones end,
+                   function(civ) return civ.resources.gems end})
+      end
+    end
+  end
 end
 
 function make_languages()
-  expand_lexicons()
   local language_count = 0
   local entities = df.global.world.entities.all
+  local translations = df.global.world.raws.language.translations
+  local word_count = #translations[0].words
   for i = 0, #entities - 1 do
     local civ = entities[i + language_count]
     if civ.type == 0 then  -- Civilization
@@ -398,9 +578,14 @@ function make_languages()
                                     target=df.global.entity_next_id,
                                     strength=100})
       df.global.entity_next_id = df.global.entity_next_id + 1
+      translations:insert('#', {new=true, name='LG:' .. civ.id})
+      translations[#translations - 1].words:resize(word_count)
+      -- TODO: update civ's entity_raw
       language_count = language_count + 1
     end
   end
+  expand_lexicons()
+  loan_words()
   return dfhack.persistent.save({key='babel',
                                  ints={0, 0, language_count, 0, 0, 0}})
 end
@@ -477,9 +662,9 @@ function get_report_language(report)
   end
 end
 
-function in_list(element, list)
+function in_list(element, list, start)
   for i = 1, #list do
-    if element == list[i] then
+    if element == list[i + start - 1] then
       return true
     end
   end
@@ -503,7 +688,7 @@ function babel()
         end
         local language = get_hf_l1(hf)
         if language then
-          print('L1[' .. dfhack.TranslateName(hf.name) .. '] = ' .. language.name.nickname)
+--          print('L1[' .. dfhack.TranslateName(hf.name) .. '] = ' .. language.name.nickname)
           hf.entity_links:insert('#', {new=true,
                                        entity_id=language.id,
                                        link_strength=MAXIMUM_FLUENCY})
@@ -516,7 +701,7 @@ function babel()
     if #df.global.world.units.all > unit_next_id then
       print('\nunit: ' .. #df.global.world.units.all .. '>' .. unit_next_id)
       for i = unit_next_id, #df.global.world.units.all - 1 do
-        print('#' .. i .. '\t' .. df.global.world.units.all[i].name.first_name .. '\t' .. df.global.world.units.all[i].hist_figure_id)
+--        print('#' .. i .. '\t' .. df.global.world.units.all[i].name.first_name .. '\t' .. df.global.world.units.all[i].hist_figure_id)
         if df.global.world.units.all[i].hist_figure_id == -1 then
           df.global.world.units.all[i].name.nickname = 'U' .. i
         end
@@ -600,7 +785,7 @@ function babel()
           else
             print('speaker speaks no language')
           end
-          if report_language and not in_list(report_language, adv_languages) then
+          if report_language and not in_list(report_language, adv_languages, 1) then
             if report.flags.continuation then
               print('  ...: ' .. report.text)
               reports:erase(i)
@@ -650,9 +835,9 @@ function babel()
                 local _, hearer = utils.linear_index(df.global.world.units.all, participants[1].anon_1, 'id')
                 text = text .. ' (to ' .. df.profession.attrs[unit.profession].caption .. ')'
               end
-              text = text .. ': '
-                .. translate(report_language, force_goodbye or details.anon_3,
-                             details.anon_11, details.anon_12, details.anon_13)
+              text = text .. ': ' ..
+                translate(report_language, force_goodbye or details.anon_3,
+                          details.anon_11, details.anon_12, details.anon_13)
               local continuation = false
               while not continuation or text ~= '' do
                 print('text:' .. text)
