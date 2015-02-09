@@ -6,6 +6,7 @@ local utils = require 'utils'
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
+local phonologies = nil
 
 if enabled == nil then
   enabled = false
@@ -434,6 +435,109 @@ function civ_translation(civ)
   end
 end
 
+function read_phonologies()
+  local phonologies = nil
+  local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
+  for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
+    local path = dir .. '/' .. filename
+    if (dfhack.filesystem.isfile(path) and
+        filename:match('^phonology_.*%.txt')) then
+      io.input(path)
+      -- TODO: Are CR/LF allowed within tokens?
+      -- TODO: Check the first line for the file name.
+      local current_phonology = nil
+      local current_parent = 0
+      for token in io.read('*all'):gmatch('%[.-%]') do
+        local subtokens = {}
+        for subtoken in token:gmatch('[^][:]+') do
+          table.insert(subtokens, subtoken)
+        end
+        if #subtokens >= 1 then
+          if subtokens[1] == 'OBJECT' then
+            if #subtokens ~= 2 then
+              qerror('Wrong number of subtokens: ' .. token)
+            end
+            if subtokens[2] ~= 'PHONOLOGY' then
+              qerror('Wrong object type: ' .. subtokens[2])
+            end
+            phonologies = {}
+          elseif not phonologies then
+            qerror('Missing OBJECT token: ' .. filename)
+          elseif subtokens[1] == 'PHONOLOGY' then
+            if #subtokens ~= 2 then
+              qerror('Wrong number of subtokens: ' .. token)
+            end
+            if utils.linear_index(phonologies, subtokens[2], 'name') then
+              qerror('Duplicate phonology: ' .. subtokens[2])
+            end
+            table.insert(phonologies,
+                         {name=subtokens[2], nodes={}, symbols={}, affixes={}})
+            current_phonology = phonologies[#phonologies]
+          elseif subtokens[1] == 'NODE' then
+            if not current_phonology then
+              qerror('Orphaned NODE token: ' .. token)
+            end
+            if #subtokens ~= 2 then
+              qerror('Wrong number of subtokens: ' .. token)
+            end
+            table.insert(current_phonology.nodes,
+                         {name=subtokens[2], parent=current_parent})
+            current_parent = #current_phonology.nodes
+          elseif subtokens[1] == 'END' then
+            if not current_phonology then
+              qerror('Orphaned NODE token: ' .. token)
+            end
+            if #subtokens ~= 1 then
+              qerror('Wrong number of subtokens: ' .. token)
+            end
+            if current_parent == 0 then
+              qerror('Misplaced END token')
+            end
+            current_parent = current_phonology.nodes[current_parent].parent
+          elseif subtokens[1] == 'SYMBOL' then
+            if not current_phonology then
+              qerror('Orphaned NODE token: ' .. token)
+            end
+            if #subtokens < 3 then
+              qerror('No features specified: ' .. token)
+            end
+            if current_phonology.symbols[subtokens[2]] then
+              qerror('Duplicate symbol: ' .. subtokens[2])
+            end
+            local nodes = {}
+            for i = 3, #subtokens do
+              local n, node = utils.linear_index(current_phonology.nodes,
+                                                 subtokens[i], 'name')
+              if not n then
+                qerror('No such node: ' .. subtokens[i])
+              end
+              if node.parent ~= 0 then
+                table.insert(subtokens,
+                             current_phonology.nodes[node.parent].name)
+              end
+              nodes[n] = true
+            end
+            current_phonology.symbols[subtokens[2]] = nodes
+          elseif subtokens[1] == 'AFFIX' then
+            if not current_phonology then
+              qerror('Orphaned NODE token: ' .. token)
+            end
+            if #subtokens < 4 then
+              qerror('No features specified: ' .. token)
+            end
+            -- TODO
+            qerror('Affixes are not implemented yet')
+          else
+            qerror('Unknown token: ' .. token)
+          end
+        end
+      end
+      io.input():close()
+    end
+  end
+  return phonologies
+end
+
 function has_language_object(path)
   -- TODO: check that the first line has the filename
   io.input(path)
@@ -491,9 +595,8 @@ function write_word_file(dir)
 end
 
 function overwrite_language_files()
-  -- TODO: Use listdir instead of getDir.
   local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
-  for _, filename in pairs(dfhack.internal.getDir(dir)) do
+  for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
     if dfhack.filesystem.isfile(path) then
       if has_language_object(path) then
@@ -865,8 +968,15 @@ function in_list(element, list, start)
 end
 
 function babel()
-  if dfhack.isWorldLoaded() then
-    dfhack.with_suspend(function()
+  if not dfhack.isWorldLoaded() then
+    print('not loaded')
+    next_report_index = nil
+    return
+  end
+  dfhack.with_suspend(function()
+    if not phonologies then
+      phonologies = read_phonologies()
+    end
     local entry = dfhack.persistent.get('babel')
     local first_time = false
     if not entry then
@@ -1094,11 +1204,7 @@ function babel()
     if enabled then
       timer = dfhack.timeout(1, 'frames', babel)
     end
-    end)
-  else
-    print('not loaded')
-    next_report_index = nil
-  end
+  end)
 end
 
 args = {...}
