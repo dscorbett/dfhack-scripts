@@ -150,21 +150,22 @@ function translate(language, topic, topic1, topic2, topic3)
   if not word_index then
     return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
   end
-  -- TODO: Pick the right translation for the language.
-  local translation_index = 5
   -- TODO: Capitalize the result.
-  return languages.translations[translation_index].words[word_index].value .. '.'
+  return languages.translations[language.name.language].words[word_index].value
+    .. '.'
 end
 
-function random_word(index)
+function random_word(civ)
+  local index = civ.id
   local consonants = 'bcdfghjklmnpqrstvwxyz\x87\xa4\xe9\xeb'
   local vowels = 'aeiou\x81\x82\x83\x84\x85\x86\x88\x89\x8a\x8b\x8c\x8d\x91\x93\x94\x95\x96\x97\xa0\xa1\xa2\xa3'
   local rand1 = math.random(consonants:len())
   local rand2 = math.random(vowels:len())
   local rand3 = math.random(consonants:len())
-  return consonants:sub(rand1, rand1) .. vowels:sub(rand2, rand2) ..
+  word = consonants:sub(rand1, rand1) .. vowels:sub(rand2, rand2) ..
     consonants:sub(rand3, rand3) ..
     vowels:sub(index % vowels:len(), index % vowels:len())
+  return '/' .. word .. '/', '<' .. word .. '>'
 end
 
 function update_word(resource_id, word, noun_sing, noun_plur, adj,
@@ -193,16 +194,18 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
   end
   for _, entity in pairs(df.global.world.entities.all) do
     if entity.type == 0 then  -- Civilization
-      local translation = civ_translation(entity)
-      local value = ''
+      local u_translation, s_translation = civ_translations(entity)
+      local u_form = ''
+      local s_form = ''
       for _, f in pairs(resource_functions) do
         if f == true or in_list(resource_id, f(entity), 0) then
-          value = random_word(entity.id)
-          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. value)
+          u_form, s_form = random_word(entity)
+          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. u_form .. '\t' .. s_form)
           break
         end
       end
-      translation.words:insert('#', {new=true, value=value})
+      u_translation.words:insert('#', {new=true, value=u_form})
+      s_translation.words:insert('#', {new=true, value=s_form})
     end
   end
 end
@@ -426,11 +429,12 @@ function expand_lexicons()
   -- TODO: descriptors
 end
 
-function civ_translation(civ)
+function civ_translations(civ)
   for _, hf_id in pairs(civ.histfig_ids) do
     if hf_id < 0 then
-      return df.language_translation.find(
-        df.historical_figure.find(hf_id).name.language)
+      local translation_id = df.historical_figure.find(hf_id).name.language
+      return df.language_translation.find(translation_id),
+        df.language_translation.find(translation_id + 1)
     end
   end
 end
@@ -443,6 +447,7 @@ function read_phonologies()
     if (dfhack.filesystem.isfile(path) and
         filename:match('^phonology_.*%.txt')) then
       io.input(path)
+      -- TODO: Is it bad that it can qerror without closing the file?
       -- TODO: Are CR/LF allowed within tokens?
       -- TODO: Check the first line for the file name.
       local current_phonology = nil
@@ -614,18 +619,21 @@ function overwrite_language_files()
 end
 
 function loan_words(dst_civ_id, src_civ_id, loans)
+  -- TODO: Don't loan between languages with different feature geometries.
   local dst_civ = df.historical_entity.find(dst_civ_id)
   local src_civ = df.historical_entity.find(src_civ_id)
-  local dst_lang = civ_translation(dst_civ)
-  local src_lang = civ_translation(src_civ)
+  local dst_u_lang, dst_s_lang = civ_translations(dst_civ)
+  local src_u_lang, src_s_lang = civ_translations(src_civ)
   for i = 1, #loans do
     for _, id in pairs(loans[i].get(src_civ)) do
       local word_index = utils.linear_index(df.global.world.raws.language.words,
         loans[i].prefix .. loans[i].type.find(id)[loans[i].id], 'word')
-      if dst_lang.words[word_index].value == '' then
-        local loanword = src_lang.words[word_index].value
-        print('Civ ' .. dst_civ.id .. ' gets "' .. loanword .. '" (' .. loans[i].prefix .. loans[i].type.find(id)[loans[i].id] .. ') from civ ' .. src_civ.id)
-        dst_lang.words[word_index].value = loanword
+      if dst_u_lang.words[word_index].value == '' then
+        local u_loanword = src_u_lang.words[word_index].value
+        local s_loanword = src_s_lang.words[word_index].value
+        print('Civ ' .. dst_civ.id .. ' gets "' .. s_loanword .. '" (' .. loans[i].prefix .. loans[i].type.find(id)[loans[i].id] .. ') from civ ' .. src_civ.id)
+        dst_u_lang.words[word_index].value = u_loanword
+        dst_s_lang.words[word_index].value = s_loanword
       end
     end
   end
@@ -726,18 +734,6 @@ function representative_site(civ)
   -- TODO: deal with nil
 end
 
-function language_index(site)
-  for _, id in pairs(site.nemesis) do
-    if id < 0 then
-      local hf = df.historical_figure.find(id)
-      if hf then
-        return hf.name.language
-      end
-    end
-  end
-  -- TODO: deal with nil
-end
-
 function copy_lexicon(dst, src)
   for _, word in pairs(src.words) do
     dst.words:insert('#', {new=true, value=word.value})
@@ -754,11 +750,14 @@ function create_language(civ)
   -- Create a historical figure to represent the language.
   figures:insert(0, {new=true, id=figures[0].id - 1})
   figures[0].name.language = #translations
-  figures[0].name.nickname = 'LG;' .. civ.id
+  figures[0].name.nickname = 'LG:' .. civ.id
   -- Register the language with the civ where it's spoken.
   civ.histfig_ids:insert('#', figures[0].id)
-  -- Bootstrap the language.
-  translations:insert('#', {new=true, name='LG;' .. civ.id})
+  -- Create two copies (underlying and surface forms) of the language.
+  -- TODO: Don't simply copy from the first translation.
+  translations:insert('#', {new=true, name=civ.id .. 'U'})
+  copy_lexicon(translations[#translations - 1], translations[0])
+  translations:insert('#', {new=true, name=civ.id .. 'S'})
   copy_lexicon(translations[#translations - 1], translations[0])
 end
 
@@ -766,22 +765,6 @@ function register_hf_language(hf, language_id)
   print('register hf language: hf.id=' .. hf.id .. ' language_id=' .. language_id)
   hf.histfig_links:insert(
     '#', {new=true, target_hf=language_id, link_strength=MAXIMUM_FLUENCY})
-end
-
-function register_hf_language_by_site(hf_id, site_id)
-  local site = df.world_site.find(site_id)
-  if not site then
-    return
-  end
-  for _, id in pairs(site.nemesis) do
-    if id < 0 then
-      local language = df.historical_figure.find(id)
-      if language then
-        register_hf_language(df.historical_figure.find(hf_id), id)
-        return
-      end
-    end
-  end
 end
 
 function register_hf_language_by_entity(hf_id, entity)
@@ -883,18 +866,6 @@ function hf_native_language(hf)
   return civ_native_language(df.historical_entity.find(hf.civ_id))
 end
 
-function site_gov_native_language(site_gov)
-  if site_gov then
-    print('site gov native language: site_gov.id=' .. site_gov.id)
-    for _, hf_id in pairs(site_gov.histfig_ids) do
-      if hf_id < 0 then
-        local language = df.historical_figure.find(hf_id)
-        return language
-      end
-    end
-  end
-end
-
 function civ_native_language(civ)
   if civ then
     print('civ native language: civ.id=' .. civ.id)
@@ -976,6 +947,9 @@ function babel()
   dfhack.with_suspend(function()
     if not phonologies then
       phonologies = read_phonologies()
+      if not phonologies then
+        qerror('At least one phonology must be defined')
+      end
     end
     local entry = dfhack.persistent.get('babel')
     local first_time = false
@@ -1140,7 +1114,9 @@ function babel()
                     (#participants > 1 and
                      participants[1].anon_1 == adventurer.id)) then
                   conversation.events[0].anon_2 = 7
-                  force_goodbye = true
+                  if participants[0].anon_1 == adventurer.id then
+                    force_goodbye = true
+                  end
                 end
               end
               reports:erase(i)
