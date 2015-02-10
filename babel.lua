@@ -1,4 +1,4 @@
-local utils = require 'utils'
+local utils = require('utils')
 
 -- TODO: clear announcements on reloading world
 -- TODO: Why does GEN_DIVINE have no words now?
@@ -7,6 +7,7 @@ local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
 local phonologies = nil
+local fluency_data = nil
 
 if enabled == nil then
   enabled = false
@@ -151,7 +152,7 @@ function translate(language, topic, topic1, topic2, topic3)
     return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
   end
   -- TODO: Capitalize the result.
-  return languages.translations[language.name.language].words[word_index].value
+  return languages.translations[language.ints[1]].words[word_index].value
     .. '.'
 end
 
@@ -211,7 +212,6 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
 end
 
 function expand_lexicons()
-  print('expand lexicons')
   local raws = df.global.world.raws
   local words = raws.language.words
   -- Words used in conversations
@@ -430,9 +430,10 @@ function expand_lexicons()
 end
 
 function civ_translations(civ)
-  for _, hf_id in pairs(civ.histfig_ids) do
-    if hf_id < 0 then
-      local translation_id = df.historical_figure.find(hf_id).name.language
+  local all_languages = dfhack.persistent.get_all('babel/language')
+  for _, language in pairs(all_languages) do
+    if language.ints[2] == civ.id then
+      local translation_id = language.ints[1]
       return df.language_translation.find(translation_id),
         df.language_translation.find(translation_id + 1)
     end
@@ -440,7 +441,6 @@ function civ_translations(civ)
 end
 
 function read_phonologies()
-  local phonologies = nil
   local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
@@ -541,6 +541,60 @@ function read_phonologies()
     end
   end
   return phonologies
+end
+
+function set_fluency(hf_id, civ_id, fluency)
+  if not fluency_data[hf_id] then
+    fluency_data[hf_id] = {}
+  end
+  fluency_data[hf_id][civ_id] = {fluency=fluency}
+end
+
+function get_fluency(hf_id, civ_id)
+  if not fluency_data[hf_id] then
+    fluency_data[hf_id] = {}
+  end
+  if not fluency_data[hf_id][civ_id] then
+    fluency_data[hf_id][civ_id] = {fluency=MINIMUM_FLUENCY}
+  end
+  return fluency_data[hf_id][civ_id]
+end
+
+function read_fluency_data()
+  fluency_data = {}
+  local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
+                       '/raw/objects/fluency_data.txt')
+  if file then
+    for line in file:lines() do
+      local fields = utils.split_string(line, ' ')
+      if #fields ~= 3 then
+        qerror('Wrong number of fields: ' .. line)
+      end
+      local _, hf_id = utils.check_number(fields[1])
+      local _, civ_id = utils.check_number(fields[2])
+      local _, fluency = utils.check_number(fields[3])
+      if hf_id and civ_id and fluency then
+        set_fluency(hf_id, civ_id, fluency)
+      else
+        qerror('Invalid fluency data: ' .. line)
+      end
+    end
+    file:close()
+  end
+end
+
+function write_fluency_data()
+  local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
+                       '/raw/objects/fluency_data.txt', 'w')
+  if file then
+    for hf_id, hf_data in pairs(fluency_data) do
+      for civ_id, fluency_record in pairs(hf_data) do
+        file:write(hf_id .. ' ' .. civ_id .. ' ' .. fluency_record.fluency ..
+                   '\n')
+      end
+    end
+    file:close()
+  end
 end
 
 function has_language_object(path)
@@ -724,16 +778,6 @@ local WAR = {
    get=function(civ) return civ.resources.animals.minion_races end}
 }
 
-function representative_site(civ)
-  -- TODO: use entity_site_link
-  for _, site in pairs(df.global.world.world_data.sites) do
-    if site.civ_id == civ.id then
-      return site
-    end
-  end
-  -- TODO: deal with nil
-end
-
 function copy_lexicon(dst, src)
   for _, word in pairs(src.words) do
     dst.words:insert('#', {new=true, value=word.value})
@@ -741,42 +785,21 @@ function copy_lexicon(dst, src)
 end
 
 function create_language(civ)
-  print('create language: civ.id=' .. civ.id)
   if not civ then
     return
   end
   local figures = df.global.world.history.figures
   local translations = df.global.world.raws.language.translations
-  -- Create a historical figure to represent the language.
-  figures:insert(0, {new=true, id=figures[0].id - 1})
-  figures[0].name.language = #translations
-  figures[0].name.nickname = 'LG:' .. civ.id
-  -- Register the language with the civ where it's spoken.
-  civ.histfig_ids:insert('#', figures[0].id)
+  -- Create a persistent entry to represent the language.
+  local language = dfhack.persistent.save(
+    {key='babel/language', value='LG' .. civ.id, ints={#translations, civ.id}},
+    true)
   -- Create two copies (underlying and surface forms) of the language.
   -- TODO: Don't simply copy from the first translation.
   translations:insert('#', {new=true, name=civ.id .. 'U'})
   copy_lexicon(translations[#translations - 1], translations[0])
   translations:insert('#', {new=true, name=civ.id .. 'S'})
   copy_lexicon(translations[#translations - 1], translations[0])
-end
-
-function register_hf_language(hf, language_id)
-  print('register hf language: hf.id=' .. hf.id .. ' language_id=' .. language_id)
-  hf.histfig_links:insert(
-    '#', {new=true, target_hf=language_id, link_strength=MAXIMUM_FLUENCY})
-end
-
-function register_hf_language_by_entity(hf_id, entity)
-  for _, language_id in pairs(entity.histfig_ids) do
-    if language_id < 0 then
-      local _, language = df.historical_figure.find(language_id)
-      if language then
-        register_hf_language(df.historical_figure.find(hf_id), language_id)
-        return
-      end
-    end
-  end
 end
 
 function process_event(event)
@@ -837,7 +860,6 @@ function init()
   return dfhack.persistent.save{key='babel', ints={0, 0, 0, 0, 0, 0, 0}}
 end
 
--- TODO: reset when world is unloaded
 if next_report_index == nil then
   next_report_index = 0
 end
@@ -869,9 +891,10 @@ end
 function civ_native_language(civ)
   if civ then
     print('civ native language: civ.id=' .. civ.id)
-    for _, histfig_id in pairs(civ.histfig_ids) do
-      if histfig_id < 0 then
-        return df.historical_figure.find(histfig_id)
+    local all_languages = dfhack.persistent.get_all('babel/language')
+    for _, language in pairs(all_languages) do
+      if language.ints[2] == civ.id then
+        return language
       end
     end
   end
@@ -890,27 +913,24 @@ end
 
 function hf_languages(hf)
   print('hf languages: hf.id=' .. hf.id)
+  if not fluency_data[hf.id] then
+    local language = hf_native_language(hf)
+    if language then
+      set_fluency(hf.id, language.ints[2], MAXIMUM_FLUENCY)
+    else
+      fluency_data[hf.id] = {}
+    end
+  end
   local languages = {}
-  for i = 1, 2 do
-    for _, link in pairs(hf.histfig_links) do
-      if link._type == df.histfig_hf_link and link.target_hf < 0 and link.link_strength == MAXIMUM_FLUENCY then
-        local language = df.historical_figure.find(link.target_hf)
-        if language then
+  local all_languages = dfhack.persistent.get_all('babel/language')
+  for civ_id, fluency_record in pairs(fluency_data[hf.id]) do
+    if fluency_record.fluency == MAXIMUM_FLUENCY then
+      for _, language in pairs(all_languages) do
+        if language.ints[2] == civ_id then
           table.insert(languages, language)
+          break
         end
       end
-    end
-    if #languages == 0 and i == 1 then
-      local language = hf_native_language(hf)
-      if language then
-        register_hf_language(hf, language.id)
-        --[[
-          TODO: Register languages of linked civs and languages spoken by
-          groups within home site, with varying degrees of fluency.
-        ]]
-      end
-    else
-      break
     end
   end
   return languages
@@ -941,6 +961,7 @@ end
 function babel()
   if not dfhack.isWorldLoaded() then
     print('not loaded')
+    write_fluency_data()
     next_report_index = nil
     return
   end
@@ -950,6 +971,9 @@ function babel()
       if not phonologies then
         qerror('At least one phonology must be defined')
       end
+    end
+    if not fluency_data then
+      read_fluency_data()
     end
     local entry = dfhack.persistent.get('babel')
     local first_time = false
@@ -1064,10 +1088,10 @@ function babel()
           local adv_hf = df.historical_figure.find(adventurer.hist_figure_id)
           local adv_languages = unit_languages(adventurer)
           for i = 1, #adv_languages do
-            print('adv knows: ' .. adv_languages[i].name.nickname)
+            print('adv knows: ' .. adv_languages[i].value)
           end
           if report_language then
-            print('speaker is speaking: ' .. report_language.name.nickname)
+            print('speaker is speaking: ' .. report_language.value)
           else
             print('speaker speaks no language')
           end
@@ -1081,22 +1105,17 @@ function babel()
               id_delta = id_delta - 1
             else
               just_learned = false
-              local _, link = utils.linear_index(
-                adv_hf.histfig_links, report_language.id, 'target_hf')
-              if not link then
-                link = {new=true, target_hf=report_language.id,
-                        link_strength=MINIMUM_FLUENCY}
-                adv_hf.histfig_links:insert('#', link)
-              end
+              local fluency_record = get_fluency(adv_hf.id,
+                                                 report_language.ints[2])
               local unit = df.unit.find(report.unk_v40_3)
-              link.link_strength = math.min(
-                MAXIMUM_FLUENCY, link.link_strength +
+              fluency_record.fluency = math.min(
+                MAXIMUM_FLUENCY, fluency_record.fluency +
                 math.ceil(adventurer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
-              print('strength <-- ' .. link.link_strength)
-              if link.link_strength == MAXIMUM_FLUENCY then
-                dfhack.gui.showAnnouncement(
-                  'You have learned ' ..
-                  dfhack.TranslateName(report_language.name) .. '.', COLOR_GREEN)
+              print('strength <-- ' .. fluency_record.fluency)
+              if fluency_record.fluency == MAXIMUM_FLUENCY then
+                dfhack.gui.showAnnouncement('You have learned ' ..
+                  dfhack.TranslateName(report_language.value) .. '.',
+                  COLOR_GREEN)
                 just_learned = true
               end
               local conversation_id = report.unk_v40_1
