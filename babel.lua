@@ -1,6 +1,5 @@
 local utils = require('utils')
 
--- TODO: clear announcements on reloading world
 -- TODO: Why does GEN_DIVINE have no words now?
 
 local MINIMUM_FLUENCY = -32768
@@ -8,6 +7,7 @@ local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
 local phonologies = nil
 local fluency_data = nil
+local next_report_index = 0
 
 if enabled == nil then
   enabled = false
@@ -540,7 +540,6 @@ function read_phonologies()
       io.input():close()
     end
   end
-  return phonologies
 end
 
 function set_fluency(hf_id, civ_id, fluency)
@@ -860,10 +859,6 @@ function init()
   return dfhack.persistent.save{key='babel', ints={0, 0, 0, 0, 0, 0, 0}}
 end
 
-if next_report_index == nil then
-  next_report_index = 0
-end
-
 function is_unprocessed_hf(hf)
   local id = hf.id
   if id < 0 then
@@ -962,18 +957,18 @@ function babel()
   if not dfhack.isWorldLoaded() then
     print('not loaded')
     write_fluency_data()
-    next_report_index = nil
     return
   end
   dfhack.with_suspend(function()
     if not phonologies then
-      phonologies = read_phonologies()
+      read_phonologies()
       if not phonologies then
         qerror('At least one phonology must be defined')
       end
     end
     if not fluency_data then
       read_fluency_data()
+      df.global.world.status.announcements:resize(0)
     end
     local entry = dfhack.persistent.get('babel')
     local first_time = false
