@@ -152,21 +152,133 @@ function translate(language, topic, topic1, topic2, topic3)
     return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
   end
   -- TODO: Capitalize the result.
-  return languages.translations[language.ints[1]].words[word_index].value
-    .. '.'
+  return unescape(
+    languages.translations[language.ints[1]].words[word_index].value) .. '.'
 end
 
-function random_word(civ)
-  local index = civ.id
-  local consonants = 'bcdfghjklmnpqrstvwxyz\x87\xa4\xe9\xeb'
-  local vowels = 'aeiou\x81\x82\x83\x84\x85\x86\x88\x89\x8a\x8b\x8c\x8d\x91\x93\x94\x95\x96\x97\xa0\xa1\xa2\xa3'
-  local rand1 = math.random(consonants:len())
-  local rand2 = math.random(vowels:len())
-  local rand3 = math.random(consonants:len())
-  word = consonants:sub(rand1, rand1) .. vowels:sub(rand2, rand2) ..
-    consonants:sub(rand3, rand3) ..
-    vowels:sub(index % vowels:len(), index % vowels:len())
-  return '/' .. word .. '/', '<' .. word .. '>'
+function random_phoneme(nodes)
+  local phoneme = {}
+  local sonority = 0
+  for _, node in pairs(nodes) do
+    if (node.parent == 0 or phoneme[node.parent]) and math.random(2) == 1 then
+      table.insert(phoneme, true)
+      if node.sonorous then
+        sonority = sonority + 1
+      end
+    else
+      table.insert(phoneme, false)
+    end
+  end
+  return phoneme, sonority
+end
+
+function u_form(word)
+  local str = ''
+  for _, phoneme in pairs(word) do
+    local byte = 0
+    for i, feature in pairs(phoneme) do
+      if i % 8 == 0 then
+        str = str .. string.format("%c", byte)
+        byte = 0
+      end
+      if feature then
+        byte = byte + 2 ^ (8 - i)
+      end
+    end
+  end
+  return str
+end
+
+function s_form(phonology, word)
+  local str = ''
+  for _, phoneme in pairs(word) do
+    local best_symbol = ''
+    local best_score = -1
+    local best_base_score = -1
+    for symbol, symbol_features in pairs(phonology.symbols) do
+      local score = 0
+      local base_score = 0
+      for i, phoneme_feature in pairs(phoneme) do
+        if phoneme_feature == (symbol_features[i] or false) then
+          score = score + 1
+          base_score = base_score + 1
+        end
+      end
+      for i, node in pairs(phonology.nodes) do
+        if phoneme[i] ~= (symbol_features[i] or false) then
+          if node.add and phoneme[i] then
+            symbol = symbol .. node.add
+            score = score + 1
+          elseif node.remove and not phoneme[i] then
+            symbol = symbol .. node.remove
+            score = score + 1
+          end
+        end
+      end
+      if (score > best_score or
+          (score == best_score and base_score > best_base_score)) then
+        best_symbol = symbol
+        best_score = score
+        best_base_score = base_score
+      end
+    end
+    str = str .. best_symbol
+  end
+  return str
+end
+
+function random_word(language)
+  print('random word: language=' .. language.value)
+  local phonology = phonologies[language.ints[3]]
+  local min_peak_sonority = language.ints[4]
+  local min_sonority_delta = language.ints[5]
+  -- TODO: more realistic syllable count distribution
+  local syllables_left = math.random(2)
+  -- TODO: make sure this is low enough so it never triggers a new syllable on the first phoneme (here and below)
+  local peak_sonority = -100
+  local prev_sonority = -100
+  local word = {}
+  while syllables_left ~= 0 do
+--    print('\nleft: ' .. syllables_left)
+    local phoneme, sonority = random_phoneme(phonology.nodes)
+--    print('phoneme: ' .. s_form(phonology, {phoneme}) .. ' (' .. sonority .. ')')
+    local use_phoneme = true
+    local sonority_delta = sonority - prev_sonority
+--    print('peak sonority: ' .. peak_sonority)
+--    print('delta: ' .. sonority_delta)
+    if ((sonority < peak_sonority and sonority_delta > 0) or
+        (sonority > peak_sonority and sonority_delta < 0) or
+        math.abs(sonority_delta) < min_sonority_delta) then
+      if peak_sonority < 0 then
+        use_phoneme = false
+--        print('  skip!')
+      else
+        syllables_left = syllables_left - 1
+--        print('  new syllable!')
+        peak_sonority = -100
+      end
+    end
+    if use_phoneme and syllables_left ~= 0 then
+      if sonority >= min_peak_sonority then
+        peak_sonority = sonority
+      end
+      prev_sonority = sonority
+      table.insert(word, phoneme)
+    end
+  end
+  return u_form(word), s_form(phonology, word)
+end
+
+function escape(str)
+  return str:gsub('[[:\n\\\x1a]', function(c)
+      return '\\x' .. string.format('%02x', string.byte(c))
+    end)
+end
+
+function unescape(str)
+  return str:gsub('\\x[%da-fA-F][%da-fA-F]', function(c)
+      return string.char(tonumber(c:sub(3), 16))
+    end)
 end
 
 function update_word(resource_id, word, noun_sing, noun_plur, adj,
@@ -195,18 +307,19 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
   end
   for _, entity in pairs(df.global.world.entities.all) do
     if entity.type == 0 then  -- Civilization
-      local u_translation, s_translation = civ_translations(entity)
+      local language = civ_native_language(entity)
+      local u_translation, s_translation = language_translations(language)
       local u_form = ''
       local s_form = ''
       for _, f in pairs(resource_functions) do
         if f == true or in_list(resource_id, f(entity), 0) then
-          u_form, s_form = random_word(entity)
+          u_form, s_form = random_word(language)
           print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. u_form .. '\t' .. s_form)
           break
         end
       end
-      u_translation.words:insert('#', {new=true, value=u_form})
-      s_translation.words:insert('#', {new=true, value=s_form})
+      u_translation.words:insert('#', {new=true, value=escape(u_form)})
+      s_translation.words:insert('#', {new=true, value=escape(s_form)})
     end
   end
 end
@@ -429,18 +542,7 @@ function expand_lexicons()
   -- TODO: descriptors
 end
 
-function civ_translations(civ)
-  local all_languages = dfhack.persistent.get_all('babel/language')
-  for _, language in pairs(all_languages) do
-    if language.ints[2] == civ.id then
-      local translation_id = language.ints[1]
-      return df.language_translation.find(translation_id),
-        df.language_translation.find(translation_id + 1)
-    end
-  end
-end
-
-function read_phonologies()
+function load_phonologies()
   local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
@@ -448,92 +550,105 @@ function read_phonologies()
         filename:match('^phonology_.*%.txt')) then
       io.input(path)
       -- TODO: Is it bad that it can qerror without closing the file?
-      -- TODO: Are CR/LF allowed within tokens?
       -- TODO: Check the first line for the file name.
+      -- TODO: '\n'-terminated tokens trim trailing whitespace.
       local current_phonology = nil
       local current_parent = 0
-      for token in io.read('*all'):gmatch('%[.-%]') do
-        local subtokens = {}
-        for subtoken in token:gmatch('[^][:]+') do
-          table.insert(subtokens, subtoken)
+      for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
+        local subtags = {}
+        for subtag in tag:gmatch('[^]:]+') do
+          table.insert(subtags, subtag)
         end
-        if #subtokens >= 1 then
-          if subtokens[1] == 'OBJECT' then
-            if #subtokens ~= 2 then
-              qerror('Wrong number of subtokens: ' .. token)
+        if #subtags >= 1 then
+          if subtags[1] == 'OBJECT' then
+            if #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
             end
-            if subtokens[2] ~= 'PHONOLOGY' then
-              qerror('Wrong object type: ' .. subtokens[2])
+            if subtags[2] ~= 'PHONOLOGY' then
+              qerror('Wrong object type: ' .. subtags[2])
             end
             phonologies = {}
           elseif not phonologies then
-            qerror('Missing OBJECT token: ' .. filename)
-          elseif subtokens[1] == 'PHONOLOGY' then
-            if #subtokens ~= 2 then
-              qerror('Wrong number of subtokens: ' .. token)
+            qerror('Missing OBJECT tag: ' .. filename)
+          elseif subtags[1] == 'PHONOLOGY' then
+            if #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
             end
-            if utils.linear_index(phonologies, subtokens[2], 'name') then
-              qerror('Duplicate phonology: ' .. subtokens[2])
+            if utils.linear_index(phonologies, subtags[2], 'name') then
+              qerror('Duplicate phonology: ' .. subtags[2])
             end
             table.insert(phonologies,
-                         {name=subtokens[2], nodes={}, symbols={}, affixes={}})
+                         {name=subtags[2], nodes={}, symbols={}, affixes={}})
             current_phonology = phonologies[#phonologies]
-          elseif subtokens[1] == 'NODE' then
+          elseif subtags[1] == 'NODE' then
             if not current_phonology then
-              qerror('Orphaned NODE token: ' .. token)
+              qerror('Orphaned NODE tag: ' .. tag)
             end
-            if #subtokens ~= 2 then
-              qerror('Wrong number of subtokens: ' .. token)
+            if #subtags < 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local sonorous = false
+            local add_symbol = nil
+            local remove_symbol = nil
+            local i = 3
+            while i <= #subtags do
+              if subtags[i] == 'SONOROUS' then
+                sonorous = true
+              elseif subtags[i] == 'ADD' then
+                if i == #subtags then
+                  qerror('No symbol specified for node ' .. subtags[2])
+                end
+                i = i + 1
+                add_symbol = subtags[i]
+              elseif subtags[i] == 'REMOVE' then
+                if i == #subtags then
+                  qerror('No symbol specified for node ' .. subtags[2])
+                end
+                i = i + 1
+                remove_symbol = subtags[i]
+              else
+                qerror('Unknown subtag ' .. subtags[i])
+              end
+              i = i + 1
             end
             table.insert(current_phonology.nodes,
-                         {name=subtokens[2], parent=current_parent})
+                         {name=subtags[2], parent=current_parent,
+                          add=add_symbol, remove=remove_symbol,
+                          sonorous=sonorous})
             current_parent = #current_phonology.nodes
-          elseif subtokens[1] == 'END' then
+          elseif subtags[1] == 'END' then
             if not current_phonology then
-              qerror('Orphaned NODE token: ' .. token)
+              qerror('Orphaned END tag: ' .. tag)
             end
-            if #subtokens ~= 1 then
-              qerror('Wrong number of subtokens: ' .. token)
+            if #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
             end
             if current_parent == 0 then
-              qerror('Misplaced END token')
+              qerror('Misplaced END tag')
             end
             current_parent = current_phonology.nodes[current_parent].parent
-          elseif subtokens[1] == 'SYMBOL' then
+          elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
-              qerror('Orphaned NODE token: ' .. token)
-            end
-            if #subtokens < 3 then
-              qerror('No features specified: ' .. token)
-            end
-            if current_phonology.symbols[subtokens[2]] then
-              qerror('Duplicate symbol: ' .. subtokens[2])
+              qerror('Orphaned SYMBOL tag: ' .. tag)
             end
             local nodes = {}
-            for i = 3, #subtokens do
+            local i = 3
+            while i <= #subtags do
               local n, node = utils.linear_index(current_phonology.nodes,
-                                                 subtokens[i], 'name')
+                                                 subtags[i], 'name')
               if not n then
-                qerror('No such node: ' .. subtokens[i])
+                qerror('No such node: ' .. subtags[i])
               end
               if node.parent ~= 0 then
-                table.insert(subtokens,
+                table.insert(subtags,
                              current_phonology.nodes[node.parent].name)
               end
               nodes[n] = true
+              i = i + 1
             end
-            current_phonology.symbols[subtokens[2]] = nodes
-          elseif subtokens[1] == 'AFFIX' then
-            if not current_phonology then
-              qerror('Orphaned NODE token: ' .. token)
-            end
-            if #subtokens < 4 then
-              qerror('No features specified: ' .. token)
-            end
-            -- TODO
-            qerror('Affixes are not implemented yet')
+            current_phonology.symbols[subtags[2]] = nodes
           else
-            qerror('Unknown token: ' .. token)
+            qerror('Unknown tag: ' .. tag)
           end
         end
       end
@@ -559,7 +674,7 @@ function get_fluency(hf_id, civ_id)
   return fluency_data[hf_id][civ_id]
 end
 
-function read_fluency_data()
+function load_fluency_data()
   fluency_data = {}
   local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
                        '/raw/objects/fluency_data.txt')
@@ -608,8 +723,8 @@ function has_language_object(path)
   return rv
 end
 
-function write_raw_tokens(file, tokens)
-  for _, str in pairs(tokens) do
+function write_raw_tags(file, tags)
+  for _, str in pairs(tags) do
     file:write('\t', str.value, '\n')
   end
 end
@@ -620,7 +735,7 @@ function write_translation_file(dir, index, translation)
   local file = io.open(dir .. '/' .. filename .. '.txt', 'w')
   file:write(filename, '\n\n[OBJECT:LANGUAGE]\n\n[TRANSLATION:',
              translation.name, ']\n')
-  write_raw_tokens(file, translation.str)
+  write_raw_tags(file, translation.str)
   for i = #translation.str, #df.global.world.raws.language.words - 1 do
     local value = ''
     if i < #translation.words then
@@ -637,7 +752,7 @@ function write_symbol_file(dir)
   file:write('language_SYM\n\n[OBJECT:LANGUAGE]\n')
   for _, symbol in pairs(df.global.world.raws.language.symbols) do
     file:write('\n[SYMBOL:', symbol.name, ']\n')
-    write_raw_tokens(file, symbol.str)
+    write_raw_tags(file, symbol.str)
   end
   file:close()
 end
@@ -647,13 +762,14 @@ function write_word_file(dir)
   file:write('language_words\n\n[OBJECT:LANGUAGE]\n')
   for _, word in pairs(df.global.world.raws.language.words) do
     file:write('\n[WORD:', word.word, ']\n')
-    write_raw_tokens(file, word.str)
+    write_raw_tags(file, word.str)
   end
   file:close()
 end
 
 function overwrite_language_files()
-  local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
+  local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir ..
+    '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
     if dfhack.filesystem.isfile(path) then
@@ -669,6 +785,16 @@ function overwrite_language_files()
   end
   write_symbol_file(dir)
   write_word_file(dir)
+end
+
+function language_translations(language)
+  local translation_id = language.ints[1]
+  return df.language_translation.find(translation_id),
+    df.language_translation.find(translation_id + 1)
+end
+
+function civ_translations(civ)
+  return language_translations(civ_native_language(civ))
 end
 
 function loan_words(dst_civ_id, src_civ_id, loans)
@@ -790,8 +916,11 @@ function create_language(civ)
   local figures = df.global.world.history.figures
   local translations = df.global.world.raws.language.translations
   -- Create a persistent entry to represent the language.
+  -- TODO: Choose a phonology based on physical ability to produce the phones.
   local language = dfhack.persistent.save(
-    {key='babel/language', value='LG' .. civ.id, ints={#translations, civ.id}},
+    {key='babel/language', value='LG' .. civ.id,
+     -- TODO: random sonority parameters
+     ints={#translations, civ.id, math.random(#phonologies), 3, 1}},
     true)
   -- Create two copies (underlying and surface forms) of the language.
   -- TODO: Don't simply copy from the first translation.
@@ -855,10 +984,6 @@ function process_event(event)
   end
 end
 
-function init()
-  return dfhack.persistent.save{key='babel', ints={0, 0, 0, 0, 0, 0, 0}}
-end
-
 function is_unprocessed_hf(hf)
   local id = hf.id
   if id < 0 then
@@ -885,7 +1010,6 @@ end
 
 function civ_native_language(civ)
   if civ then
-    print('civ native language: civ.id=' .. civ.id)
     local all_languages = dfhack.persistent.get_all('babel/language')
     for _, language in pairs(all_languages) do
       if language.ints[2] == civ.id then
@@ -960,21 +1084,11 @@ function babel()
     return
   end
   dfhack.with_suspend(function()
-    if not phonologies then
-      read_phonologies()
-      if not phonologies then
-        qerror('At least one phonology must be defined')
-      end
-    end
-    if not fluency_data then
-      read_fluency_data()
-      df.global.world.status.announcements:resize(0)
-    end
     local entry = dfhack.persistent.get('babel')
     local first_time = false
     if not entry then
       first_time = true
-      entry = init()
+      entry = dfhack.persistent.save{key='babel', ints={0, 0, 0, 0, 0, 0, 0}}
     end
     -- TODO: Track structures.
     local entities_done = entry.ints[3]
@@ -1156,6 +1270,7 @@ function babel()
               local continuation = false
               while not continuation or text ~= '' do
                 print('text:' .. text)
+                -- TODO: Break on whitespace preferably.
                 local size = math.min(string.len(text), 73)
                 new_report = {new=true,
                               type=report.type,
@@ -1201,6 +1316,16 @@ args = {...}
 if #args >= 1 then
   if args[1] == 'start' then
     enabled = true
+    if not phonologies then
+      load_phonologies()
+      if not phonologies then
+        qerror('At least one phonology must be defined')
+      end
+    end
+    if not fluency_data then
+      load_fluency_data()
+    end
+    df.global.world.status.announcements:resize(0)
     babel()
   elseif args[1] == 'stop' then
     enabled = false
