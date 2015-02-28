@@ -1,11 +1,55 @@
 local utils = require('utils')
 
--- TODO: Why does GEN_DIVINE have no words now?
+--[[
+TODO:
+* Put words in GEN_DIVINE.
+* Update any new names in GEN_DIVINE to point to the moved GEN_DIVINE.
+* Protect against infinite loops due to sonority dead ends in random_word.
+* Change the adventurer's forced goodbye response to "I don't understand you".
+]]
+
+--[[
+TODO: constraints to rules
+all_rules = []
+for i, c in pairs(constraints) do
+  rules_to_check = []
+  local f = next_faithfulness_constraint(c, constraints, i)
+  rules_to_check.push(rule(c, f))
+  while #rules_to_check ~= 0 do
+    local rule_to_check = rules_to_check.pop()
+    all_rules.push(rule_to_check)
+    local new_constraints = constraints_fed_by_rule(rule_to_check)
+    for j, new_constraint in pairs(new_constraints) do
+      local f = next_faithfulness_constraint(new_constraint, constraints,
+                                            max(i, j))
+      rules_to_check.push(rule(new_constraint, f))
+    end
+  end
+end
+
+function next_faithfulness_constraint(c, constraints, i)
+  for i = #constraints, i + 1, -1 do
+    local c_i = constraints[i]
+    if c_i is a faithfulness constraint and violating c_i unviolates c then
+      return c_i
+    end
+  end
+end
+
+function rule(c, f)
+  ...
+end
+
+function constraints_fed_by_rule(rule)
+  ...
+end
+]]
 
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
 local phonologies = nil
+local inventories = {}
 local fluency_data = nil
 local next_report_index = 0
 
@@ -156,22 +200,6 @@ function translate(language, topic, topic1, topic2, topic3)
     languages.translations[language.ints[1]].words[word_index].value) .. '.'
 end
 
-function random_phoneme(nodes)
-  local phoneme = {}
-  local sonority = 0
-  for _, node in pairs(nodes) do
-    if (node.parent == 0 or phoneme[node.parent]) and math.random(2) == 1 then
-      table.insert(phoneme, true)
-      if node.sonorous then
-        sonority = sonority + 1
-      end
-    else
-      table.insert(phoneme, false)
-    end
-  end
-  return phoneme, sonority
-end
-
 function u_form(word)
   local str = ''
   for _, phoneme in pairs(word) do
@@ -227,11 +255,41 @@ function s_form(phonology, word)
   return str
 end
 
-function random_word(language)
-  print('random word: language=' .. language.value)
+function random_phoneme(nodes, rng)
+  local phoneme = {}
+  local sonority = 0
+  for _, node in pairs(nodes) do
+    if (node.parent == 0 or phoneme[node.parent]) and rng:random(2) == 1 then
+      table.insert(phoneme, true)
+      if node.sonorous then
+        sonority = sonority + 1
+      end
+    else
+      table.insert(phoneme, false)
+    end
+  end
+  return phoneme, sonority
+end
+
+function random_inventory(nodes, seed)
+  local rng = dfhack.random.new(seed)
+  -- TODO: normal distribution of inventory sizes
+  local size = 10 + rng:random(21)
+  local inventory = {max_sonority=0, min_sonority=math.huge}
+  for i = 1, size do
+    local phoneme, sonority = random_phoneme(nodes, rng)
+    inventory[i] = {phoneme, sonority}
+    inventory.min_sonority = math.min(sonority, inventory.min_sonority)
+    inventory.max_sonority = math.max(sonority, inventory.max_sonority)
+  end
+  return inventory
+end
+
+function random_word(language, inventory)
   local phonology = phonologies[language.ints[3]]
-  local min_peak_sonority = language.ints[4]
-  local min_sonority_delta = language.ints[5]
+  -- TODO: random sonority parameters
+  local min_peak_sonority = inventory.max_sonority
+  local min_sonority_delta = math.floor((inventory.max_sonority - inventory.min_sonority) / 2)
   -- TODO: more realistic syllable count distribution
   local syllables_left = math.random(2)
   -- TODO: make sure this is low enough so it never triggers a new syllable on the first phoneme (here and below)
@@ -240,7 +298,9 @@ function random_word(language)
   local word = {}
   while syllables_left ~= 0 do
 --    print('\nleft: ' .. syllables_left)
-    local phoneme, sonority = random_phoneme(phonology.nodes)
+    local phoneme_and_sonority = inventory[math.random(#inventory)]
+    local phoneme = phoneme_and_sonority[1]
+    local sonority = phoneme_and_sonority[2]
 --    print('phoneme: ' .. s_form(phonology, {phoneme}) .. ' (' .. sonority .. ')')
     local use_phoneme = true
     local sonority_delta = sonority - prev_sonority
@@ -308,12 +368,18 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
   for _, entity in pairs(df.global.world.entities.all) do
     if entity.type == 0 then  -- Civilization
       local language = civ_native_language(entity)
+      local inventory = inventories[entity.id]
+      if not inventory then
+        inventory = random_inventory(
+          phonologies[language.ints[3]].nodes, language.ints[4])
+        inventories[entity.id] = inventory
+      end
       local u_translation, s_translation = language_translations(language)
       local u_form = ''
       local s_form = ''
       for _, f in pairs(resource_functions) do
         if f == true or in_list(resource_id, f(entity), 0) then
-          u_form, s_form = random_word(language)
+          u_form, s_form = random_word(language, inventory)
           print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. u_form .. '\t' .. s_form)
           break
         end
@@ -919,8 +985,8 @@ function create_language(civ)
   -- TODO: Choose a phonology based on physical ability to produce the phones.
   local language = dfhack.persistent.save(
     {key='babel/language', value='LG' .. civ.id,
-     -- TODO: random sonority parameters
-     ints={#translations, civ.id, math.random(#phonologies), 3, 1}},
+     ints={#translations, civ.id, math.random(#phonologies),
+           dfhack.random.new():random()}},
     true)
   -- Create two copies (underlying and surface forms) of the language.
   -- TODO: Don't simply copy from the first translation.
@@ -1084,14 +1150,19 @@ function babel()
     return
   end
   dfhack.with_suspend(function()
-    local entry = dfhack.persistent.get('babel')
+    local entry1 = dfhack.persistent.get('babel/config1')
     local first_time = false
-    if not entry then
+    if not entry1 then
       first_time = true
-      entry = dfhack.persistent.save{key='babel', ints={0, 0, 0, 0, 0, 0, 0}}
+      entry1 = dfhack.persistent.save{key='babel/config1',
+                                     ints={0, 0, 0, 0, 0, 0, 0}}
+      -- TODO: Is there always exactly one generated translation, the last?
+      entry2 = dfhack.persistent.save{
+        key='babel/config2',
+        ints={#df.global.world.raws.language.translations - 1}}
     end
     -- TODO: Track structures.
-    local entities_done = entry.ints[3]
+    local entities_done = entry1.ints[3]
     if #df.global.world.entities.all > entities_done then
       print('\nent: ' .. #df.global.world.entities.all .. '>' .. entities_done)
       for i = entities_done, #df.global.world.entities.all - 1 do
@@ -1100,33 +1171,33 @@ function babel()
         end
         df.global.world.entities.all[i].name.nickname = 'Ent' .. i
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[3]=#df.global.world.entities.all}}
       if first_time then
         expand_lexicons()
         overwrite_language_files()
       end
     end
-    local events_done = entry.ints[7]
+    local events_done = entry1.ints[7]
     if #df.global.world.history.events > events_done then
       print('\nevent: ' .. #df.global.world.history.events .. '>' .. events_done)
       for i = events_done, #df.global.world.history.events - 1 do
         process_event(df.global.world.history.events[i])
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[7]=#df.global.world.history.events}}
     end
-    local hist_figures_done = entry.ints[1]
+    local hist_figures_done = entry1.ints[1]
     if #df.global.world.history.figures > hist_figures_done then
       print('\nhf: ' .. #df.global.world.history.figures .. '>' .. hist_figures_done)
       for i = hist_figures_done, #df.global.world.history.figures - 1 do
         process_hf(df.global.world.history.figures[i])
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[1]=#df.global.world.history.figures}}
     end
     -- TODO: units_done shouldn't be persistent
-    local units_done = entry.ints[2]
+    local units_done = entry1.ints[2]
     if #df.global.world.units.all > units_done then
       print('\nunit: ' .. #df.global.world.units.all .. '>' .. units_done)
       for i = units_done, #df.global.world.units.all - 1 do
@@ -1135,34 +1206,34 @@ function babel()
           df.global.world.units.all[i].name.nickname = 'U' .. i
         end
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[2]=#df.global.world.units.all}}
     end
-    local sites_done = entry.ints[4]
+    local sites_done = entry1.ints[4]
     if #df.global.world.world_data.sites > sites_done then
       print('\nsite ' .. #df.global.world.world_data.sites .. '>' .. sites_done)
       for i = sites_done, #df.global.world.world_data.sites - 1 do
         df.global.world.world_data.sites[i].name.nickname = 'S' .. i
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[4]=#df.global.world.world_data.sites}}
     end
-    local artifacts_done = entry.ints[5]
+    local artifacts_done = entry1.ints[5]
     if #df.global.world.artifacts.all > artifacts_done then
       print('\nartifact ' .. #df.global.world.artifacts.all .. '>' .. artifacts_done)
       for i = artifacts_done, #df.global.world.artifacts.all - 1 do
         df.global.world.artifacts.all[i].name.nickname = 'A' .. i
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[5]=#df.global.world.artifacts.all}}
     end
-    local regions_done = entry.ints[6]
+    local regions_done = entry1.ints[6]
     if #df.global.world.world_data.regions > regions_done then
       print('\nregion ' .. #df.global.world.world_data.regions .. '>' .. regions_done)
       for i = regions_done, #df.global.world.world_data.regions - 1 do
         df.global.world.world_data.regions[i].name.nickname = 'Reg' .. i
       end
-      dfhack.persistent.save{key='babel',
+      dfhack.persistent.save{key='babel/config1',
                              ints={[6]=#df.global.world.world_data.regions}}
     end
     local reports = df.global.world.status.reports
@@ -1326,6 +1397,12 @@ if #args >= 1 then
       load_fluency_data()
     end
     df.global.world.status.announcements:resize(0)
+    local entry2 = dfhack.persistent.get('babel/config2')
+    if entry2 then
+      local translations = df.global.world.raws.language.translations
+      translations:insert(entry2.ints[1], translations[#translations - 1])
+      translations:erase(#translations - 1)
+    end
     babel()
   elseif args[1] == 'stop' then
     enabled = false
