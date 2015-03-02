@@ -275,7 +275,7 @@ function shuffle(t, rng)
   t = copyall(t)
   local j
   for i = #t, 2, -1 do
-    j = rng:random(i)
+    j = rng:random(i) + 1
     t[i], t[j] = t[j], t[i]
   end
   return t
@@ -655,8 +655,9 @@ function load_phonologies()
             if utils.linear_index(phonologies, subtags[2], 'name') then
               qerror('Duplicate phonology: ' .. subtags[2])
             end
-            table.insert(phonologies, {name=subtags[2], nodes={}, symbols={},
-                                       affixes={}, constraints={}})
+            table.insert(phonologies,
+                         {name=subtags[2], nodes={}, symbols={}, affixes={},
+                          constraints={{type='Max'}, {type='Dep'}}})
             current_phonology = phonologies[#phonologies]
           elseif subtags[1] == 'NODE' then
             if not current_phonology then
@@ -694,6 +695,8 @@ function load_phonologies()
                           add=add_symbol, remove=remove_symbol,
                           sonorous=sonorous})
             current_parent = #current_phonology.nodes
+            table.insert(current_phonology.constraints,
+                         {type='Ident', feature=#current_phonology.nodes})
           elseif subtags[1] == 'END' then
             if not current_phonology then
               qerror('Orphaned END tag: ' .. tag)
@@ -729,7 +732,7 @@ function load_phonologies()
             if not current_phonology then
               qerror('Orphaned CONSTRAINT tag: ' .. tag)
             end
-            local constraint = {domain={}, scope='WORD', {}}
+            local constraint = {type='*', domain={}, scope='WORD', {}}
             local i = 2
             while i <= #subtags do
               if subtags[i] == 'THEN' then
@@ -1468,20 +1471,26 @@ if #args >= 1 then
   elseif args[1] == 'test' then
     phonologies = nil
     load_phonologies()
+    phonologies[1].constraints = shuffle(phonologies[1].constraints,
+                                         dfhack.random.new())
     for i, c in pairs(phonologies[1].constraints) do
-      print('Constraint ' .. i .. ':')
-      print('  Scope: ' .. c.scope)
-      print('  Domain:')
-      for k, f in pairs(c.domain) do
-        print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
-      end
-      for j, p in pairs(c) do
-        if type(j) == 'number' then
-          print(j .. ':')
-          for k, f in pairs(p) do
-            print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
+      print('\nConstraint ' .. i .. '\t' .. c.type)
+      if c.type == '*' then
+        print('  Scope: ' .. c.scope)
+        print('  Domain:')
+        for k, f in pairs(c.domain) do
+          print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
+        end
+        for j, p in pairs(c) do
+          if type(j) == 'number' then
+            print(j .. ':')
+            for k, f in pairs(p) do
+              print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
+            end
           end
         end
+      elseif c.type == 'Ident' then
+        print('\t' .. phonologies[1].nodes[c.feature].name)
       end
     end
   else
