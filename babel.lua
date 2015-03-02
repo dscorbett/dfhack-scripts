@@ -49,7 +49,7 @@ local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
 local phonologies = nil
-local inventories = {}
+local parameter_sets = {}
 local fluency_data = nil
 local next_report_index = 0
 
@@ -271,25 +271,36 @@ function random_phoneme(nodes, rng)
   return phoneme, sonority
 end
 
-function random_inventory(nodes, seed)
+function shuffle(t, rng)
+  t = copyall(t)
+  local j
+  for i = #t, 2, -1 do
+    j = rng:random(i)
+    t[i], t[j] = t[j], t[i]
+  end
+  return t
+end
+
+function random_parameters(phonology, seed)
   local rng = dfhack.random.new(seed)
   -- TODO: normal distribution of inventory sizes
   local size = 10 + rng:random(21)
-  local inventory = {max_sonority=0, min_sonority=math.huge}
+  local parameters = {max_sonority=0, min_sonority=math.huge, inventory={},
+                      constraints=shuffle(phonology.constraints, rng)}
   for i = 1, size do
-    local phoneme, sonority = random_phoneme(nodes, rng)
-    inventory[i] = {phoneme, sonority}
-    inventory.min_sonority = math.min(sonority, inventory.min_sonority)
-    inventory.max_sonority = math.max(sonority, inventory.max_sonority)
+    local phoneme, sonority = random_phoneme(phonology.nodes, rng)
+    parameters.inventory[i] = {phoneme, sonority}
+    parameters.min_sonority = math.min(sonority, parameters.min_sonority)
+    parameters.max_sonority = math.max(sonority, parameters.max_sonority)
   end
-  return inventory
+  return parameters
 end
 
-function random_word(language, inventory)
+function random_word(language, parameters)
   local phonology = phonologies[language.ints[3]]
   -- TODO: random sonority parameters
-  local min_peak_sonority = inventory.max_sonority
-  local min_sonority_delta = math.floor((inventory.max_sonority - inventory.min_sonority) / 2)
+  local min_peak_sonority = parameters.max_sonority
+  local min_sonority_delta = math.max(1, math.floor((parameters.max_sonority - parameters.min_sonority) / 2))
   -- TODO: more realistic syllable count distribution
   local syllables_left = math.random(2)
   -- TODO: make sure this is low enough so it never triggers a new syllable on the first phoneme (here and below)
@@ -298,7 +309,8 @@ function random_word(language, inventory)
   local word = {}
   while syllables_left ~= 0 do
 --    print('\nleft: ' .. syllables_left)
-    local phoneme_and_sonority = inventory[math.random(#inventory)]
+    local phoneme_and_sonority =
+      parameters.inventory[math.random(#parameters.inventory)]
     local phoneme = phoneme_and_sonority[1]
     local sonority = phoneme_and_sonority[2]
 --    print('phoneme: ' .. s_form(phonology, {phoneme}) .. ' (' .. sonority .. ')')
@@ -368,18 +380,18 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
   for _, entity in pairs(df.global.world.entities.all) do
     if entity.type == 0 then  -- Civilization
       local language = civ_native_language(entity)
-      local inventory = inventories[entity.id]
-      if not inventory then
-        inventory = random_inventory(
-          phonologies[language.ints[3]].nodes, language.ints[4])
-        inventories[entity.id] = inventory
+      local parameters = parameter_sets[entity.id]
+      if not parameters then
+        parameters = random_parameters(phonologies[language.ints[3]],
+                                       language.ints[4])
+        parameter_sets[entity.id] = parameters
       end
       local u_translation, s_translation = language_translations(language)
       local u_form = ''
       local s_form = ''
       for _, f in pairs(resource_functions) do
         if f == true or in_list(resource_id, f(entity), 0) then
-          u_form, s_form = random_word(language, inventory)
+          u_form, s_form = random_word(language, parameters)
           print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. u_form .. '\t' .. s_form)
           break
         end
@@ -643,8 +655,8 @@ function load_phonologies()
             if utils.linear_index(phonologies, subtags[2], 'name') then
               qerror('Duplicate phonology: ' .. subtags[2])
             end
-            table.insert(phonologies,
-                         {name=subtags[2], nodes={}, symbols={}, affixes={}})
+            table.insert(phonologies, {name=subtags[2], nodes={}, symbols={},
+                                       affixes={}, constraints={}})
             current_phonology = phonologies[#phonologies]
           elseif subtags[1] == 'NODE' then
             if not current_phonology then
@@ -713,6 +725,50 @@ function load_phonologies()
               i = i + 1
             end
             current_phonology.symbols[subtags[2]] = nodes
+          elseif subtags[1] == 'CONSTRAINT' then
+            if not current_phonology then
+              qerror('Orphaned CONSTRAINT tag: ' .. tag)
+            end
+            local constraint = {domain={}, scope='WORD', {}}
+            local i = 2
+            while i <= #subtags do
+              if subtags[i] == 'THEN' then
+                table.insert(constraint, {})
+                domain = false
+              elseif subtags[i] == 'IN' then
+                if i == #subtags then
+                  qerror('No scope for constraint: ' .. constraint)
+                end
+                local scope = subtags[i + 1]
+                if not (scope == 'UTTERANCE' or scope == 'WORD' or
+                        scope == 'MORPHEME' or scope == 'ONSET' or
+                        scope == 'NUCLEUS' or scope == 'CODA') then
+                  qerror('Unknown scope: ' .. scope)
+                end
+                constraint.scope = scope
+                domain = false
+                i = i + 1
+              elseif subtags[i] == 'DOMAIN' then
+                domain = true
+              else
+                if i + 1 > #subtags then
+                  qerror('Incomplete constraint: ' .. tags)
+                end
+                local n, node = utils.linear_index(current_phonology.nodes,
+                                                   subtags[i], 'name')
+                if not n then
+                  qerror('No such node: ' .. subtags[i])
+                end
+                if domain then
+                  constraint.domain[n] = subtags[i + 1]
+                else
+                  constraint[#constraint][n] = subtags[i + 1]
+                end
+                i = i + 1
+              end
+              i = i + 1
+            end
+            table.insert(current_phonology.constraints, constraint)
           else
             qerror('Unknown tag: ' .. tag)
           end
@@ -1408,6 +1464,25 @@ if #args >= 1 then
     enabled = false
     if timer then
       dfhack.timeout_active(timer, nil)
+    end
+  elseif args[1] == 'test' then
+    phonologies = nil
+    load_phonologies()
+    for i, c in pairs(phonologies[1].constraints) do
+      print('Constraint ' .. i .. ':')
+      print('  Scope: ' .. c.scope)
+      print('  Domain:')
+      for k, f in pairs(c.domain) do
+        print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
+      end
+      for j, p in pairs(c) do
+        if type(j) == 'number' then
+          print(j .. ':')
+          for k, f in pairs(p) do
+            print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
+          end
+        end
+      end
     end
   else
     usage()
