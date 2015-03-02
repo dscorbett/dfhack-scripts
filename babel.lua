@@ -203,15 +203,21 @@ end
 function u_form(word)
   local str = ''
   for _, phoneme in pairs(word) do
-    local byte = 0
+    local byte = nil
     for i, feature in pairs(phoneme) do
-      if i % 8 == 0 then
-        str = str .. string.format("%c", byte)
+      if not byte then
         byte = 0
       end
       if feature then
-        byte = byte + 2 ^ (8 - i)
+        byte = byte + 2 ^ ((8 - i) % 8)
       end
+      if i % 8 == 0 then
+        str = str .. string.format('%c', byte)
+        byte = nil
+      end
+    end
+    if byte then
+      str = str .. string.format('%c', byte)
     end
   end
   return str
@@ -744,8 +750,9 @@ function load_phonologies()
                 end
                 local scope = subtags[i + 1]
                 if not (scope == 'UTTERANCE' or scope == 'WORD' or
-                        scope == 'MORPHEME' or scope == 'ONSET' or
-                        scope == 'NUCLEUS' or scope == 'CODA') then
+                        scope == 'MORPHEME' or scope == 'SYLLABLE' or
+                        scope == 'ONSET' or scope == 'NUCLEUS' or
+                        scope == 'CODA') then
                   qerror('Unknown scope: ' .. scope)
                 end
                 constraint.scope = scope
@@ -1469,30 +1476,13 @@ if #args >= 1 then
       dfhack.timeout_active(timer, nil)
     end
   elseif args[1] == 'test' then
-    phonologies = nil
-    load_phonologies()
-    phonologies[1].constraints = shuffle(phonologies[1].constraints,
-                                         dfhack.random.new())
-    for i, c in pairs(phonologies[1].constraints) do
-      print('\nConstraint ' .. i .. '\t' .. c.type)
-      if c.type == '*' then
-        print('  Scope: ' .. c.scope)
-        print('  Domain:')
-        for k, f in pairs(c.domain) do
-          print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
-        end
-        for j, p in pairs(c) do
-          if type(j) == 'number' then
-            print(j .. ':')
-            for k, f in pairs(p) do
-              print('\t' .. phonologies[1].nodes[k].name .. '\t' .. f)
-            end
-          end
-        end
-      elseif c.type == 'Ident' then
-        print('\t' .. phonologies[1].nodes[c.feature].name)
-      end
+    local function escape_all(str)
+      return str:gsub('.', function(c)
+          return '\\x' .. string.format('%02x', string.byte(c))
+        end)
     end
+    local z = false
+    print(escape_all(u_form({{z,z,z,z,z,z,z,z, z,1}})))
   else
     usage()
   end
