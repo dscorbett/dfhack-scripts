@@ -196,8 +196,31 @@ function translate(language, topic, topic1, topic2, topic3)
     return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
   end
   -- TODO: Capitalize the result.
-  return unescape(
-    languages.translations[language.ints[1]].words[word_index].value) .. '.'
+  local phonology = phonologies[language.ints[3]]
+  return s_form(phonology, optimize(
+    parameter_sets[language.ints[2]], deserialize(
+      math.ceil(#phonology.nodes / 8), unescape(
+        languages.translations[language.ints[1]].words[word_index].value))))
+end
+
+function optimize(parameters, word)
+  return word
+end
+
+function deserialize(bytes_per_phoneme, str)
+  local word = {}
+  local phoneme = {}
+  for i = 1, #str do
+    local code = str:byte(i)
+    for b = 8, 1, -1 do
+      table.insert(phoneme, (code % (2 ^ b)) >= (2 ^ (b - 1)))
+    end
+    if i % bytes_per_phoneme == 0 then
+      table.insert(word, phoneme)
+      phoneme = {}
+    end
+  end
+  return word
 end
 
 function u_form(word)
@@ -313,7 +336,9 @@ function random_word(language, parameters)
   local peak_sonority = -100
   local prev_sonority = -100
   local word = {}
-  while syllables_left ~= 0 do
+  local limit = 20  -- TODO: make this limit unnecessary
+  while syllables_left ~= 0 and limit ~= 0 do
+    limit = limit - 1
 --    print('\nleft: ' .. syllables_left)
     local phoneme_and_sonority =
       parameters.inventory[math.random(#parameters.inventory)]
@@ -398,7 +423,7 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
       for _, f in pairs(resource_functions) do
         if f == true or in_list(resource_id, f(entity), 0) then
           u_form, s_form = random_word(language, parameters)
-          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. u_form .. '\t' .. s_form)
+          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. escape(u_form) .. '\t' .. escape(s_form))
           break
         end
       end
@@ -1482,7 +1507,9 @@ if #args >= 1 then
         end)
     end
     local z = false
-    print(escape_all(u_form({{z,z,z,z,z,z,z,z, z,1}})))
+    u = u_form({{z,z,z,z,z,z,z,z, z,z,z,z,1}})
+    print(escape_all(u))
+    printall(deserialize(2, u)[1])
   else
     usage()
   end
