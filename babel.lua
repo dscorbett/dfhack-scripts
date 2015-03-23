@@ -8,43 +8,6 @@ TODO:
 * Change the adventurer's forced goodbye response to "I don't understand you".
 ]]
 
---[[
-TODO: constraints to rules
-all_rules = []
-for i, c in pairs(constraints) do
-  rules_to_check = []
-  local f = next_faithfulness_constraint(c, constraints, i)
-  rules_to_check.push(rule(c, f))
-  while #rules_to_check ~= 0 do
-    local rule_to_check = rules_to_check.pop()
-    all_rules.push(rule_to_check)
-    local new_constraints = constraints_fed_by_rule(rule_to_check)
-    for j, new_constraint in pairs(new_constraints) do
-      local f = next_faithfulness_constraint(new_constraint, constraints,
-                                            max(i, j))
-      rules_to_check.push(rule(new_constraint, f))
-    end
-  end
-end
-
-function next_faithfulness_constraint(c, constraints, i)
-  for i = #constraints, i + 1, -1 do
-    local c_i = constraints[i]
-    if c_i is a faithfulness constraint and violating c_i unviolates c then
-      return c_i
-    end
-  end
-end
-
-function rule(c, f)
-  ...
-end
-
-function constraints_fed_by_rule(rule)
-  ...
-end
-]]
-
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
@@ -209,21 +172,6 @@ function closest_phoneme(phoneme, inventory)
 end
 
 --[[
-function best_output(state)
-  local best_score = 0
-  local best_state = state
-  for action in actions(state)
-    local st, sc = best_output(act(action, state))
-    if sc > best_score then
-      best_score = sc
-      best_state = st
-    end
-  end
-  return best_state, best_score
-end
-]]
-
---[[
 function best_candidate(constraint_index, constraints, original, candidate,
                         violation_counts)
   local violations =
@@ -293,124 +241,200 @@ end
 // * a variable with a known boolean value
 // * a variable with a known relationship to another variable
 // i=0 means i=<don't care>
-function equalize(a1, a2, i1, i2, feature_env)
+function equalize(a1, a2, feature_env)
   if a1.var == 0 then
     if a2.var == 0 then
       return a1.val == a2.val
-    elseif not feature_env[i2][a2.var] then
-      return update_assignment(feature_env, i2, a2.var, {i=0, val=a1.val, var=a1.var})
-    elseif feature_env[i2][a2.var].var == 0 then
-      return a1.val == feature_env[i2][a2.var].val
+    elseif not feature_env[2][a2.var] then
+      return update_assignment(feature_env, 2, a2.var,
+                               {i=0, val=a1.val, var=a1.var})
+    elseif feature_env[2][a2.var].var == 0 then
+      return a1.val == feature_env[2][a2.var].val
     else
-      return equalize(a1, feature_env[i2][a2.var], i1, i2, feature_env)
+      return equalize(a1, feature_env[2][a2.var], feature_env)
     end
-  elseif not feature_env[i1][a1.var] then
+  elseif not feature_env[1][a1.var] then
     if a2.var == 0 then
-      return update_assignment(feature_env, i1, a1.var, {i=0, val=a2.val, var=a2.var})
-    elseif not feature_env[i2][a2.var] then
-      return update_assignment(feature_env, i1, a1.var, {i=i2, val=a2.val, var=a2.var})
-    elseif feature_env[i2][a2.var].var == 0 then
-      return update_assignment(feature_env, i1, a1.var, feature_env[i2][a2.var])
+      return update_assignment(feature_env, 1, a1.var,
+                               {i=0, val=a2.val, var=a2.var})
+    elseif not feature_env[2][a2.var] then
+      return update_assignment(feature_env, 1, a1.var,
+                               {i=2, val=a2.val, var=a2.var})
+    elseif feature_env[2][a2.var].var == 0 then
+      return update_assignment(feature_env, 1, a1.var, feature_env[2][a2.var])
     else
-      return update_assignment(feature_env, i1, a1.var, feature_env[i2][a2.var])
+      return update_assignment(feature_env, 1, a1.var, feature_env[2][a2.var])
     end
-  elseif feature_env[i1][a1.var].var == 0 then
+  elseif feature_env[1][a1.var].var == 0 then
     if a2.var == 0 then
-      return feature_env[i1][a1.var].val == a2.val
-    elseif not feature_env[i2][a2.var] then
-      return update_assignment(feature_env, i2, a2.var, feature_env[i1][a1.var])
-    elseif feature_env[i2][a2.var].var == 0 then
-      return feature_env[i1][a1.var].val == feature_env[i2][a2.var].val
+      return feature_env[1][a1.var].val == a2.val
+    elseif not feature_env[2][a2.var] then
+      return update_assignment(feature_env, 2, a2.var, feature_env[1][a1.var])
+    elseif feature_env[2][a2.var].var == 0 then
+      return feature_env[1][a1.var].val == feature_env[2][a2.var].val
     else
-      return equalize(feature_env[i1][a1.var], feature_env[i2][a2.var], i1, i2, feature_env)
+      return equalize(feature_env[1][a1.var], feature_env[2][a2.var],
+                      feature_env)
     end
   else
     if a2.var == 0 then
-      return equalize(feature_env[i1][a1.var], a2, i1, i2, feature_env)
-    elseif not feature_env[i2][a2.var] then
-      return update_assignment(feature_env, i2, a2.var, feature[i1][a1.var])
-    elseif feature_env[i2][a2.var].var == 0 then
-      return equalize(feature_env[i1][a1.var], feature_env[i2][a2.var], i1, i2, feature_env)
+      return equalize(feature_env[1][a1.var], a2, feature_env)
+    elseif not feature_env[2][a2.var] then
+      return update_assignment(feature_env, 2, a2.var, feature[1][a1.var])
+    elseif feature_env[2][a2.var].var == 0 then
+      return equalize(feature_env[1][a1.var], feature_env[2][a2.var],
+                      feature_env)
     else
-      return equalize(feature_env[i1][a1.var], feature_env[i2][a2.var], i1, i2, feature_env)
+      return equalize(feature_env[1][a1.var], feature_env[2][a2.var],
+                      feature_env)
     end
   end
 end
 
-function phoneme_overlap(phoneme1, phoneme2, env)
-  if not phoneme2 then
-    return phoneme1
-  end
-  local overlap = copyall(phoneme1)
-  for i, _ in pairs(phoneme2) do
-    local a1 = phoneme1[i]
-    local a2 = phoneme2[i]
+function get_feature_set_overlap(overlap, phoneme_2, env)
+  for i, a2 in pairs(phoneme2) do
+    local a1 = overlap[i]
     if a1 then
+      if not env[i] then
+        env[i] = {{}, {}}
+      end
       if not equalize(a1, a2, 1, 2, env[i])
         return nil
       end
     else
-      overlap[i] = a2
+      overlap[i] = {i=2, val=a2.val, var=a2.var}
     end
   end
   return overlap
 end
 
-// Rule :=
-// {ups1=, ups2=, ups3=, outer_domain=, inner_domain=}
-// (ups means underspecified phoneme sequence)
-
-function finalize_attachments(sliding_context, base_context, attachment, env, unfix, base_is_fixed)
-  sliding_context = copyall(sliding_context)
-  for i = 1, #sliding_context do
-    sliding_context[i] = {1, sliding_context[i]}
-  end
-  local prev_b_i = 0
-  for s_i, b_i in pairs(attachment) do
-    sliding_context[s_i][1] = 3
-    if prev_b_i + 1 < b_i do
-      for i = prev_b_i + 1, b_i - 1 do
-        table.insert(sliding_context, s_i + 1, {2, base_context[i]})
-      end
+function get_overlap(element_1, element_2, env)
+  if element_1.type == 'phoneme' then
+    if element_2.type == 'phoneme' then
+      return get_feature_set_overlap(copyall(element_1), element_2, env)
+    elseif element_2.type == 'boundary' then
+      return nil
     else
-      prev_b_i = b_i
+      return get_feature_set_overlap({[element_2.feature]={val=false, var=0}},
+                                     element_1, env)
     end
-  end
-  local ignored_number = 2
-  if base_is_fixed then
-    ignored_number = 1
-  end
-  for i, phoneme in pairs(sliding_context) do
-    
+  elseif element_1.type == 'boundary' then
+    if element_2.type == 'phoneme' then
+      return nil
+    elseif element_2.type == 'boundary' then
+      return get_feature_set_overlap(copyall(element_1), element_2, {})
+    else
+      return get_feature_set_overlap(copyall(element_1), element_2.boundaries,
+                                     {})
+    end
+  else
+    if element_2.type == 'phoneme' then
+      return get_feature_set_overlap({[element_1.feature]={val=false, var=0}},
+                                     element_2, env)
+    elseif element_2.type == 'boundary' then
+      return get_feature_set_overlap(copyall(element_1.boundaries), element_2,
+                                     {})
+    else
+      local overlap = {type='skip', boundaries=get_feature_set_overlap(
+        copyall(element_1.boundaries), element_2.boundaries, {})}
+      if dominates(element_1.feature, element_2.feature, element_1.nodes) then
+        return element_1
+      elseif dominates(element_2.feature, element_1.feature,
+                       element_1.nodes) then
+        return element_2
+      end
+      return nil
+    end
   end
 end
 
-// sliding_index: which phoneme in sliding_constraint to attach on this pass
-// attachment: {[1..sliding_index] in sliding_constraint: index into base_constraint}
-function get_attachments(sliding_index, sliding_constraint, base_constraint, attachment, env, unfix, base_is_2)
-  if sliding_index == #sliding_constraint + 1 then
-    return finalize_attachments(sliding_constraint, base_constraint, attachment, env, unfix, base_is_2)
-  else
-    local last_base_index = #base_index + 1
-    local first_base_index = 0
-    if #attachment ~= 0 then
-      first_base_index = attachment[#attachment]
-      if first_base_index ~= 0 and first_base_index ~= last_base_index then
-        first_base_index = first_base_index + 1
+function finalize_alignment(alignment, env, unfix)
+  local element_index = unfix.index + alignment.delta
+  if unfix.type == 'Max' then
+    table.insert(alignment, element_index, unfix.phoneme)
+  elseif unfix.type == 'Dep' then
+    table.remove(alignment, element_index)
+  elseif unfix.type == 'Ident' then
+    local assignment = alignment[element_index][unfix.feature_index]
+    assignment.val = not assignment.val
+  end
+  // split into two functions at this point
+  for _, element in pairs(alignment) do
+    local i = element.i or 1
+    for feature_index, assignment in pairs(element) do
+      if env[feature_index] and env[feature_index][i] and env[feature_index][i][assignment.var] then
+        local assignment_in_env = env[feature_index][i][assignment.var]
+        assignment.var = assignment_in_env.var
+        assignment.val = assignment.val == assignment_in_env.val
       end
     end
-    for base_index = first_base_index, last_base_index do
-      local new_attachment = copyall(attachment)
-      local new_env = copyall(env)
-      new_attachment[sliding_index] = base_index
-      local overlap = phoneme_overlap(sliding_constraint[sliding_index],
-                                      base_constraint[base_index], new_env)
-      if overlap then
-        if overlap ~= sliding_constraint[sliding_index] then
-          sliding_constraint = copyall(sliding_constraint)
-          sliding_constraint[sliding_index] = overlap
+  end
+end
+
+function get_alignments(index_1, constraint_1, index_2, constraint_2, alignment,
+                        env, unfix, results)
+  if index_1 > #constraint_1 or index_2 > #constraint_2 then
+    if index_1 > #constraint_1 then
+      if index_2 <= #constraint_2 then
+        for i = index_2, #constraint_2 do
+          table.insert(alignment, constraint_1[index_1])
         end
-        get_attachments(sliding_index + 1, sliding_constraint, base_constraint, new_attachment, new_env, unfix, base_is_2)
+      end
+    else
+      for i = index_1, #constraint_1 do
+        table.insert(alignment, constraint_2[index_2])
+      end
+    end
+    finalize_alignment(alignment, env, unfix)
+    table.insert(results, alignment)
+  end
+  else
+    local overlap = get_overlap(constraint_1[index_1], constraint_2[index_2],
+                                env)
+    local next_indices_1 = {}
+    local next_indices_2 = {}
+    local type_1 = constraint_1[index_1].type
+    local type_2 = constraint_1[index_2].type
+    if overlap then
+      table.insert(alignment, overlap)
+      if type_1 == 'skip' then
+        next_indices_1 = {index_1, index_1 + 1}
+      else
+        next_indices_1 = {index_1 + 1}
+      end
+      if type_2 == 'skip' then
+        next_indices_2 = {index_2, index_2 + 1}
+      else
+        next_indices_2 = {index_2 + 1}
+      end
+    else
+      if type_1 == 'skip' then
+        next_indices_1 = {index_1 + 1}
+      else
+        next_indices_1 = {index_1}
+      end
+      if type_2 == 'skip' then
+        next_indices_2 = {index_2 + 1}
+      else
+        next_indices_2 = {index_2}
+      end
+    elseif index_1 == 1 and index_2 ~= 1 and index_2 ~= #constraint_2 then
+      alignment.delta = alignment.delta + 1
+      table.insert(alignment, constraint_2[index_2])
+      next_indices_1 = {1}
+      next_indices_2 = {index_2 + 1}
+    elseif index_2 == 1 and index_1 ~= 1 and index_1 ~= #constraint_1 then
+      table.insert(alignment, constraint_1[index_1])
+      next_indices_1 = {index_1 + 1}
+      next_indices_2 = {1}
+    end
+    for _, next_index_1 in pairs(next_indices_1) do
+      for _, next_index_2 in pairs(next_indices_2) do
+        if next_index_1 ~= index_1 or next_index_2 ~= index_2 then
+          -- TODO: some of this copyalling is unnecessary
+          get_alignments(next_index_1, constraint_1, next_index_2,
+                         copyall(alignment), copyall(env), unfix, results)
+        end
       end
     end
   end
@@ -419,24 +443,10 @@ end
 // Get the markedness constraint describing the result of applying
 // `unfix` to the overlap of `constraint_1` and `constraint_2`.
 function get_feeding_constraint(constraint_1, constraint_2, unfix)
-  // sliding_constraint = constraint with dominated domain
-  // base_constraint = constraint with dominating domain
-  local sliding_constraint = constraint_1
-  local base_constraint = constraint_2
-  local base_is_2 = true
-  local sliding_domain = sliding_constraint.domain
-  local base_domain = base_constraint.domain
-  if dominates(sliding_domain, base_domain) then
-    sliding_constraint, base_constraint = base_constraint, sliding_constraint
-    base_is_2 = false
-    sliding_domain, base_domain = base_domain, sliding_domain
-  elseif not dominates(base_domain, sliding_domain) then
-    return {} // or whatever the empty return value is
-  end
-  local rules = {}
-  local current_match = {}
-  local match_length = 0
-  get_attachments(1, sliding_constraint, base_constraint, {{}, {}}, unfix, base_is_2)
+  local feeding_constraints = {}
+  get_alignments(1, constraint_1, 1, constraint_2, {delta=0}, {}, unfix,
+                 feeding_constraints)
+  return feeding_constraints
 end
 
 // Get the markedness constraints describing the contexts in which
@@ -445,18 +455,21 @@ end
 function get_feeding_constraints(fix, fed_constraint, constraints,
                                  original_constraint_index)
   local fed_constraint = copyall(fed_constraint)
+  local unfix = {type=fix.type, index=fix.element_index}
   if fix.type == 'Max' then
-    table.remove(fed_constraint, fix.phoneme_index)
+    unfix.phoneme = fed_constraint[fix.element_index]
+    table.remove(fed_constraint, fix.element_index)
   elseif fix.type == 'Dep' then
-    table.insert(fed_constraint, fix.phoneme_index, //epenthetic_phoneme)
+    // epenthesis
+    table.insert(fed_constraint, fix.element_index, {})
   elseif fix.type == 'Ident' then
-    local feature_and_phoneme_indices = fix.features[fix.feature_index]
-    local feature_index = feature_and_phoneme_indices.feature_index
-    local phoneme_index = feature_and_phoneme_indices.phoneme_index
-    fed_constraint[phoneme_index][feature_index] =
-      not fed_constraint[phoneme_index][feature_index]
+    local feature_and_element_indices = fix.features[fix.feature_index]
+    local feature_index = feature_and_element_indices.feature_index
+    local element_index = feature_and_element_indices.element_index
+    unfix.feature_index = feature_index
+    local assignment = fed_constraint[element_index][feature_index]
+    assignment.val = not assignment.val
   end
-  // create `unfix` to undo `fix`
   local feeding_constraints = {}
   for i, constraint in pairs(constraints) do
     if i ~= original_constraint_index then
@@ -464,43 +477,52 @@ function get_feeding_constraints(fix, fed_constraint, constraints,
         get_feeding_constraint(fed_constraint, constraint, unfix)
       if feeding_constraint then
         table.insert(feeding_constraints,
-                     {constraint=feeding_constraint, violation_index=i})
+                     {pattern=feeding_constraint, violation_index=i})
       end
     end
   end
   return feeding_constraints
 end
 
-function features_worth_changing(constraint)
-  //
+function features_worth_changing(pattern)
+  local feature_and_element_indices = {}
+  for element_index, element in pairs(pattern) do
+    if element.type == 'phoneme' then
+      for feature_index, _ in pairs(element) do
+        table.insert(feature_and_element_indices,
+                     {feature_index=feature_index, element_index=element_index})
+      end
+    end
+  end
+  return feature_and_element_indices
 end
 
 function next_fix(record, constraint_index, constraints)
   local fix = record.fix
   if fix.type == 'Ident' then
     if fix.feature_index < #fix.features then
-      return {type=fix.type, index=fix.index,
+      return {type=fix.type, constraint_index=fix.constraint_index,
               feature_index=fix.feature_index + 1, features=fix.features}
     end
   else
-    if fix.phoneme_index < fix.max_phoneme_index then
-      return {type=fix.type, index=fix.index,
-              phoneme_index=fix.phoneme_index + 1,
-              max_phoneme_index=fix.max_phoneme_index}
+    if fix.element_index < fix.max_element_index then
+      return {type=fix.type, constraint_index=fix.constraint_index,
+              element_index=fix.element_index + 1,
+              max_element_index=fix.max_element_index}
     end
   end
   local min_violation_index = record.min_violation_index
-  for i = fix.index, constraint_index + 1, -1 do
+  for i = fix.constraint_index, constraint_index + 1, -1 do
     local constraint = constraints[i]
     local type = constraint.type
     if type == 'Max' then
-      return {type=type, index=i, phoneme_index=1,
-              max_phoneme_index=#constraint}
-    elseif type == 'Dep' and #constraints[i].domain == 0 then
-      return {type=type, index=i, phoneme_index=1,
-              max_phoneme_index=#constraint + 1}
+      return {type=type, constraint_index=i, element_index=1,
+              max_element_index=#constraint}
+    elseif type == 'Dep' then
+      return {type=type, constraint_index=i, element_index=2,
+              max_element_index=#constraint}
     elseif type == 'Ident' then
-      return {type=type, index=i, feature_index=1,
+      return {type=type, constraint_index=i, feature_index=1,
               features=features_worth_changing(constraint)}
     end
   end
@@ -508,19 +530,19 @@ function next_fix(record, constraint_index, constraints)
 end
 
 function constraint_to_rules(constraint_index, constraints)
-  local records = {{constraint=constraints[constraint_index], fix=nil,
+  local records = {{pattern=constraints[constraint_index], fix=nil,
                     min_violation_index=i, done=false}}
   while utils.linear_search(records, false, 'done') do
     local record_index, record = utils.linear_search(records, false, 'done')
     local fix = next_fix(record, constraint_index, constraints)
     if fix then
       local feeding_constraints =
-        get_feeding_constraints(fix, record.constraint, constraints,
+        get_feeding_constraints(fix, record.pattern, constraints,
                                 constraint_index)
       for _, feeding_constraint in pairs(feeding_constraints) do
         local new_record = copyall(record)
         if feeding_constraint.violation_index > record.min_violation_index then
-          new_record.constraint = feeding_constraint.constraint
+          new_record.pattern = feeding_constraint.pattern
           new_record.fix = fix
           new_record.min_violation_index = feeding_constraint.violation_index
         end
@@ -530,15 +552,16 @@ function constraint_to_rules(constraint_index, constraints)
     end
     record.done = true
   end
-  // turn the above into rules
+  return records
 end
 
 function constraints_to_rules(constraints)
   local rules = {}
   for i, constraint in pairs(constraints) do
     if constraint.type == '*' then
-      // extend, not append
-      rules.append(constraint_to_rules(i, constraints))
+      for _, rule in pairs(constraint_to_rules(i, constraints)) do
+        table.insert(rules, rule)
+      end
     end
   end
   return rules
@@ -1144,8 +1167,9 @@ function load_phonologies()
                 end
                 local structure = subtags[i + 1]
                 validate_structure(structure)
-                table.insert(constraint, {boundary=structure})
+                table.insert(constraint, {type='boundary', boundary=structure})
                 i = i + 1
+              // parse all this so it does what constraints_to_rules expects
               elseif subtags[i] == 'DOMAIN' then
                 if i == #subtags then
                   qerror('No node specified for domain: ' .. constraint)
@@ -1176,9 +1200,9 @@ function load_phonologies()
                   qerror('No such node: ' .. subtags[i])
                 end
                 if constraint[#constraint].boundary then
-                  table.insert(constraint, {})
+                  table.insert(constraint, {type='phoneme'})
                 end
-                  constraint[#constraint][n] = subtags[i + 1]
+                constraint[#constraint][n] = subtags[i + 1]
                 i = i + 1
               end
               i = i + 1
