@@ -196,9 +196,11 @@ function best_candidate(constraint_index, constraints, original, candidate,
       best_candidate(constraint_index, apply_action(action, candidate))
   end
 end
+--]]
 
 function optimize(parameters, input, is_loan)
   local output = copyall(input)
+  --[[
   if is_loan then
     for _, phoneme in pairs(output) do
       if phoneme not in parameters.inventory then
@@ -207,13 +209,13 @@ function optimize(parameters, input, is_loan)
     end
   end
   output = best_candidate(1, parameters.constraints, input, output)
+  --]]
   return output
 end
-]]
 
-// Do `feature_env[lvalue_i][lvalue_var] = new` and modify `feature_env`
-// to be consistent with the new assignment. Return whether this is
-// possible.
+-- Do `feature_env[lvalue_i][lvalue_var] = new` and modify `feature_env`
+-- to be consistent with the new assignment. Return whether this is
+-- possible.
 function update_assignment(feature_env, lvalue_i, lvalue_var, new)
   if lvalue_i == new.i and lvalue_var == new.var then
     return new.val
@@ -221,7 +223,7 @@ function update_assignment(feature_env, lvalue_i, lvalue_var, new)
   feature_env[lvalue_i][lvalue_a] = new
   for i = 1, 2 do
     for _, other in pairs(feature_env[i]) do
-      if other.i == lvalue_i and other.var == lvalue_var do
+      if other.i == lvalue_i and other.var == lvalue_var then
         other.i = new.i
         other.val = other.val == new.val
         other.var = new.var
@@ -231,16 +233,16 @@ function update_assignment(feature_env, lvalue_i, lvalue_var, new)
   return true
 end
 
-// A feature assignment is a pair of a value and a var. A value is a
-// boolean. A var is a non-negative integer representing a variable.
-// The var 0 is always true.
+-- A feature assignment is a pair of a value and a var. A value is a
+-- boolean. A var is a non-negative integer representing a variable.
+-- The var 0 is always true.
 
-// Every assignment is one of:
-// * a literal boolean
-// * a variable with no prior information (i.e. nil in feature_env)
-// * a variable with a known boolean value
-// * a variable with a known relationship to another variable
-// i=0 means i=<don't care>
+-- Every assignment is one of:
+-- * a literal boolean
+-- * a variable with no prior information (i.e. nil in feature_env)
+-- * a variable with a known boolean value
+-- * a variable with a known relationship to another variable
+-- i=0 means i=<don't care>
 function equalize(a1, a2, feature_env)
   if a1.var == 0 then
     if a2.var == 0 then
@@ -298,7 +300,7 @@ function get_feature_set_overlap(overlap, phoneme_2, env)
       if not env[i] then
         env[i] = {{}, {}}
       end
-      if not equalize(a1, a2, 1, 2, env[i])
+      if not equalize(a1, a2, 1, 2, env[i]) then
         return nil
       end
     else
@@ -348,7 +350,7 @@ function get_overlap(element_1, element_2, env)
   end
 end
 
-function finalize_alignment(alignment, env, unfix)
+function apply_unfix(alignment, unfix)
   local element_index = unfix.index + alignment.delta
   if unfix.type == 'Max' then
     table.insert(alignment, element_index, unfix.phoneme)
@@ -358,7 +360,9 @@ function finalize_alignment(alignment, env, unfix)
     local assignment = alignment[element_index][unfix.feature_index]
     assignment.val = not assignment.val
   end
-  // split into two functions at this point
+end
+
+function substitute(alignment, env)
   for _, element in pairs(alignment) do
     local i = element.i or 1
     for feature_index, assignment in pairs(element) do
@@ -385,9 +389,9 @@ function get_alignments(index_1, constraint_1, index_2, constraint_2, alignment,
         table.insert(alignment, constraint_2[index_2])
       end
     end
-    finalize_alignment(alignment, env, unfix)
+    apply_unfix(alignment, unfix)
+    substitute(alignment, env)
     table.insert(results, alignment)
-  end
   else
     local overlap = get_overlap(constraint_1[index_1], constraint_2[index_2],
                                 env)
@@ -408,6 +412,14 @@ function get_alignments(index_1, constraint_1, index_2, constraint_2, alignment,
         next_indices_2 = {index_2 + 1}
       end
     else
+      if index_1 == 1 and index_2 ~= 1 and index_2 ~= #constraint_2 then
+        alignment.delta = alignment.delta + 1
+        table.insert(alignment, constraint_2[index_2])
+        type_2 = 'skip'
+      elseif index_2 == 1 and index_1 ~= 1 and index_1 ~= #constraint_1 then
+        table.insert(alignment, constraint_1[index_1])
+        type_1 = 'skip'
+      end
       if type_1 == 'skip' then
         next_indices_1 = {index_1 + 1}
       else
@@ -418,15 +430,6 @@ function get_alignments(index_1, constraint_1, index_2, constraint_2, alignment,
       else
         next_indices_2 = {index_2}
       end
-    elseif index_1 == 1 and index_2 ~= 1 and index_2 ~= #constraint_2 then
-      alignment.delta = alignment.delta + 1
-      table.insert(alignment, constraint_2[index_2])
-      next_indices_1 = {1}
-      next_indices_2 = {index_2 + 1}
-    elseif index_2 == 1 and index_1 ~= 1 and index_1 ~= #constraint_1 then
-      table.insert(alignment, constraint_1[index_1])
-      next_indices_1 = {index_1 + 1}
-      next_indices_2 = {1}
     end
     for _, next_index_1 in pairs(next_indices_1) do
       for _, next_index_2 in pairs(next_indices_2) do
@@ -440,8 +443,8 @@ function get_alignments(index_1, constraint_1, index_2, constraint_2, alignment,
   end
 end
 
-// Get the markedness constraint describing the result of applying
-// `unfix` to the overlap of `constraint_1` and `constraint_2`.
+-- Get the markedness constraint describing the result of applying
+-- `unfix` to the overlap of `constraint_1` and `constraint_2`.
 function get_feeding_constraint(constraint_1, constraint_2, unfix)
   local feeding_constraints = {}
   get_alignments(1, constraint_1, 1, constraint_2, {delta=0}, {}, unfix,
@@ -449,9 +452,9 @@ function get_feeding_constraint(constraint_1, constraint_2, unfix)
   return feeding_constraints
 end
 
-// Get the markedness constraints describing the contexts in which
-// applying `fix` because of `constraints[original_constraint_index]`
-// feeds a violation of `fed_constraint`.
+-- Get the markedness constraints describing the contexts in which
+-- applying `fix` because of `constraints[original_constraint_index]`
+-- feeds a violation of `fed_constraint`.
 function get_feeding_constraints(fix, fed_constraint, constraints,
                                  original_constraint_index)
   local fed_constraint = copyall(fed_constraint)
@@ -460,7 +463,7 @@ function get_feeding_constraints(fix, fed_constraint, constraints,
     unfix.phoneme = fed_constraint[fix.element_index]
     table.remove(fed_constraint, fix.element_index)
   elseif fix.type == 'Dep' then
-    // epenthesis
+    -- TODO: More than just the root node?
     table.insert(fed_constraint, fix.element_index, {})
   elseif fix.type == 'Ident' then
     local feature_and_element_indices = fix.features[fix.feature_index]
@@ -486,6 +489,8 @@ end
 
 function features_worth_changing(pattern)
   local feature_and_element_indices = {}
+  -- TODO: Figure out which of these are safe to change.
+  --[[
   for element_index, element in pairs(pattern) do
     if element.type == 'phoneme' then
       for feature_index, _ in pairs(element) do
@@ -494,6 +499,7 @@ function features_worth_changing(pattern)
       end
     end
   end
+  ]]
   return feature_and_element_indices
 end
 
@@ -567,7 +573,7 @@ function constraints_to_rules(constraints)
   return rules
 end
 
-// deal with boundary marker "phonemes"
+-- deal with boundary marker "phonemes"
 function deserialize(bytes_per_phoneme, str)
   local word = {}
   local phoneme = {}
@@ -1012,12 +1018,14 @@ function expand_lexicons()
   -- TODO: descriptors
 end
 
-function validate_structure(structure)
-  if not (structure == 'UTTERANCE' or structure == 'WORD' or
-          structure == 'MORPHEME' or structure == 'SYLLABLE' or
-          structure == 'ONSET' or structure == 'NUCLEUS' or
-          structure == 'CODA') then
-    qerror('Unknown structure: ' .. structure)
+function validate_scope(scope, declared_scope)
+  if not (scope == 'UTTERANCE' or scope == 'WORD' or scope == 'MORPHEME' or
+          scope == 'SYLLABLE' or scope == 'ONSET' or scope == 'NUCLEUS' or
+          scope == 'CODA') then
+    qerror('Unknown scope: ' .. scope)
+  end
+  if scope == declared_scope then
+    qerror('Repeated scope: ' .. scope)
   end
 end
 
@@ -1027,22 +1035,17 @@ function dominates(node_index1, node_index2, nodes)
   elseif node_index2 < node_index1 then
     return false
   end
-  return dominates(node_index1, nodes[node_index2].parent)
+  return dominates(node_index1, nodes[node_index2].parent, nodes)
 end
 
-function validate_constraint(constraint, nodes)
-  for _, phoneme in pairs(constraint) do
-    for _, node_index in pairs(phoneme) do
-      local node_index1 = constraint.domain
-      local node_index2 = node_index
-      if node_index1 > node_index2 then
-        node_index1, node_index2 = node_index2, node_index1
-      end
-      if not dominates(node_index1, node_index2, nodes) then
-        qerror('Constraint has domain ' .. nodes[constraint.domain].name ..
-               ' but one of its phonemes specifies ' .. nodes[node_index].name)
-      end
+function insert_skip(constraint, domain, scope, boundary)
+  if #constraint ~= 1 then
+    local prev_boundary = nil
+    if constraint[#constraint].type == 'boundary' then
+      prev_boundary = constraint[#constraint].boundary
     end
+    table.insert(constraint, {type='skip', feature=domain,
+                              boundaries={scope, prev_boundary, boundary}})
   end
 end
 
@@ -1060,7 +1063,7 @@ function load_phonologies()
       local current_parent = 0
       for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
         local subtags = {}
-        for subtag in tag:gmatch('[^]:]+') do
+        for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
           table.insert(subtags, subtag)
         end
         if #subtags >= 1 then
@@ -1158,56 +1161,81 @@ function load_phonologies()
             if not current_phonology then
               qerror('Orphaned CONSTRAINT tag: ' .. tag)
             end
-            local constraint = {type='*', domain=0, scope='WORD', {}}
+            local constraint = {type='*', {}}
+            local domain = 0
+            local scope = nil
+            local vars = {['']=0}
             local i = 2
             while i <= #subtags do
-              if subtags[i] = 'BOUNDARY' then
+              if subtags[i] == 'BOUNDARY' then
                 if i == #subtags then
-                  qerror('Incomplete boundary: .. constraint)
+                  qerror('Incomplete boundary: ' .. tag)
                 end
-                local structure = subtags[i + 1]
-                validate_structure(structure)
-                table.insert(constraint, {type='boundary', boundary=structure})
+                local boundary = subtags[i + 1]
+                validate_scope(boundary, scope)
+                insert_skip(constraint, domain, scope, boundary)
+                table.insert(constraint, {type='boundary', boundary=boundary})
                 i = i + 1
-              // parse all this so it does what constraints_to_rules expects
               elseif subtags[i] == 'DOMAIN' then
+                if #constraint ~= 1 then
+                  qerror('Domain must precede phonemes and boundaries: ' ..
+                         tag)
+                end
                 if i == #subtags then
-                  qerror('No node specified for domain: ' .. constraint)
+                  qerror('No node specified for domain: ' .. tag)
                 end
                 local n, node = utils.linear_index(current_phonology.nodes,
                                                    subtags[i + 1], 'name')
                 if not n then
                   qerror('No such node: ' .. subtags[i + 1])
                 end
-                constraint.domain = n
-              elseif subtags[i] == 'IN' then
-                if i == #subtags then
-                  qerror('No scope for constraint: ' .. constraint)
+                domain = n
+                i = i + 1
+              elseif subtags[i] == 'SCOPE' then
+                if #constraint ~= 1 then
+                  qerror('Scope must precede phonemes and boundaries: ' .. tag)
                 end
-                local structure = subtags[i + 1]
-                validate_structure(structure)
-                constraint.scope = structure
+                if i == #subtags then
+                  qerror('No scope for constraint: ' .. tag)
+                end
+                scope = subtags[i + 1]
+                validate_scope(scope)
                 i = i + 1
               elseif subtags[i] == 'THEN' then
-                table.insert(constraint, {})
+                insert_skip(constraint, domain, scope)
+                table.insert(constraint, {type='phoneme'})
               else
-                if i + 1 > #subtags then
-                  qerror('Incomplete constraint: ' .. tags)
+                if i + 2 > #subtags then
+                  qerror('Incomplete constraint: ' .. tag)
+                end
+                local val = true
+                if subtags[i + 1] == '-' then
+                  val = false
+                elseif subtags[i + 1] ~= '+' then
+                  qerror('The token after node ' .. subtags[i] ..
+                         ' must be + or -: ' .. tag)
                 end
                 local n, node = utils.linear_index(current_phonology.nodes,
                                                    subtags[i], 'name')
                 if not n then
                   qerror('No such node: ' .. subtags[i])
                 end
-                if constraint[#constraint].boundary then
+                if not (dominates(domain, n, current_phonology.nodes) or
+                        dominates(n, domain, current_phonology.nodes)) then
+                  qerror('Constraint has domain ' .. nodes[domain].name ..
+                         ' but one of its phonemes specifies ' ..
+                         nodes[n].name)
+                end
+                if constraint[#constraint].type ~= 'phoneme' then
+                  insert_skip(constraint, domain, scope)
                   table.insert(constraint, {type='phoneme'})
                 end
-                constraint[#constraint][n] = subtags[i + 1]
-                i = i + 1
+                local _, var = utils.insert_or_update(vars, subtags[i + 2])
+                constraint[#constraint][n] = {val=val, var=var}
+                i = i + 2
               end
               i = i + 1
             end
-            validate_constraint(constraint, current_phonology.nodes)
             table.insert(current_phonology.constraints, constraint)
           else
             qerror('Unknown tag: ' .. tag)
