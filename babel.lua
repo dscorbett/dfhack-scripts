@@ -1,3 +1,5 @@
+-- Adds languages.
+
 local utils = require('utils')
 
 --[[
@@ -7,6 +9,8 @@ TODO:
 * Protect against infinite loops due to sonority dead ends in random_word.
 * Change the adventurer's forced goodbye response to "I don't understand you".
 ]]
+
+local TEST = true
 
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
@@ -20,13 +24,137 @@ if enabled == nil then
   enabled = false
 end
 
+--[[
+Data definitions:
+
+Language:
+A persistent entry with the keys:
+  'value': The name of the language, for debugging.
+  'ints': A sequence of 4 integers:
+    1: The number of this language among all languages.
+    2: The ID of the associated civilization.
+    3: The index of the language's phonology in `phonologies`.
+    4: A random number generator seed for generating the language.
+
+Environment:
+A table whose keys are indices of features and whose values are feature
+environments for those features.
+
+Feature environment:
+A sequence of two sequences, each of whose keys are variable indexes and
+whose values are assignments. The two subsequences correspond to two
+patterns in the scope of which the feature environment is being used. 
+
+Assignment:
+A table representing a value bound to an variable name in an
+environment. Keys:
+  'val': A boolean for whether this variable has the same value as the
+    value of the variable that this variable is defined in terms of.
+  'var': The index of the variable that this variable is defined in
+    terms of.
+
+Word:
+A sequence of phonemes.
+-- TODO: for now, anyway
+
+Phoneme:
+A table whose keys are feature indices and whose values are booleans.
+
+Boundary:
+A string representing a boundary.
+-- TODO: Enumerate them.
+
+Translation:
+  translation: A sequence of tag strings in the format of the values of
+    `df.global.world.raws.language.translations`.
+
+Loan:
+A sequence of tables with keys:
+  'prefix': The string to prepend to the ID of the referent.
+  'type': The DFHack struct type of the referent.
+  'id': The name of the field where a referent of type `type` has an ID.
+  'get': A function:
+    Gets the referents of type `type` from a civilization.
+    Args:
+      civ: A civilization.
+    Returns:
+      The array of referents.
+]]
+
+--[[
+Prints a help message.
+]]
 function usage()
-  print [[
+  print[[
 Usage:
-  TODO
+  babel start
+    Start the script.
+  babel stop
+    Stop the script.
 ]]
 end
 
+--[[
+Asserts that two values are equal.
+
+If the values are both tables, it compares the elements of the tables.
+
+Args:
+  actual: A value.
+  expected: A value.
+]]
+function assert_eq(actual, expected, _k)
+  if type(actual) == 'table' and type(expected) == 'table' then
+    for k, v in pairs(expected) do
+      assert_eq(actual[k], v, k)
+    end
+    for k, v in pairs(actual) do
+      assert_eq(v, expected[k], k)
+    end
+  else
+    local k = ''
+    if _k then
+      k = ', index: ' .. tostring(_k)
+    end
+    assert(expected == actual, 'expected: ' .. tostring(expected) ..
+           ', actual: ' .. tostring(actual) .. k)
+  end
+end
+
+function escape(str)
+  return str:gsub('[\x00\n\r\x1a%%:%]]', function(c)
+      return '%' .. string.format('%02X', string.byte(c))
+    end)
+end
+
+if TEST then
+  assert_eq(escape('<]:\r\n|%\x1a\x00>'), '<%5D%3A%0D%0A|%25%1A%00>')
+end
+
+function unescape(str)
+  return str:gsub('%%[%da-fA-F][%da-fA-F]', function(c)
+      return string.char(tonumber(c:sub(2), 16))
+    end)
+end
+
+if TEST then
+  assert_eq(escape(unescape('(%5D%3A%0a|%25%1A)')), escape'(]:\n|%\x1a)')
+end
+
+
+--[[
+Translates an utterance into a language.
+
+Args:
+  language: The language to translate into
+  topic: An integer corresponding to DFHack's `talk_choice_type` enum.
+  topic1,
+  topic2,
+  topic3: Integers whose exact interpretation depends on `topic`.
+
+Returns:
+  The translated utterance.
+]]
 function translate(language, topic, topic1, topic2, topic3)
   print('translate ' .. tostring(topic) .. '/' .. topic1)
   local word
@@ -213,10 +341,23 @@ function optimize(parameters, input, is_loan)
   return output
 end
 
--- Do `feature_env[lvalue_i][lvalue_var] = new` and modify `feature_env`
--- to be consistent with the new assignment. Return whether this is
--- possible.
-function update_assignment(feature_env, lvalue_i, lvalue_var, new)
+--[[
+Updates a binding in an environment.
+
+Does `feature_env[lvalue_i][lvalue_var] = new` and modifies
+`feature_env` to be consistent with the new assignment.
+
+Args:
+  feature_env! A feature environment.
+  lvalue_i: Which pattern (1 or 2) the identifier is from.
+  lvalue_var: The identifier to bind to a new assignment.
+  new: An assignment.
+
+Returns:
+  Whether the new binding is consistent with the original feature
+    environment.
+]]
+function update_binding(feature_env, lvalue_i, lvalue_var, new)
   if lvalue_i == new.i and lvalue_var == new.var then
     return new.val
   end
@@ -248,8 +389,8 @@ function equalize(a1, a2, feature_env)
     if a2.var == 0 then
       return a1.val == a2.val
     elseif not feature_env[2][a2.var] then
-      return update_assignment(feature_env, 2, a2.var,
-                               {i=0, val=a1.val, var=a1.var})
+      return update_binding(feature_env, 2, a2.var,
+                            {i=0, val=a1.val, var=a1.var})
     elseif feature_env[2][a2.var].var == 0 then
       return a1.val == feature_env[2][a2.var].val
     else
@@ -257,21 +398,21 @@ function equalize(a1, a2, feature_env)
     end
   elseif not feature_env[1][a1.var] then
     if a2.var == 0 then
-      return update_assignment(feature_env, 1, a1.var,
-                               {i=0, val=a2.val, var=a2.var})
+      return update_binding(feature_env, 1, a1.var,
+                            {i=0, val=a2.val, var=a2.var})
     elseif not feature_env[2][a2.var] then
-      return update_assignment(feature_env, 1, a1.var,
-                               {i=2, val=a2.val, var=a2.var})
+      return update_binding(feature_env, 1, a1.var,
+                            {i=2, val=a2.val, var=a2.var})
     elseif feature_env[2][a2.var].var == 0 then
-      return update_assignment(feature_env, 1, a1.var, feature_env[2][a2.var])
+      return update_binding(feature_env, 1, a1.var, feature_env[2][a2.var])
     else
-      return update_assignment(feature_env, 1, a1.var, feature_env[2][a2.var])
+      return update_binding(feature_env, 1, a1.var, feature_env[2][a2.var])
     end
   elseif feature_env[1][a1.var].var == 0 then
     if a2.var == 0 then
       return feature_env[1][a1.var].val == a2.val
     elseif not feature_env[2][a2.var] then
-      return update_assignment(feature_env, 2, a2.var, feature_env[1][a1.var])
+      return update_binding(feature_env, 2, a2.var, feature_env[1][a1.var])
     elseif feature_env[2][a2.var].var == 0 then
       return feature_env[1][a1.var].val == feature_env[2][a2.var].val
     else
@@ -282,7 +423,7 @@ function equalize(a1, a2, feature_env)
     if a2.var == 0 then
       return equalize(feature_env[1][a1.var], a2, feature_env)
     elseif not feature_env[2][a2.var] then
-      return update_assignment(feature_env, 2, a2.var, feature[1][a1.var])
+      return update_binding(feature_env, 2, a2.var, feature[1][a1.var])
     elseif feature_env[2][a2.var].var == 0 then
       return equalize(feature_env[1][a1.var], feature_env[2][a2.var],
                       feature_env)
@@ -573,7 +714,16 @@ function constraints_to_rules(constraints)
   return rules
 end
 
--- deal with boundary marker "phonemes"
+--[[
+Deserializes a word.
+
+Args:
+  bytes_per_phoneme: The number of bytes per serialized phoneme.
+  str: A serialized word.
+
+Returns:
+  A word.
+]]
 function deserialize(bytes_per_phoneme, str)
   local word = {}
   local phoneme = {}
@@ -590,27 +740,83 @@ function deserialize(bytes_per_phoneme, str)
   return word
 end
 
-function u_form(word)
+if TEST then
+  assert_eq(deserialize(1, ''), {})
+  assert_eq(deserialize(1, '\x00'),
+            {{false, false, false, false, false, false, false, false}})
+  assert_eq(deserialize(1, '\x80'),
+            {{true, false, false, false, false, false, false, false}})
+  assert_eq(deserialize(1, '\x40'),
+            {{false, true, false, false, false, false, false, false}})
+  assert_eq(deserialize(1, '\x20'),
+            {{false, false, true, false, false, false, false, false}})
+  assert_eq(deserialize(1, '\x10'),
+            {{false, false, false, true, false, false, false, false}})
+  assert_eq(deserialize(1, '\x08'),
+            {{false, false, false, false, true, false, false, false}})
+  assert_eq(deserialize(1, '\x04'),
+            {{false, false, false, false, false, true, false, false}})
+  assert_eq(deserialize(1, '\x02'),
+            {{false, false, false, false, false, false, true, false}})
+  assert_eq(deserialize(1, '\x01'),
+            {{false, false, false, false, false, false, false, true}})
+  assert_eq(deserialize(2, '\x00\x80'),
+            {{false, false, false, false, false, false, false, false, true,
+              false, false, false, false, false, false, false}})
+  assert_eq(deserialize(3, '\x00\x10\x00'),
+            {{false, false, false, false, false, false, false, false, false,
+              false, false, true, false, false, false, false, false, false,
+              false, false, false, false, false, false}})
+  assert_eq(deserialize(1, '\x7c'),
+            {{false, true, true, true, true, true, false, false}})
+  assert_eq(deserialize(1, '\x80\x80'),
+            {{true, false, false, false, false, false, false, false},
+             {true, false, false, false, false, false, false, false}})
+end
+
+--[[
+Serializes a word.
+
+Args:
+  features_per_phoneme: The number of features per phoneme.
+  word: A word.
+
+Returns:
+  An opaque string serialization of the word, which can be deserialized
+    with `deserialize`.
+]]
+function serialize(features_per_phoneme, word)
   local str = ''
   for _, phoneme in pairs(word) do
-    local byte = nil
-    for i, feature in pairs(phoneme) do
-      if not byte then
-        byte = 0
-      end
-      if feature then
+    local byte = 0
+    for i = 1, features_per_phoneme do
+      if phoneme[i] then
         byte = byte + 2 ^ ((8 - i) % 8)
       end
-      if i % 8 == 0 then
+      if i == features_per_phoneme or i % 8 == 0 then
         str = str .. string.format('%c', byte)
-        byte = nil
+        byte = 0
       end
-    end
-    if byte then
-      str = str .. string.format('%c', byte)
     end
   end
   return str
+end
+
+if TEST then
+  assert_eq(serialize(8, {}), '')
+  assert_eq(serialize(8, {{}}), '\x00')
+  assert_eq(serialize(8, {{[1]=true}}), '\x80')
+  assert_eq(serialize(8, {{[2]=true}}), '\x40')
+  assert_eq(serialize(8, {{[3]=true}}), '\x20')
+  assert_eq(serialize(8, {{[4]=true}}), '\x10')
+  assert_eq(serialize(8, {{[5]=true}}), '\x08')
+  assert_eq(serialize(8, {{[6]=true}}), '\x04')
+  assert_eq(serialize(8, {{[7]=true}}), '\x02')
+  assert_eq(serialize(8, {{[8]=true}}), '\x01')
+  assert_eq(serialize(9, {{[9]=true}}), '\x00\x80')
+  assert_eq(serialize(24, {{[12]=true}}), '\x00\x10\x00')
+  assert_eq(serialize(8, {{false, true, true, true, true, true}}), '\x7c')
+  assert_eq(serialize(8, {{true}, {true}}), '\x80\x80')
 end
 
 function s_form(phonology, word)
@@ -736,19 +942,7 @@ function random_word(language, parameters)
       table.insert(word, phoneme)
     end
   end
-  return u_form(word), s_form(phonology, word)
-end
-
-function escape(str)
-  return str:gsub('[[:\n\\\x1a]', function(c)
-      return '\\x' .. string.format('%02x', string.byte(c))
-    end)
-end
-
-function unescape(str)
-  return str:gsub('\\x[%da-fA-F][%da-fA-F]', function(c)
-      return string.char(tonumber(c:sub(3), 16))
-    end)
+  return serialize(#phonology.nodes, word), s_form(phonology, word)
 end
 
 function update_word(resource_id, word, noun_sing, noun_plur, adj,
@@ -1038,17 +1232,67 @@ function dominates(node_index1, node_index2, nodes)
   return dominates(node_index1, nodes[node_index2].parent, nodes)
 end
 
-function insert_skip(constraint, domain, scope, boundary)
-  if #constraint ~= 1 then
-    local prev_boundary = nil
-    if constraint[#constraint].type == 'boundary' then
-      prev_boundary = constraint[#constraint].boundary
-    end
-    table.insert(constraint, {type='skip', feature=domain,
-                              boundaries={scope, prev_boundary, boundary}})
-  end
+if TEST then
+  local nodes = {{name='1', parent=0, sonorous=false},
+                 {name='2', parent=0, sonorous=false},
+                 {name='3', parent=2, sonorous=false}}
+  assert_eq(dominates(0, 0, nodes), true)
+  assert_eq(dominates(0, 1, nodes), true)
+  assert_eq(dominates(0, 2, nodes), true)
+  assert_eq(dominates(0, 3, nodes), true)
+  assert_eq(dominates(1, 0, nodes), false)
+  assert_eq(dominates(1, 1, nodes), true)
+  assert_eq(dominates(1, 2, nodes), false)
+  assert_eq(dominates(1, 3, nodes), false)
+  assert_eq(dominates(2, 0, nodes), false)
+  assert_eq(dominates(2, 1, nodes), false)
+  assert_eq(dominates(2, 2, nodes), true)
+  assert_eq(dominates(2, 3, nodes), true)
+  assert_eq(dominates(3, 0, nodes), false)
+  assert_eq(dominates(3, 1, nodes), false)
+  assert_eq(dominates(3, 2, nodes), false)
+  assert_eq(dominates(3, 3, nodes), true)
 end
 
+--[[
+Inserts a skip pattern element into a pattern.
+
+Args:
+  pattern! A non-empty pattern to append a skip pattern element to.
+  domain: The feature index to not skip.
+  scope: A boundary to not skip.
+  boundary: A boundary to not skip.
+]]
+function insert_skip(pattern, domain, scope, boundary)
+  local prev_boundary = nil
+  if pattern[#pattern].type == 'boundary' then
+    prev_boundary = pattern[#pattern].boundary
+  end
+  table.insert(pattern, {type='skip', feature=domain,
+                         boundaries={scope, prev_boundary, boundary}})
+end
+
+if TEST then
+  local pattern = {{type='phoneme'}}
+  insert_skip(pattern, 2)
+  assert_eq(pattern,
+            {{type='phoneme'}, {type='skip', feature=2, boundaries={}}})
+  insert_skip(pattern, 3, 'WORD')
+  assert_eq(pattern[#pattern], {type='skip', feature=3, boundaries={'WORD'}})
+  insert_skip(pattern, 1, 'WORD', 'MORPHEME')
+  assert_eq(pattern[#pattern],
+            {type='skip', feature=1, boundaries={'WORD', nil, 'MORPHEME'}})
+  table.insert(pattern, {type='boundary', boundary='MORPHEME'})
+  insert_skip(pattern, 0, 'WORD', 'SYLLABLE')
+  assert_eq(pattern[#pattern], {type='skip', feature=0,
+                                boundaries={'WORD', 'MORPHEME', 'SYLLABLE'}})
+end
+
+--[[
+Loads all phonology raw files into `phonologies`.
+
+The raw files must match 'phonology_.txt'.
+]]
 function load_phonologies()
   local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
@@ -1247,6 +1491,14 @@ function load_phonologies()
   end
 end
 
+--[[
+Sets a historical figure's fluency in `fluency_data`.
+
+Args:
+  hf_id: The ID of a historical figure.
+  civ_id: The ID of a civilization corresponding to a language.
+  fluency: A number.
+]]
 function set_fluency(hf_id, civ_id, fluency)
   if not fluency_data[hf_id] then
     fluency_data[hf_id] = {}
@@ -1254,6 +1506,16 @@ function set_fluency(hf_id, civ_id, fluency)
   fluency_data[hf_id][civ_id] = {fluency=fluency}
 end
 
+--[[
+Gets a historical figure's fluency from `fluency_data`.
+
+Args:
+  hf_id: The ID of a historical figure.
+  civ_id: The ID of a civilization corresponding to a language.
+
+Returns:
+  The historical figure's fluency in the civilization's language.
+]]
 function get_fluency(hf_id, civ_id)
   if not fluency_data[hf_id] then
     fluency_data[hf_id] = {}
@@ -1264,6 +1526,14 @@ function get_fluency(hf_id, civ_id)
   return fluency_data[hf_id][civ_id]
 end
 
+--[[
+Loads fluency data from a file into `fluency_data`.
+
+The file must be `fluency_data.txt` in the raws directory. Each line of
+the file has three numbers separated by spaces. The numbers are the ID
+of a historical figure, the ID of a civilization, and the fluency level
+of the historical figure in the civilization's language.
+]]
 function load_fluency_data()
   fluency_data = {}
   local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
@@ -1287,6 +1557,12 @@ function load_fluency_data()
   end
 end
 
+--[[
+Writes fluency data from `fluency_data` to a file.
+
+The documentation for `load_fluency_data` describes the file and its
+format.
+]]
 function write_fluency_data()
   local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
                        '/raw/objects/fluency_data.txt', 'w')
@@ -1301,6 +1577,15 @@ function write_fluency_data()
   end
 end
 
+--[[
+Determines whether a file is a language file.
+
+Args:
+  path: The path of a file.
+
+Returns:
+  Whether the file is a language file.
+]]
 function has_language_object(path)
   -- TODO: check that the first line has the filename
   io.input(path)
@@ -1313,12 +1598,29 @@ function has_language_object(path)
   return rv
 end
 
+--[[
+Writes raw tags to a file.
+
+Args:
+  file: The file to write to.
+  tags: A sequence of tags.
+]]
 function write_raw_tags(file, tags)
+  -- TODO: This is not guaranteed to write the tags in order.
   for _, str in pairs(tags) do
     file:write('\t', str.value, '\n')
   end
 end
 
+--[[
+Writes a translation file.
+
+Args:
+  dir: The name of the directory to write the file to.
+  index: A number to use in the file name so the files all have unique
+    names and a well-defined order.
+  translation: A translation.
+]]
 function write_translation_file(dir, index, translation)
   local filename = 'language_' .. string.format('%04d', index) .. '_' ..
     translation.name
@@ -1337,7 +1639,13 @@ function write_translation_file(dir, index, translation)
   file:close()
 end
 
-function write_symbol_file(dir)
+--[[
+Writes a symbols file.
+
+Args:
+  dir: The name of the directory to write the file to.
+]]
+function write_symbols_file(dir)
   local file = io.open(dir .. '/language_SYM.txt', 'w')
   file:write('language_SYM\n\n[OBJECT:LANGUAGE]\n')
   for _, symbol in pairs(df.global.world.raws.language.symbols) do
@@ -1347,7 +1655,13 @@ function write_symbol_file(dir)
   file:close()
 end
 
-function write_word_file(dir)
+--[[
+Writes a words file.
+
+Args:
+  dir: The name of the directory to write the file to.
+]]
+function write_words_file(dir)
   local file = io.open(dir .. '/language_words.txt', 'w')
   file:write('language_words\n\n[OBJECT:LANGUAGE]\n')
   for _, word in pairs(df.global.world.raws.language.words) do
@@ -1357,6 +1671,11 @@ function write_word_file(dir)
   file:close()
 end
 
+--[[
+Overwrites the default language files in the raws directory.
+
+The new files use the same format but contain additional data.
+]]
 function overwrite_language_files()
   local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir ..
     '/raw/objects'
@@ -1373,20 +1692,50 @@ function overwrite_language_files()
       write_translation_file(dir, i, translation)
     end
   end
-  write_symbol_file(dir)
-  write_word_file(dir)
+  write_symbols_file(dir)
+  write_words_file(dir)
 end
 
+--[[
+Gets the two translations associated with a language.
+
+Args:
+  language: A language.
+
+Returns:
+  The lexicon translation.
+  The lemma translation.
+]]
 function language_translations(language)
   local translation_id = language.ints[1]
   return df.language_translation.find(translation_id),
     df.language_translation.find(translation_id + 1)
 end
 
+--[[
+Gets the two translations associated with a civilization.
+
+Args:
+  civ: A historical entity.
+
+Returns:
+  The lexicon translation.
+  The lemma translation.
+]]
 function civ_translations(civ)
   return language_translations(civ_native_language(civ))
 end
 
+--[[
+Loans words from one civilization's language to another's.
+
+Args:
+  dst_civ_id: The ID of the historical entity whose language is the
+    destination.
+  src_civ_id: The ID of the historical entity whose language is the
+    source.
+  loans: A sequence of loans.
+]]
 function loan_words(dst_civ_id, src_civ_id, loans)
   -- TODO: Don't loan between languages with different feature geometries.
   local dst_civ = df.historical_entity.find(dst_civ_id)
@@ -1493,12 +1842,28 @@ local WAR = {
    get=function(civ) return civ.resources.animals.minion_races end}
 }
 
-function copy_lexicon(dst, src)
+--[[
+Copies a translation.
+
+Args:
+  dst! The destination translation.
+  src: The source translation.
+]]
+function copy_translation(dst, src)
   for _, word in pairs(src.words) do
     dst.words:insert('#', {new=true, value=word.value})
   end
 end
 
+--[[
+Creates a language for a civilization.
+
+The new language goes in `df.global.world.raws.language.translations`.
+If `civ` is nil, nothing happens.
+
+Args:
+  civ: A historical entity, or nil.
+]]
 function create_language(civ)
   if not civ then
     return
@@ -1515,11 +1880,19 @@ function create_language(civ)
   -- Create two copies (underlying and surface forms) of the language.
   -- TODO: Don't simply copy from the first translation.
   translations:insert('#', {new=true, name=civ.id .. 'U'})
-  copy_lexicon(translations[#translations - 1], translations[0])
+  copy_translation(translations[#translations - 1], translations[0])
   translations:insert('#', {new=true, name=civ.id .. 'S'})
-  copy_lexicon(translations[#translations - 1], translations[0])
+  copy_translation(translations[#translations - 1], translations[0])
 end
 
+--[[
+Simulate the linguistic effects of a historical event.
+
+This can modify anything related to translations or languages.
+
+Args:
+  event: A historical event.
+]]
 function process_event(event)
   local loans = {}
   local civ1, civ2
@@ -1574,11 +1947,21 @@ function process_event(event)
   end
 end
 
+--[[
+Determines whether a historical figure is not a unit.
+
+Args:
+  hf: A historical figure.
+
+Returns:
+  Whether a historical figure is not a unit.
+]]
 function is_unprocessed_hf(hf)
   local id = hf.id
   if id < 0 then
     return false
   end
+  -- TODO: Is there any way to create a new HF that makes this fail?
   for i = 0, #df.global.world.units.all - 1 do
     if df.global.world.units.all[i].hist_figure_id == id then
       return false
@@ -1587,17 +1970,45 @@ function is_unprocessed_hf(hf)
   return true
 end
 
+--[[
+Nicknames a historical figure.
+
+Args:
+  hf! A historical figure.
+]]
+-- TODO: Make more interesting.
 function process_hf(hf)
   if is_unprocessed_hf(hf) then
     hf.name.nickname = 'Hf' .. hf.id
   end
 end
 
+--[[
+Gets a historical figure's native language.
+
+A historical figure's native language is the native language of their
+civilization. Naturally, outsiders have no native language.
+
+Args:
+  hf: A historical figure.
+
+Returns:
+  A language, or nil if there is none.
+]]
 function hf_native_language(hf)
   print('hf native language: hf.id=' .. hf.id)
   return civ_native_language(df.historical_entity.find(hf.civ_id))
 end
 
+--[[
+Gets a civilization's native language.
+
+Args:
+  civ: A historical entity.
+
+Returns:
+  A language, or nil if there is none.
+]]
 function civ_native_language(civ)
   if civ then
     local all_languages = dfhack.persistent.get_all('babel/language')
@@ -1609,6 +2020,18 @@ function civ_native_language(civ)
   end
 end
 
+--[[
+Gets all of a unit's languages.
+
+If the unit is historical, it uses `hf_languages`. If not, it assumes
+the unit knows only the native language of their civilization.
+
+Args:
+  unit: A unit.
+
+Returns:
+  A sequence of languages the unit knows.
+]]
 function unit_languages(unit)
   print('unit languages: unit.id=' .. unit.id)
   local _, hf = utils.linear_index(df.global.world.history.figures,
@@ -1620,6 +2043,15 @@ function unit_languages(unit)
   return {civ_native_language(df.historical_entity.find(unit.civ_id))}
 end
 
+--[[
+Gets all of a historical figure's languages.
+
+Args:
+  hf: A historical figure.
+
+Returns:
+  A sequence of languages the historical figure knows.
+]]
 function hf_languages(hf)
   print('hf languages: hf.id=' .. hf.id)
   if not fluency_data[hf.id] then
@@ -1645,6 +2077,15 @@ function hf_languages(hf)
   return languages
 end
 
+--[[
+Gets the language a report should have been spoken in.
+
+Args:
+  report: A report representating part of a conversation.
+
+Returns:
+  The language of the report.
+]]
 function report_language(report)
   print('report language: report.id=' .. report.id)
   local unit = df.unit.find(report.unk_v40_3)
@@ -1658,15 +2099,37 @@ function report_language(report)
   end
 end
 
+--[[
+Determines whether an element is in a list.
+
+Args:
+  element: An element.
+  list: A table with integer keys from `start` to `#list`.
+  start: The first index.
+
+Returns:
+  Whether the element is the list.
+]]
 function in_list(element, list, start)
-  for i = 1, #list do
-    if element == list[i + start - 1] then
+  for i = start, #list do
+    if element == list[i] then
       return true
     end
   end
   return false
 end
 
+if TEST then
+  assert_eq(in_list(1, {1, 2}, 1), true)
+  assert_eq(in_list(0, {[0]=0, 1, 2}, 1), false)
+  assert_eq(in_list(0, {[0]=0, 1, 2}, 0), true)
+  assert_eq(in_list(2, {1, 2}, 1), true)
+  assert_eq(in_list(2, {[0]=0, 1, 2}, 0), true)
+end
+
+--[[
+Runs the simulation.
+]]
 function babel()
   if not dfhack.isWorldLoaded() then
     print('not loaded')
@@ -1782,6 +2245,7 @@ function babel()
         local announcement_index = utils.linear_index(announcements,
                                                       report.id, 'id')
         if report.unk_v40_1 == -1 or df.global.gamemode ~= 1 then  -- ADVENTURE
+          -- TODO: Combat logs in Fortress mode can have conversations.
           print('  not a conversation: ' .. report.text)
           report.id = report.id + id_delta
           i = i + 1
@@ -1933,16 +2397,6 @@ if #args >= 1 then
     if timer then
       dfhack.timeout_active(timer, nil)
     end
-  elseif args[1] == 'test' then
-    local function escape_all(str)
-      return str:gsub('.', function(c)
-          return '\\x' .. string.format('%02x', string.byte(c))
-        end)
-    end
-    local z = false
-    u = u_form({{z,z,z,z,z,z,z,z, z,z,z,z,1}})
-    print(escape_all(u))
-    printall(deserialize(2, u)[1])
   else
     usage()
   end
