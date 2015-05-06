@@ -75,7 +75,7 @@ environments for those features.
 Feature environment:
 A sequence of two sequences, each of whose keys are variable indexes and
 whose values are assignments. The two subsequences correspond to two
-patterns in the scope of which the feature environment is being used. 
+patterns in the scope of which the feature environment is being used.
 
 Assignment:
 A table representing a value bound to an variable name in an
@@ -1233,7 +1233,7 @@ function get_combinations(phonology, root_index)
   return combinations
 end
 
-function random_dimensions_2(rng, phonology)
+function random_dimensions(rng, phonology)
   local nodes = phonology.nodes
   local dimensions = {}
   for i = 1, #nodes do
@@ -1287,6 +1287,7 @@ end
 
 function is_dphoneme_okay(phonology, dimensions, dphoneme, dimension_index,
                           dimension_value)
+  --[[
   print('\nIs this okay?')
   for di, dvi in ipairs(dphoneme) do
     for _, ni in ipairs(dimensions[di].combinations[dvi]) do
@@ -1297,7 +1298,7 @@ function is_dphoneme_okay(phonology, dimensions, dphoneme, dimension_index,
   for _, ni in ipairs(dimension_value) do
     print(phonology.nodes[ni].name)
   end
-  local status_quo_okay = dphoneme[dimension_index] ~= nil
+  ]]
   for _, imp in pairs(phonology.implications) do
     if (phonology.nodes[imp.ante].dimension ~=
         phonology.nodes[imp.cons].dimension) then
@@ -1319,45 +1320,59 @@ function is_dphoneme_okay(phonology, dimensions, dphoneme, dimension_index,
           imp.ante, imp.cons = imp.cons, imp.ante
           imp.ante_val, imp.cons_val = not imp.cons_val, not imp.ante_val
         end
+--[[
         print(in_ante,
               phonology.nodes[imp.ante].name..'='..tostring(imp.ante_val),
               ' => ',
               phonology.nodes[imp.cons].name..'='..tostring(imp.cons_val))
+]]
         if imp.ante_val then
           local dp = in_ante and 'cons' or 'ante'
           local dp_di = phonology.nodes[imp[dp]].dimension
           local dp_dvi = dphoneme[dp_di]
           if (dp_dvi ~= nil and imp[dp .. '_val'] ~=
               in_list(imp[dp], dimensions[dp_di].combinations[dp_dvi], 1)) then
-            print('   ---> false, '..tostring(status_quo_okay))
-            return false, status_quo_okay
+--            print('   ---> false')
+            return false
           end
         end
       end
     end
   end
-  print('   ---> true, '..tostring(status_quo_okay))
-  return true, status_quo_okay
+--  print('   ---> true')
+  return true
 end
 
-function random_inventory_2(phonology, rng, dimensions, target_size)
+function get_size(sequence)
+  local i = 1
+  while sequence[i] do
+    i = i + 1
+  end
+  return i - 1
+end
+
+function random_dphoneme_inventory(phonology, rng, dimensions, target_size)
   local inventory = {{feature_class=FEATURE_CLASS_NEUTRAL}}
   local dimensions_left = #dimensions
   local dimensions_used = {n=0}
+  local current_size = 0
   while dimensions_left ~= 0 and (dimensions_used.n ~= #dimensions or
-                                  #inventory < target_size) do
---    print()
---    print('dims left: '..dimensions_left)
---    print('#inv:      '..#inventory)
+                                  current_size < target_size) do
+--[[
+    print()
+    print('dims left: '..dimensions_left)
+    print('#inv:      '..#inventory)
+    print('cursz:     '..current_size)
     for _,x in pairs(inventory) do
---      print('-------------')
+      print('-------------')
       for a, b in pairs(x) do
         if type(a) == 'number' then
---          print('In dimension '..a..':')
---          printall(dimensions[a].combinations[b])
+          print('In dimension '..a..':')
+          printall(dimensions[a].combinations[b])
         end
       end
     end
+]]
     local dimension_index = (dimensions_used.n == #dimensions) and
       (rng:random(#dimensions) + 1) or (dimensions_used.n + 1)
     local dimension_value_index = dimensions[dimension_index].next()
@@ -1380,7 +1395,6 @@ function random_inventory_2(phonology, rng, dimensions, target_size)
             dphoneme.feature_class == FEATURE_CLASS_NEUTRAL or
             dimension_value.feature_class == FEATURE_CLASS_NEUTRAL) then
           local change_okay = true
-          local status_quo_okay = true
           for _, dp in pairs(inventory) do
             local same = true
             for di = 1, #dimensions do
@@ -1395,14 +1409,10 @@ function random_inventory_2(phonology, rng, dimensions, target_size)
               break
             end
           end
-          if change_okay then
-            change_okay, status_quo_okay = is_dphoneme_okay(
+          change_okay = change_okay and is_dphoneme_okay(
               phonology, dimensions, dphoneme, dimension_index, dimension_value)
-          end
           if change_okay then
-            if status_quo_okay then
-              table.insert(inventory, copyall(dphoneme))
-            end
+            table.insert(inventory, copyall(dphoneme))
             if not dimensions_used[dimension_index] then
               dimensions_used[dimension_index] = true
               dimensions_used.n = dimensions_used.n + 1
@@ -1410,16 +1420,14 @@ function random_inventory_2(phonology, rng, dimensions, target_size)
             dphoneme[dimension_index] = dimension_value_index
             dphoneme.feature_class =
               math.max(dphoneme.feature_class, dimension_value.feature_class)
-          elseif not status_quo_okay then
-            table.remove(inventory, i)
-            i = i - 1
-            final_index = final_index - 1
+            if get_size(dphoneme) == #dimensions then
+              current_size = current_size + 1
+            end
           end
         end
         i = i + 1
       end
     else
---      print('ran out of dimension '..dimension_index)
       dimensions_left = dimensions_left - 1
       if not dimensions_used[dimension_index] then
         dimensions_used[dimension_index] = true
@@ -1430,184 +1438,34 @@ function random_inventory_2(phonology, rng, dimensions, target_size)
   return inventory
 end
 
-function random_inventory_top(phonology, seed)
+function random_inventory(phonology, seed)
   local rng = dfhack.random.new(seed)
-  local target_size = 4 --10 + rng:random(21)  -- TODO: better distribution
-  local dimensions = random_dimensions_2(rng, phonology)
-  local inventory = random_inventory_2(phonology, rng, dimensions, target_size)
+  local target_size = 10 + rng:random(21)  -- TODO: better distribution
+  local dimensions = random_dimensions(rng, phonology)
+  local dphoneme_inventory =
+    random_dphoneme_inventory(phonology, rng, dimensions, target_size)
   local empty_phoneme = {score=0}
   for i = 1, #phonology.nodes do
     empty_phoneme[i] = false
   end
-  for i = 1, #inventory do
-    local dphoneme = inventory[i]
-    inventory[i] = {score=0}
-    for dimension_index, dimension_value_index in ipairs(dphoneme) do
-      local dimension_value =
-        dimensions[dimension_index].combinations[dimension_value_index]
-      inventory[i].score = inventory[i].score - dimension_value.original_score
-      for _, node_index in ipairs(dimension_value) do
-        inventory[i][node_index] = true
+  local inventory = {}
+  for i = 1, #dphoneme_inventory do
+    local dphoneme = dphoneme_inventory[i]
+    if get_size(dphoneme) == #dimensions then
+      local uphoneme = {score=0}
+      for dimension_index, dimension_value_index in ipairs(dphoneme) do
+        local dimension_value =
+          dimensions[dimension_index].combinations[dimension_value_index]
+        uphoneme.score = uphoneme.score - dimension_value.original_score
+        for _, node_index in ipairs(dimension_value) do
+          uphoneme[node_index] = true
+        end
       end
+      utils.insert_sorted(inventory, uphoneme, 'score', utils.compare)
     end
   end
-  utils.sort_vector(inventory, 'score', utils.compare)
   for _ = target_size + 1, #inventory do
     table.remove(inventory)
-  end
-  printall(inventory[1])
-  return inventory
-end
-
-function random_dimensions(rng, nodes, implications)
-  local dimensions = {}
-  local i = #nodes
-  while i > 0 do
-    local node = nodes[i]
-    if node.parent == 0 then
-      local dimension = {{score=1}}
-      local frontier = {}
-      local j = i
-      repeat
-        if not nodes[j].feature then
-          -- TODO: update score
-          dimension[1][j] = true
-        elseif dimension[1][nodes[j].parent] then
-          table.insert(frontier, j)
-        end
-        j = j + 1
-      until not (nodes[j] and nodes[j].parent >= i)
-      dimension.total = dimension[1].score
-      while next(frontier) do
-        local node_index = table.remove(frontier)
-        add_child_nodes(frontier, node_index, nodes)
-        for d = 1, #dimension do
-          local scored_value = dimension[d]
-          if scored_value[nodes[node_index].parent] then
-            local node_score = nodes[node_index].score
-            scored_value.score = scored_value.score * (1 - node_score)
-            local scored_value = copyall(scored_value)
-            scored_value[node_index] = true
-            scored_value.score = scored_value.score * node_score
-            table.insert(dimension, scored_value)
-            dimension.total = dimension.total + scored_value.score
-          end
-        end
-      end
-      -- TODO: prioritize more likely values, e.g. coronals over uvulars
-      -- TODO: not always three
-      while #dimension > 3 do
-        table.remove(dimension, rng:random(#dimension) + 1)
-      end
-      dimension.total = dimension[1].score + dimension[2].score + dimension[3].score
-      table.insert(dimensions, dimension)
-      i = i - 1
-    else
-      i = node.parent
-    end
-  end
-  return dimensions
-end
-
---[[
-function random_inventory(phonology, seed)
-  local rng = dfhack.random.new(seed)
-  -- TODO: random min_peak_sonority based on tree
-  local min_peak_sonority = 2
-  local dimensions = random_dimensions(rng, phonology.nodes, phonology.implications)
-  local inventory = {}
-  local phonemes_wanted = 10 + rng:random(26)
-  for every cell do
-    local score = product of scores of values and all relevant restrictions
-    if phonemes_wanted > 0 then
-      insert into inventory sorted
-      phonemes_wanted = phonemes_wanted - 1
-    elseif inventory[1].score < score then
-      insert into inventory sorted
-    end
-  end
-  return inventory
-end
-]]
-
---TODO: docs
-function _random_inventory(phonology, seed)
-  local rng = dfhack.random.new(seed)
-  -- TODO: random min_peak_sonority based on tree
-  local min_peak_sonority = 2
-  -- TODO: more realistic size distribution
-  local frontier = {}
-  local inventory = {{sonority=0}}
-  for i, node in pairs(phonology.nodes) do
-    if node.parent == 0 then
-      inventory[1][i] = true
-    elseif inventory[1][phonology.nodes[i].parent] then
-      table.insert(frontier, i)
-    end
-  end
-  local implications = {}
-  local phonemes_wanted = 10 + rng:random(26)
-  local nuclei_wanted = 3 --// + math.min(rng:random(8), phonemes_wanted / 2)
-  while ((#inventory < phonemes_wanted or nuclei_wanted > 0) and
-         #frontier ~= 0) do
-    print('nuclei wanted: ' .. nuclei_wanted)
-    --[[
-    print('frontier: '..#frontier)
-    for _, i in pairs(frontier) do
-      print('  '..phonology.nodes[i].name)
-    end
-    ]]
-    -- pick something out of the frontier
-    local frontier_index = 1 + rng:random(#frontier)
-    local node_index = frontier[frontier_index]
-    print('pick '..phonology.nodes[node_index].name)
-    local node_sonority = phonology.nodes[node_index].sonorous and 1 or 0
-    -- replace it in the frontier with its children
-    table.remove(frontier, frontier_index)
-    add_child_nodes(frontier, node_index, phonology.nodes)
-    -- Randomly add to implications
-    local new_implication_index = #implications + 1
-    add_random_implications(rng, phonology.implications, implications,
-                            inventory, node_index)
-    print('implications: ' .. #implications .. '/' .. #phonology.implications)
-    printall(implications)
-    -- add new phonemes to the inventory
-    local old_inventory = copyall(inventory)
-    inventory = {}
-    for _, phoneme in pairs(old_inventory) do
-      for i = 1, #phoneme do
-        if phonology.nodes[i].feature then
-          print('  ' .. (phoneme[i] and '+' or '-') .. phonology.nodes[i].name)
-        end
-      end
-      local parent = phonology.nodes[node_index].parent
-      if ((parent == 0 or phoneme[parent]) and
-          (#inventory < phonemes_wanted or nuclei_wanted <= 0 or
-           (phoneme.sonority + node_sonority >= min_peak_sonority))) then
-        local plus_okay, minus_okay =
-          is_phoneme_okay(phoneme, node_index, new_implication_index,
-                          implications)
-        print(tostring(plus_okay), tostring(minus_okay))
-        if plus_okay then
-          local new_phoneme = copyall(phoneme)
-          new_phoneme[node_index] = true
-          new_phoneme.sonority = new_phoneme.sonority + node_sonority
-          table.insert(inventory, new_phoneme)
-          if new_phoneme.sonority >= min_peak_sonority then
-            nuclei_wanted = nuclei_wanted - 1
-          end
-        end
-        if minus_okay then
-          local new_phoneme = copyall(phoneme)
-          new_phoneme[node_index] = false
-          table.insert(inventory, new_phoneme)
-        end
-      end
-    end
-    print(#old_inventory .. ' -> ' .. #inventory)
-    if #old_inventory > #inventory then
-      inventory = old_inventory
-    end
   end
   return inventory
 end
@@ -3255,7 +3113,7 @@ if #args >= 1 then
     print('total combos: '..#combinations)
     print('total score:  '..combinations.total)
     ]]
-    local dims = random_dimensions_2(rng, phonologies[1])
+    local dims = random_dimensions(rng, phonologies[1])
     --[[
     print('total dims: '..#dims)
     local dim = dims[1]
@@ -3269,10 +3127,9 @@ if #args >= 1 then
       end
     end
     ]]
-    --local inv = random_inventory_2(phonologies[1], rng, dims, 10)
-    local inv = random_inventory_top(phonologies[1], 2553)
+    local inv = random_inventory(phonologies[1], 2553)
     for _, ph in pairs(inv) do
-      print('\n'..get_lemma(phonologies[1], {ph}))
+      print('\n'..get_lemma(phonologies[1], {ph}), -ph.score)
       for i = 1, #phonologies[1].nodes do
         if ph[i] and phonologies[1].nodes[i].feature then
           print('\t'..phonologies[1].nodes[i].name)
@@ -3281,7 +3138,7 @@ if #args >= 1 then
     end
     print(#inv)
     --[[
-    local inv = random_inventory(phonologies[1], 113)
+    local inv = random_dphoneme_inventory(phonologies[1], 113)
     for i, ph in pairs(inv) do
       print(i..' ['..ph.sonority..'] '..get_lemma(phonologies[1], {ph}))
       for n, v in ipairs(ph) do
