@@ -47,8 +47,11 @@ Phonology:
   constraints: A sequence of constraints.
   implications: A sequence of implications.
   nodes: A sequence of nodes.
-  symbols: A table whose keys are strings and whose values are the
-    phonemes those strings mean.
+  symbols: A sequence of symbols.
+
+Symbol:
+  symbol: A string.
+  features: The phoneme the symbol represents.
 
 Constraint:
 -- TODO
@@ -941,8 +944,8 @@ This is only useful in names. A Dwarf Fortress name has a list of
 indices into a translation. To print the name, it concatenates the
 strings at those indices. Therefore, there must be a human-readable form
 of each word. This is why there are two translations for each new
-language: one for names (where the strings are immutable) and one for
-reports (where anything is possible).
+language: one for first names (where the strings are immutable) and one
+for reports (where anything is possible).
 
 Args:
   phonology: A phonology.
@@ -957,15 +960,17 @@ function get_lemma(phonology, word)
     local best_symbol = ''
     local best_score = -1
     local best_base_score = -1
-    for symbol, symbol_features in pairs(phonology.symbols) do
-      local score = 0
+    for _, symbol_info in ipairs(phonology.symbols) do
+      local symbol = symbol_info.symbol
+      local symbol_features = symbol_info.features
       local base_score = 0
-      for i, phoneme_feature in pairs(phoneme) do
-        if phoneme_feature == (symbol_features[i] or false) then
-          score = score + 1
+      for node_index, node in ipairs(phonology.nodes) do
+        if (node.feature and (phoneme[node_index] or false) ==
+            (symbol_features[node_index] or false)) then
           base_score = base_score + 1
         end
       end
+      local score = base_score
       for i, node in pairs(phonology.nodes) do
         if phoneme[i] ~= (symbol_features[i] or false) then
           if node.add and phoneme[i] then
@@ -993,12 +998,13 @@ if TEST then
   assert_eq(get_lemma({nodes={}, symbols={}}, {{}}), '')
 
   local phonology = {nodes={{name='a', parent=0, add='+a', remove='-a',
-                             sonorous=false},
+                             feature=true},
                             {name='b', parent=0, add='+b', remove='-b',
-                             sonorous=false},
+                             feature=true},
                             {name='c', parent=0, add='+c', remove='-c',
-                             sonorous=false}},
-                     symbols={x={false, false, false}, abc={true, true, true}}}
+                             feature=true}},
+                     symbols={{symbol='x', features={false, false, false}},
+                              {symbol='abc', features={true, true, true}}}}
   assert_eq(get_lemma(phonology, {{false, false, false}}), 'x')
   assert_eq(get_lemma(phonology, {{false, false, true}}), 'x+c')
   assert_eq(get_lemma(phonology, {{false, true, false}}), 'x+b')
@@ -1010,7 +1016,7 @@ if TEST then
   assert_eq(get_lemma(phonology, {{true, false, true}, {true, true, false}}),
             'abc-babc-c')
 
-  phonology.symbols.x = nil
+  table.remove(phonology.symbols, 1)
   assert_eq(get_lemma(phonology, {{false, false, false}}), 'abc-a-b-c')
 end
 
@@ -1302,6 +1308,25 @@ function get_combinations(phonology, root_index)
       end
     end
   end
+  for _, combination in ipairs(combinations) do
+--[[
+    for _, ni in ipairs(combination) do
+      print(nodes[ni].name)
+    end
+]]
+    local licensed = nil
+    for i = #combination, 1, -1 do
+      local node = nodes[combination[i]]
+      if node.feature or combination[i] == licensed then
+        licensed = node.parent
+      else
+--        print('',node.name)
+        table.remove(combination, i)
+      end
+    end
+--    print()
+  end
+--  print()
   return combinations
 end
 
@@ -1535,6 +1560,9 @@ function random_inventory(phonology, seed)
       end
       utils.insert_sorted(inventory, uphoneme, 'score', utils.compare)
     end
+  end
+  for i = 1, target_size do
+    inventory[i].score = nil
   end
   for _ = target_size + 1, #inventory do
     table.remove(inventory)
@@ -2170,7 +2198,8 @@ function load_phonologies()
               nodes[n] = true
               i = i + 1
             end
-            current_phonology.symbols[unescape(subtags[2])] = nodes
+            table.insert(current_phonology.symbols,
+                         {symbol=unescape(subtags[2]), features=nodes})
           elseif subtags[1] == 'CONSTRAINT' then
             if not current_phonology then
               qerror('Orphaned CONSTRAINT tag: ' .. tag)
@@ -3201,9 +3230,24 @@ if #args >= 1 then
       end
     end
     ]]
-    local inv = random_inventory(phonologies[1], 2553)
+    --[[
+    local ph = {}
+    local s = {'BACK','FRONT','OUND','HIGH','VOICED','LOW TONE'}
+    while next(s) do
+      local i, node = utils.linear_index(phonologies[1].nodes, s[1], 'name')
+      table.remove(s, 1)
+      if i then
+        ph[i] = true
+        if node.parent ~= 0 and not ph[node.parent] then
+          table.insert(s, phonologies[1].nodes[node.parent].name)
+        end
+      end
+    end
+    local inv = {ph}
+    ]]
+    local inv = random_inventory(phonologies[1], 5)
     for _, ph in pairs(inv) do
-      print('\n'..get_lemma(phonologies[1], {ph}), -ph.score)
+      print('\n'..get_lemma(phonologies[1], {ph}))
       for i = 1, #phonologies[1].nodes do
         if ph[i] and phonologies[1].nodes[i].feature then
           print('\t'..phonologies[1].nodes[i].name)
