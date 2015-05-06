@@ -1450,16 +1450,14 @@ end
 
 function random_dphoneme_inventory(phonology, rng, dimensions, target_size)
   local inventory = {{feature_class=FEATURE_CLASS_NEUTRAL}}
-  local dimensions_left = #dimensions
+  local dimensions_left = {n=#dimensions}
   local dimensions_used = {n=0}
   local current_size = 0
-  while dimensions_left ~= 0 and (dimensions_used.n ~= #dimensions or
-                                  current_size < target_size) do
+  while dimensions_left.n ~= 0 and (dimensions_used.n ~= #dimensions or
+                                    current_size < target_size) do
 --[[
     print()
-    print('dims left: '..dimensions_left)
-    print('#inv:      '..#inventory)
-    print('cursz:     '..current_size)
+    print('dims left: '..dimensions_left.n,'#inv: '..#inventory,'cursz: '..current_size,'dims done: '..dimensions_used.n)
     for _,x in pairs(inventory) do
       print('-------------')
       for a, b in pairs(x) do
@@ -1476,12 +1474,7 @@ function random_dphoneme_inventory(phonology, rng, dimensions, target_size)
     if dimension_value_index then
       local dimension_value =
         dimensions[dimension_index].combinations[dimension_value_index]
-      --[[
-      [N.B. "dphoneme" here is a sequence of dimension value indices, not
-       feature indices]
-      [e.g. {1,2,1} means dim1=val1, dim2=val2, dim3=val1]
-      [and those numbers (1,2,1) are indices into each dimension]
-      ]]
+--      for _, ni in ipairs(dimension_value) do print(phonology.nodes[ni].name) end
       local i = 1
       local final_index = #inventory
       while i <= final_index do
@@ -1525,7 +1518,21 @@ function random_dphoneme_inventory(phonology, rng, dimensions, target_size)
         i = i + 1
       end
     else
-      dimensions_left = dimensions_left - 1
+      --[[
+      print('  XXX dim '..dimension_index)
+      if next(dimensions[dimension_index].queue) then
+        printall(dimensions[dimension_index].queue)
+      else
+        print('~empty queue~')
+      end
+      for _, p in pairs(dimensions[dimension_index].combinations) do
+        printall(p)
+      end
+      ]]
+      if not dimensions_left[dimension_index] then
+        dimensions_left[dimension_index] = true
+        dimensions_left.n = dimensions_left.n - 1
+      end
       if not dimensions_used[dimension_index] then
         dimensions_used[dimension_index] = true
         dimensions_used.n = dimensions_used.n + 1
@@ -1561,7 +1568,7 @@ function random_inventory(phonology, seed)
       utils.insert_sorted(inventory, uphoneme, 'score', utils.compare)
     end
   end
-  for i = 1, target_size do
+  for i = 1, math.min(target_size, #inventory) do
     inventory[i].score = nil
   end
   for _ = target_size + 1, #inventory do
@@ -3245,7 +3252,7 @@ if #args >= 1 then
     end
     local inv = {ph}
     ]]
-    local inv = random_inventory(phonologies[1], 5)
+    local inv = random_inventory(phonologies[1], 15)
     for _, ph in pairs(inv) do
       print('\n'..get_lemma(phonologies[1], {ph}))
       for i = 1, #phonologies[1].nodes do
