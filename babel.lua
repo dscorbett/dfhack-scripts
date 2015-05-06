@@ -12,9 +12,16 @@ TODO:
 
 local TEST = true
 
+local DEFAULT_NODE_SCALAR = 0.9375
+local DEFAULT_IMPLICATION_PROBABILITY = 1
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
+
+local FEATURE_CLASS_NEUTRAL = 0
+local FEATURE_CLASS_VOWEL = 1
+local FEATURE_CLASS_CONSONANT = 2
+
 local phonologies = nil
 local parameter_sets = {}
 local fluency_data = nil
@@ -29,12 +36,37 @@ Data definitions:
 
 Language:
 A persistent entry with the keys:
-  'value': The name of the language, for debugging.
-  'ints': A sequence of 4 integers:
-    1: The number of this language among all languages.
-    2: The ID of the associated civilization.
-    3: The index of the language's phonology in `phonologies`.
-    4: A random number generator seed for generating the language.
+  value: The name of the language, for debugging.
+  ints: A sequence of 4 integers:
+    [1]: The number of this language among all languages.
+    [2]: The ID of the associated civilization.
+    [3]: The index of the language's phonology in `phonologies`.
+    [4]: A random number generator seed for generating the language.
+
+Phonology:
+  constraints: A sequence of constraints.
+  implications: A sequence of implications.
+  nodes: A sequence of nodes.
+  symbols: A table whose keys are strings and whose values are the
+    phonemes those strings mean.
+
+Constraint:
+-- TODO
+
+Node:
+  name: A string, used only for parsing the phonology raw file.
+  parent: The index of the node's parent node in the associated
+    phonology, or 0 if the parent is the root node.
+  add: A string to append to the symbol of a phoneme that does not
+    have this node to denote a phoneme that does have it but is
+    otherwise identical.
+  remove: The opposite of `add`.
+  sonorous: Whether this node adds sonority to a phoneme that has it.
+
+Language parameter table:
+  inventory: A sequence of phonemes used by this language.
+  min_sonority: The minimum sonority of all phonemes in `inventory`.
+  max_sonority: The maximum sonority of all phonemes in `inventory`.
 
 Environment:
 A table whose keys are indices of features and whose values are feature
@@ -47,10 +79,10 @@ patterns in the scope of which the feature environment is being used.
 
 Assignment:
 A table representing a value bound to an variable name in an
-environment. Keys:
-  'val': A boolean for whether this variable has the same value as the
+environment.
+  val: A boolean for whether this variable has the same value as the
     value of the variable that this variable is defined in terms of.
-  'var': The index of the variable that this variable is defined in
+  var: The index of the variable that this variable is defined in
     terms of.
 
 Word:
@@ -60,20 +92,30 @@ A sequence of phonemes.
 Phoneme:
 A table whose keys are feature indices and whose values are booleans.
 
+Implication:
+A table representing an implication between feature values that cannot
+be represented directly in the feature hierarchy tree structure.
+  ante: The index of the antecedent node.
+  ante_val: Whether the antecedent node is specified as +.
+  cons: The index of the consequent node.
+  cons_val: Whether the consequent node is specified as +.
+  prob: The probability that this implication will be randomly chosen.
+    It should be in the range [0, 1].
+
 Boundary:
 A string representing a boundary.
 -- TODO: Enumerate them.
 
 Translation:
-  translation: A sequence of tag strings in the format of the values of
-    `df.global.world.raws.language.translations`.
+A sequence of tag strings in the format of the values of
+`df.global.world.raws.language.translations`.
 
 Loan:
-A sequence of tables with keys:
-  'prefix': The string to prepend to the ID of the referent.
-  'type': The DFHack struct type of the referent.
-  'id': The name of the field where a referent of type `type` has an ID.
-  'get': A function:
+A sequence of tables, each with the keys:
+  prefix: The string to prepend to the ID of the referent.
+  type: The DFHack struct type of the referent.
+  id: The name of the field where a referent of type `type` has an ID.
+  get: A function:
     Gets the referents of type `type` from a civilization.
     Args:
       civ: A civilization.
@@ -138,7 +180,7 @@ function unescape(str)
 end
 
 if TEST then
-  assert_eq(escape(unescape('(%5D%3A%0a|%25%1A)')), escape'(]:\n|%\x1a)')
+  assert_eq(unescape('(%5D%3A%0a|%25%1A)'), '(]:\n|%\x1a)')
 end
 
 
@@ -160,6 +202,7 @@ function translate(language, topic, topic1, topic2, topic3)
   local word
   if topic == true then
     word = 'FORCE_GOODBYE'
+  -- TODO: df.talk_choice_type.Greet etc. instead of numbers with comments
   elseif topic == 0 then  -- Greet
     word = 'GREETINGS'
   --[[
@@ -288,7 +331,7 @@ function translate(language, topic, topic1, topic2, topic3)
   end
   -- TODO: Capitalize the result.
   local phonology = phonologies[language.ints[3]]
-  return s_form(phonology, optimize(
+  return get_lemma(phonology, optimize(
     parameter_sets[language.ints[2]], deserialize(
       math.ceil(#phonology.nodes / 8), unescape(
         languages.translations[language.ints[1]].words[word_index].value))))
@@ -819,7 +862,24 @@ if TEST then
   assert_eq(serialize(8, {{true}, {true}}), '\x80\x80')
 end
 
-function s_form(phonology, word)
+--[[
+Gets the lemma of a word.
+
+This is only useful in names. A Dwarf Fortress name has a list of
+indices into a translation. To print the name, it concatenates the
+strings at those indices. Therefore, there must be a human-readable form
+of each word. This is why there are two translations for each new
+language: one for names (where the strings are immutable) and one for
+reports (where anything is possible).
+
+Args:
+  phonology: A phonology.
+  word: A word.
+
+Returns:
+  The lemma.
+]]
+function get_lemma(phonology, word)
   local str = ''
   for _, phoneme in pairs(word) do
     local best_symbol = ''
@@ -857,6 +917,42 @@ function s_form(phonology, word)
   return str
 end
 
+if TEST then
+  assert_eq(get_lemma({nodes={}, symbols={}}, {{}}), '')
+
+  local phonology = {nodes={{name='a', parent=0, add='+a', remove='-a',
+                             sonorous=false},
+                            {name='b', parent=0, add='+b', remove='-b',
+                             sonorous=false},
+                            {name='c', parent=0, add='+c', remove='-c',
+                             sonorous=false}},
+                     symbols={x={false, false, false}, abc={true, true, true}}}
+  assert_eq(get_lemma(phonology, {{false, false, false}}), 'x')
+  assert_eq(get_lemma(phonology, {{false, false, true}}), 'x+c')
+  assert_eq(get_lemma(phonology, {{false, true, false}}), 'x+b')
+  assert_eq(get_lemma(phonology, {{false, true, true}}), 'abc-a')
+  assert_eq(get_lemma(phonology, {{true, false, false}}), 'x+a')
+  assert_eq(get_lemma(phonology, {{true, false, true}}), 'abc-b')
+  assert_eq(get_lemma(phonology, {{true, true, false}}), 'abc-c')
+  assert_eq(get_lemma(phonology, {{true, true, true}}), 'abc')
+  assert_eq(get_lemma(phonology, {{true, false, true}, {true, true, false}}),
+            'abc-babc-c')
+
+  phonology.symbols.x = nil
+  assert_eq(get_lemma(phonology, {{false, false, false}}), 'abc-a-b-c')
+end
+
+--[[
+Constructs a random phoneme.
+
+Args:
+  nodes: A sequence of nodes.
+  rng: A random number generator to use to choose nodes.
+
+Returns:
+  A new random phoneme.
+  The sonority of that phoneme.
+]]
 function random_phoneme(nodes, rng)
   local phoneme = {}
   local sonority = 0
@@ -873,6 +969,16 @@ function random_phoneme(nodes, rng)
   return phoneme, sonority
 end
 
+--[[
+Shuffles a sequence randomly.
+
+Args:
+  t: A sequence.
+  rng: A random number generator.
+
+Returns:
+  A copy of `t`, randomly shuffled.
+]]
 function shuffle(t, rng)
   t = copyall(t)
   local j
@@ -883,6 +989,16 @@ function shuffle(t, rng)
   return t
 end
 
+--[[
+Randomly generates a language parameter table.
+
+Args:
+  phonology: The phonology of the language to generate.
+  seed: The seed of the random number generator to use.
+
+Returns:
+  A language parameter table.
+]]
 function random_parameters(phonology, seed)
   local rng = dfhack.random.new(seed)
   -- TODO: normal distribution of inventory sizes
@@ -891,6 +1007,7 @@ function random_parameters(phonology, seed)
                       constraints=shuffle(phonology.constraints, rng)}
   for i = 1, size do
     local phoneme, sonority = random_phoneme(phonology.nodes, rng)
+    -- TODO: Don't allow duplicate phonemes.
     parameters.inventory[i] = {phoneme, sonority}
     parameters.min_sonority = math.min(sonority, parameters.min_sonority)
     parameters.max_sonority = math.max(sonority, parameters.max_sonority)
@@ -898,6 +1015,613 @@ function random_parameters(phonology, seed)
   return parameters
 end
 
+--[[
+Determines what values of a feature can be added to a phoneme.
+
+Args:
+  phoneme: A phoneme.
+  node_index: The index of the node to specify a value for in `phoneme`.
+  start_index: The index of the first implication to consider in
+    `implications`.
+  implications: A sequence of implications.
+
+Returns:
+  Whether the `node_index` node may be specified + in `phoneme`.
+  Whether the `node_index` node may be specified - in `phoneme`.
+]]
+function is_phoneme_okay(phoneme, node_index, start_index, implications)
+  local plus_okay = true
+  local minus_okay = true
+  for i = start_index, #implications do
+    local imp = implications[i]
+    if node_index == imp.ante then
+      imp.ante, imp.cons = imp.cons, imp.ante
+      imp.ante_val, imp.cons_val = not imp.cons_val, not imp.ante_val
+    end
+    if node_index == imp.cons then
+      local antecedent_is_false = imp.ante_val ~= (phoneme[imp.ante] or false)
+      plus_okay = plus_okay and (imp.cons_val or antecedent_is_false)
+      minus_okay = minus_okay and (not imp.cons_val or antecedent_is_false)
+    end
+    if not (plus_okay or minus_okay) then
+      break
+    end
+  end
+  return plus_okay, minus_okay
+end
+
+if TEST then
+  assert_eq({is_phoneme_okay({true}, 2, 1, {})}, {true, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=1, ante_val=true, cons=2, cons_val=true}})},
+            {true, false})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=1, ante_val=true, cons=2, cons_val=false}})},
+            {false, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=1, ante_val=false, cons=2, cons_val=true}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1,
+              {{ante=1, ante_val=false, cons=2, cons_val=false}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=2, ante_val=true, cons=1, cons_val=true}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=2, ante_val=true, cons=1, cons_val=false}})},
+            {false, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1, {{ante=2, ante_val=false, cons=1, cons_val=true}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {true}, 2, 1,
+              {{ante=2, ante_val=false, cons=1, cons_val=false}})},
+            {true, false})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1, {{ante=1, ante_val=true, cons=2, cons_val=true}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=1, ante_val=true, cons=2, cons_val=false}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=1, ante_val=false, cons=2, cons_val=true}})},
+            {true, false})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=1, ante_val=false, cons=2, cons_val=false}})},
+            {false, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1, {{ante=2, ante_val=true, cons=1, cons_val=true}})},
+            {false, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=2, ante_val=true, cons=1, cons_val=false}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=2, ante_val=false, cons=1, cons_val=true}})},
+            {true, false})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=2, ante_val=false, cons=1, cons_val=false}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 2,
+              {{ante=2, ante_val=false, cons=1, cons_val=true}})},
+            {true, true})
+  assert_eq({is_phoneme_okay(
+              {false}, 2, 1,
+              {{ante=2, ante_val=true, cons=1, cons_val=true},
+               {ante=2, ante_val=false, cons=1, cons_val=true}})},
+            {false, false})
+end
+
+--[[
+Randomly adds implications to a sequence of implications.
+
+Args:
+  rng: A random number generator.
+  input_implications: A sequence of implications to draw implications
+    from.
+  output_implications! A sequence of implications to extend.
+  inventory: A nonempty sequence of phonemes.
+  new_node_index: The index of a node that must be present in an
+    implication in `input_implications` to add it to
+    `output_implications`.
+]]
+function add_random_implications(rng, input_implications, output_implications,
+                                 inventory, new_node_index)
+  for _, imp in pairs(input_implications) do
+    if (((imp.ante == new_node_index and inventory[1][imp.cons] ~= nil) or
+         (imp.cons == new_node_index and inventory[1][imp.ante] ~= nil)) and
+        rng:drandom() <= imp.prob) then
+      table.insert(output_implications, imp)
+    end
+  end
+end
+
+--[[
+Add the children of a node to a sequence.
+
+Args:
+  output! The sequence of nodes to add the children's indexes to.
+  node_index: The index of the node whose children to get.
+  nodes: A sequence of nodes.
+]]
+function add_child_nodes(output, node_index, nodes)
+  for i, node in pairs(nodes) do
+    if node.parent == node_index then
+      table.insert(output, i)
+    end
+  end
+end
+
+function get_implication_scalars(implications, old_index, new_index)
+  local pp = nil
+  local pm = nil
+  local mp = nil
+  local mm = nil
+  for _, imp in pairs(implications) do
+    if pp and pm and mp and mm then
+      break
+    end
+    if imp.ante == old_index and imp.cons == new_index then
+      if imp.ante_val then
+        if imp.cons_val then
+          pp = imp.prob
+        else
+          pm = imp.prob
+        end
+      else
+        if imp.cons_val then
+          mp = imp.prob
+        else
+          mm = imp.prob
+        end
+      end
+    end
+  end
+  return pp or 1, pm or 1, mp or 1, mm or 1
+end
+
+-- TODO: docs
+-- example combination: {score=0.123, 1, 4, 6}
+-- combinations is a sequence of those, plus total=1.234
+-- TODO: this only works for IMPLIES + +
+function get_combinations(phonology, root_index)
+  local nodes = phonology.nodes
+  local combinations =
+    {total=1, {score=1, feature_count=0, feature_class=FEATURE_CLASS_NEUTRAL}}
+  for i = root_index, #nodes do
+    if i ~= root_index and nodes[i].parent < root_index then
+      break
+    end
+    for j = 1, #combinations do
+      if nodes[i].feature then
+        if i == root_index or in_list(nodes[i].parent, combinations[j], 1) then
+          local combination = copyall(combinations[j])
+          combinations.total = combinations.total - combination.score
+          combination.score = combination.score * nodes[i].scalar
+          combination.feature_count = combination.feature_count + 1
+          combination.last_feature = i
+          combination.feature_class =
+            math.max(combination.feature_class, nodes[i].feature_class)
+          for ante = root_index, i do
+            local pp, pm, mp, mm =
+              get_implication_scalars(phonology.implications, ante, i)
+            if in_list(ante, combination, 1) then
+              combination.score = combination.score * pp
+              combinations[j].score = combinations[j].score * pm
+            else
+              combination.score = combination.score * mp
+              combinations[j].score = combinations[j].score * mm
+            end
+          end
+          table.insert(combination, i)
+          table.insert(combinations, combination)
+          combinations.total =
+            combinations.total + combination.score + combinations[j].score
+        end
+      else
+        table.insert(combinations[j], i)
+      end
+    end
+  end
+  return combinations
+end
+
+function random_dimensions_2(rng, phonology)
+  local nodes = phonology.nodes
+  local dimensions = {}
+  for i = 1, #nodes do
+    if nodes[i].parent == 0 then
+      local combinations = get_combinations(phonology, i)
+      local queue = {}
+      table.insert(dimensions, {combinations=combinations, queue=queue,
+        next=function()
+          local queued_value = table.remove(queue)
+          if queued_value then
+            return queued_value
+          end
+          local target = rng:drandom() * combinations.total
+          if target < 0 then
+            return nil
+          end
+          local sum = 0
+          local i = 0
+          local combination
+          while sum <= target do
+            i = i + 1
+            combination = combinations[i]
+            if not combination then
+              return nil
+            end
+            sum = sum + combination.score
+          end
+          combinations.total = combinations.total - combination.score
+          combination.original_score = combination.score
+          combination.score = 0
+          if combination.feature_count >= 2 then
+            for prereq_index, prereq in ipairs(combinations) do
+              if (prereq.feature_count == 1 and prereq.score ~= 0 and
+                  in_list(prereq.last_feature, combination, 1)) then
+                table.insert(queue, prereq_index)
+                combinations.total = combinations.total - prereq.score
+                prereq.original_score = prereq.score
+                prereq.score = 0
+              end
+            end
+            shuffle(queue, rng)
+            table.insert(queue, 1, i)
+            return table.remove(queue)
+          end
+          return i
+        end})
+    end
+  end
+  return dimensions
+end
+
+function is_dphoneme_okay(phonology, dimensions, dphoneme, dimension_index,
+                          dimension_value)
+  print('\nIs this okay?')
+  for di, dvi in ipairs(dphoneme) do
+    for _, ni in ipairs(dimensions[di].combinations[dvi]) do
+      print(phonology.nodes[ni].name)
+    end
+  end
+  print(' dimension_index: '..dimension_index)
+  for _, ni in ipairs(dimension_value) do
+    print(phonology.nodes[ni].name)
+  end
+  local status_quo_okay = dphoneme[dimension_index] ~= nil
+  for _, imp in pairs(phonology.implications) do
+    if (phonology.nodes[imp.ante].dimension ~=
+        phonology.nodes[imp.cons].dimension) then
+      local in_ante = nil
+      if in_list(imp.ante, dimension_value, 1) then
+        in_ante = true
+      elseif in_list(imp.cons, dimension_value, 1) then
+        in_ante = false
+      end
+      if in_ante ~= nil then
+        --[[
+        if not imp[in_ante and 'ante' or 'cons'] then
+          imp.ante, imp.cons = imp.cons, imp.ante
+          imp.ante_val, imp.cons_val = not imp.cons_val, not imp.ante_val
+          in_ante = not in_ante
+        end
+        ]]
+        if not in_ante then
+          imp.ante, imp.cons = imp.cons, imp.ante
+          imp.ante_val, imp.cons_val = not imp.cons_val, not imp.ante_val
+        end
+        print(in_ante,
+              phonology.nodes[imp.ante].name..'='..tostring(imp.ante_val),
+              ' => ',
+              phonology.nodes[imp.cons].name..'='..tostring(imp.cons_val))
+        if imp.ante_val then
+          local dp = in_ante and 'cons' or 'ante'
+          local dp_di = phonology.nodes[imp[dp]].dimension
+          local dp_dvi = dphoneme[dp_di]
+          if (dp_dvi ~= nil and imp[dp .. '_val'] ~=
+              in_list(imp[dp], dimensions[dp_di].combinations[dp_dvi], 1)) then
+            print('   ---> false, '..tostring(status_quo_okay))
+            return false, status_quo_okay
+          end
+        end
+      end
+    end
+  end
+  print('   ---> true, '..tostring(status_quo_okay))
+  return true, status_quo_okay
+end
+
+function random_inventory_2(phonology, rng, dimensions, target_size)
+  local inventory = {{feature_class=FEATURE_CLASS_NEUTRAL}}
+  local dimensions_left = #dimensions
+  local dimensions_used = {n=0}
+  while dimensions_left ~= 0 and (dimensions_used.n ~= #dimensions or
+                                  #inventory < target_size) do
+--    print()
+--    print('dims left: '..dimensions_left)
+--    print('#inv:      '..#inventory)
+    for _,x in pairs(inventory) do
+--      print('-------------')
+      for a, b in pairs(x) do
+        if type(a) == 'number' then
+--          print('In dimension '..a..':')
+--          printall(dimensions[a].combinations[b])
+        end
+      end
+    end
+    local dimension_index = (dimensions_used.n == #dimensions) and
+      (rng:random(#dimensions) + 1) or (dimensions_used.n + 1)
+    local dimension_value_index = dimensions[dimension_index].next()
+    if dimension_value_index then
+      local dimension_value =
+        dimensions[dimension_index].combinations[dimension_value_index]
+      --[[
+      [N.B. "dphoneme" here is a sequence of dimension value indices, not
+       feature indices]
+      [e.g. {1,2,1} means dim1=val1, dim2=val2, dim3=val1]
+      [and those numbers (1,2,1) are indices into each dimension]
+      ]]
+      local i = 1
+      local final_index = #inventory
+      while i <= final_index do
+--        print('',dimension_index,dimension_value_index,i, final_index)
+--        printall(dimensions[dimension_index].combinations[dimension_value_index])
+        local dphoneme = inventory[i]
+        if (dphoneme.feature_class == dimension_value.feature_class or
+            dphoneme.feature_class == FEATURE_CLASS_NEUTRAL or
+            dimension_value.feature_class == FEATURE_CLASS_NEUTRAL) then
+          local change_okay = true
+          local status_quo_okay = true
+          for _, dp in pairs(inventory) do
+            local same = true
+            for di = 1, #dimensions do
+              if (dp[di] ~= ((di ~= dimension_index) and dphoneme[di] or
+                             dimension_value_index)) then
+                same = false
+                break
+              end
+            end
+            if same then
+              change_okay = false
+              break
+            end
+          end
+          if change_okay then
+            change_okay, status_quo_okay = is_dphoneme_okay(
+              phonology, dimensions, dphoneme, dimension_index, dimension_value)
+          end
+          if change_okay then
+            if status_quo_okay then
+              table.insert(inventory, copyall(dphoneme))
+            end
+            if not dimensions_used[dimension_index] then
+              dimensions_used[dimension_index] = true
+              dimensions_used.n = dimensions_used.n + 1
+            end
+            dphoneme[dimension_index] = dimension_value_index
+            dphoneme.feature_class =
+              math.max(dphoneme.feature_class, dimension_value.feature_class)
+          elseif not status_quo_okay then
+            table.remove(inventory, i)
+            i = i - 1
+            final_index = final_index - 1
+          end
+        end
+        i = i + 1
+      end
+    else
+--      print('ran out of dimension '..dimension_index)
+      dimensions_left = dimensions_left - 1
+      if not dimensions_used[dimension_index] then
+        dimensions_used[dimension_index] = true
+        dimensions_used.n = dimensions_used.n + 1
+      end
+    end
+  end
+  return inventory
+end
+
+function random_inventory_top(phonology, seed)
+  local rng = dfhack.random.new(seed)
+  local target_size = 4 --10 + rng:random(21)  -- TODO: better distribution
+  local dimensions = random_dimensions_2(rng, phonology)
+  local inventory = random_inventory_2(phonology, rng, dimensions, target_size)
+  local empty_phoneme = {score=0}
+  for i = 1, #phonology.nodes do
+    empty_phoneme[i] = false
+  end
+  for i = 1, #inventory do
+    local dphoneme = inventory[i]
+    inventory[i] = {score=0}
+    for dimension_index, dimension_value_index in ipairs(dphoneme) do
+      local dimension_value =
+        dimensions[dimension_index].combinations[dimension_value_index]
+      inventory[i].score = inventory[i].score - dimension_value.original_score
+      for _, node_index in ipairs(dimension_value) do
+        inventory[i][node_index] = true
+      end
+    end
+  end
+  utils.sort_vector(inventory, 'score', utils.compare)
+  for _ = target_size + 1, #inventory do
+    table.remove(inventory)
+  end
+  printall(inventory[1])
+  return inventory
+end
+
+function random_dimensions(rng, nodes, implications)
+  local dimensions = {}
+  local i = #nodes
+  while i > 0 do
+    local node = nodes[i]
+    if node.parent == 0 then
+      local dimension = {{score=1}}
+      local frontier = {}
+      local j = i
+      repeat
+        if not nodes[j].feature then
+          -- TODO: update score
+          dimension[1][j] = true
+        elseif dimension[1][nodes[j].parent] then
+          table.insert(frontier, j)
+        end
+        j = j + 1
+      until not (nodes[j] and nodes[j].parent >= i)
+      dimension.total = dimension[1].score
+      while next(frontier) do
+        local node_index = table.remove(frontier)
+        add_child_nodes(frontier, node_index, nodes)
+        for d = 1, #dimension do
+          local scored_value = dimension[d]
+          if scored_value[nodes[node_index].parent] then
+            local node_score = nodes[node_index].score
+            scored_value.score = scored_value.score * (1 - node_score)
+            local scored_value = copyall(scored_value)
+            scored_value[node_index] = true
+            scored_value.score = scored_value.score * node_score
+            table.insert(dimension, scored_value)
+            dimension.total = dimension.total + scored_value.score
+          end
+        end
+      end
+      -- TODO: prioritize more likely values, e.g. coronals over uvulars
+      -- TODO: not always three
+      while #dimension > 3 do
+        table.remove(dimension, rng:random(#dimension) + 1)
+      end
+      dimension.total = dimension[1].score + dimension[2].score + dimension[3].score
+      table.insert(dimensions, dimension)
+      i = i - 1
+    else
+      i = node.parent
+    end
+  end
+  return dimensions
+end
+
+--[[
+function random_inventory(phonology, seed)
+  local rng = dfhack.random.new(seed)
+  -- TODO: random min_peak_sonority based on tree
+  local min_peak_sonority = 2
+  local dimensions = random_dimensions(rng, phonology.nodes, phonology.implications)
+  local inventory = {}
+  local phonemes_wanted = 10 + rng:random(26)
+  for every cell do
+    local score = product of scores of values and all relevant restrictions
+    if phonemes_wanted > 0 then
+      insert into inventory sorted
+      phonemes_wanted = phonemes_wanted - 1
+    elseif inventory[1].score < score then
+      insert into inventory sorted
+    end
+  end
+  return inventory
+end
+]]
+
+--TODO: docs
+function _random_inventory(phonology, seed)
+  local rng = dfhack.random.new(seed)
+  -- TODO: random min_peak_sonority based on tree
+  local min_peak_sonority = 2
+  -- TODO: more realistic size distribution
+  local frontier = {}
+  local inventory = {{sonority=0}}
+  for i, node in pairs(phonology.nodes) do
+    if node.parent == 0 then
+      inventory[1][i] = true
+    elseif inventory[1][phonology.nodes[i].parent] then
+      table.insert(frontier, i)
+    end
+  end
+  local implications = {}
+  local phonemes_wanted = 10 + rng:random(26)
+  local nuclei_wanted = 3 --// + math.min(rng:random(8), phonemes_wanted / 2)
+  while ((#inventory < phonemes_wanted or nuclei_wanted > 0) and
+         #frontier ~= 0) do
+    print('nuclei wanted: ' .. nuclei_wanted)
+    --[[
+    print('frontier: '..#frontier)
+    for _, i in pairs(frontier) do
+      print('  '..phonology.nodes[i].name)
+    end
+    ]]
+    -- pick something out of the frontier
+    local frontier_index = 1 + rng:random(#frontier)
+    local node_index = frontier[frontier_index]
+    print('pick '..phonology.nodes[node_index].name)
+    local node_sonority = phonology.nodes[node_index].sonorous and 1 or 0
+    -- replace it in the frontier with its children
+    table.remove(frontier, frontier_index)
+    add_child_nodes(frontier, node_index, phonology.nodes)
+    -- Randomly add to implications
+    local new_implication_index = #implications + 1
+    add_random_implications(rng, phonology.implications, implications,
+                            inventory, node_index)
+    print('implications: ' .. #implications .. '/' .. #phonology.implications)
+    printall(implications)
+    -- add new phonemes to the inventory
+    local old_inventory = copyall(inventory)
+    inventory = {}
+    for _, phoneme in pairs(old_inventory) do
+      for i = 1, #phoneme do
+        if phonology.nodes[i].feature then
+          print('  ' .. (phoneme[i] and '+' or '-') .. phonology.nodes[i].name)
+        end
+      end
+      local parent = phonology.nodes[node_index].parent
+      if ((parent == 0 or phoneme[parent]) and
+          (#inventory < phonemes_wanted or nuclei_wanted <= 0 or
+           (phoneme.sonority + node_sonority >= min_peak_sonority))) then
+        local plus_okay, minus_okay =
+          is_phoneme_okay(phoneme, node_index, new_implication_index,
+                          implications)
+        print(tostring(plus_okay), tostring(minus_okay))
+        if plus_okay then
+          local new_phoneme = copyall(phoneme)
+          new_phoneme[node_index] = true
+          new_phoneme.sonority = new_phoneme.sonority + node_sonority
+          table.insert(inventory, new_phoneme)
+          if new_phoneme.sonority >= min_peak_sonority then
+            nuclei_wanted = nuclei_wanted - 1
+          end
+        end
+        if minus_okay then
+          local new_phoneme = copyall(phoneme)
+          new_phoneme[node_index] = false
+          table.insert(inventory, new_phoneme)
+        end
+      end
+    end
+    print(#old_inventory .. ' -> ' .. #inventory)
+    if #old_inventory > #inventory then
+      inventory = old_inventory
+    end
+  end
+  return inventory
+end
+
+--[[
+Randomly generates a word for a language.
+
+Args:
+  language: A language.
+  parameters: A language parameter table.
+
+Returns:
+  A word.
+]]
 function random_word(language, parameters)
   local phonology = phonologies[language.ints[3]]
   -- TODO: random sonority parameters
@@ -917,7 +1641,7 @@ function random_word(language, parameters)
       parameters.inventory[math.random(#parameters.inventory)]
     local phoneme = phoneme_and_sonority[1]
     local sonority = phoneme_and_sonority[2]
---    print('phoneme: ' .. s_form(phonology, {phoneme}) .. ' (' .. sonority .. ')')
+--    print('phoneme: ' .. get_lemma(phonology, {phoneme}) .. ' (' .. sonority .. ')')
     local use_phoneme = true
     local sonority_delta = sonority - prev_sonority
 --    print('peak sonority: ' .. peak_sonority)
@@ -942,9 +1666,10 @@ function random_word(language, parameters)
       table.insert(word, phoneme)
     end
   end
-  return serialize(#phonology.nodes, word), s_form(phonology, word)
+  return serialize(#phonology.nodes, word), get_lemma(phonology, word)
 end
 
+-- TODO: doc
 function update_word(resource_id, word, noun_sing, noun_plur, adj,
                      resource_functions)
   if noun_sing ~= '' and noun_sing ~= 'n/a' then
@@ -994,6 +1719,7 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
   end
 end
 
+-- TODO: doc
 function expand_lexicons()
   local raws = df.global.world.raws
   local words = raws.language.words
@@ -1212,24 +1938,48 @@ function expand_lexicons()
   -- TODO: descriptors
 end
 
-function validate_scope(scope, declared_scope)
-  if not (scope == 'UTTERANCE' or scope == 'WORD' or scope == 'MORPHEME' or
-          scope == 'SYLLABLE' or scope == 'ONSET' or scope == 'NUCLEUS' or
-          scope == 'CODA') then
-    qerror('Unknown scope: ' .. scope)
+--[[
+Validates a boundary.
+
+If the given boundary is not a legal boundary, or if the given boundary
+is the given scope, it raises an error.
+
+Args:
+  boundary: A string, which might be a boundary.
+  scope: A boundary, or nil if the scope has not been set.
+]]
+function validate_boundary(boundary, scope)
+  if not (boundary == 'UTTERANCE' or boundary == 'WORD' or
+          boundary == 'MORPHEME' or boundary == 'SYLLABLE' or
+          boundary == 'ONSET' or boundary == 'NUCLEUS' or
+          boundary == 'CODA') then
+    qerror('Unknown boundary: ' .. boundary)
   end
-  if scope == declared_scope then
-    qerror('Repeated scope: ' .. scope)
+  if boundary == scope then
+    qerror('Repeated boundary: ' .. boundary)
   end
 end
 
-function dominates(node_index1, node_index2, nodes)
-  if node_index1 == node_index2 then
+--[[
+Determines whether one node dominates another.
+
+Every node dominates itself.
+
+Args:
+  index_1: The index of a node in `nodes`.
+  index_2: The index of a node in `nodes`.
+  nodes: A sequence of nodes.
+
+Returns:
+  Whether `nodes[index_1]` dominates `nodes[index_2]`.
+]]
+function dominates(index_1, index_2, nodes)
+  if index_1 == index_2 then
     return true
-  elseif node_index2 < node_index1 then
+  elseif index_2 < index_1 then
     return false
   end
-  return dominates(node_index1, nodes[node_index2].parent, nodes)
+  return dominates(index_1, nodes[index_2].parent, nodes)
 end
 
 if TEST then
@@ -1291,10 +2041,10 @@ end
 --[[
 Loads all phonology raw files into `phonologies`.
 
-The raw files must match 'phonology_.txt'.
+The raw files must match 'phonology_*.txt'.
 ]]
 function load_phonologies()
-  local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir .. '/raw/objects'
+  local dir = dfhack.getSavePath() .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
     if (dfhack.filesystem.isfile(path) and
@@ -1305,6 +2055,7 @@ function load_phonologies()
       -- TODO: '\n'-terminated tokens trim trailing whitespace.
       local current_phonology = nil
       local current_parent = 0
+      local current_dimension = 0
       for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
         local subtags = {}
         for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
@@ -1329,7 +2080,8 @@ function load_phonologies()
               qerror('Duplicate phonology: ' .. subtags[2])
             end
             table.insert(phonologies,
-                         {name=subtags[2], nodes={}, symbols={}, affixes={},
+                         {name=subtags[2], nodes={}, implications={},
+                          symbols={}, affixes={},
                           constraints={{type='Max'}, {type='Dep'}}})
             current_phonology = phonologies[#phonologies]
           elseif subtags[1] == 'NODE' then
@@ -1340,33 +2092,60 @@ function load_phonologies()
               qerror('Wrong number of subtags: ' .. tag)
             end
             local sonorous = false
+            local feature_class = current_parent == 0 and FEATURE_CLASS_NEUTRAL
+              or current_phonology.nodes[current_parent].feature_class
+            local feature = true
+            local scalar = DEFAULT_NODE_SCALAR
             local add_symbol = nil
             local remove_symbol = nil
             local i = 3
             while i <= #subtags do
               if subtags[i] == 'SONOROUS' then
                 sonorous = true
+              elseif subtags[i] == 'VOWEL' then
+                feature_class = FEATURE_CLASS_VOWEL
+              elseif subtags[i] == 'CONSONANT' then
+                feature_class = FEATURE_CLASS_CONSONANT
+              elseif subtags[i] == 'CLASS' then
+                if (current_parent ~= 0 and
+                    current_phonology.nodes[current_parent].feature) then
+                  qerror(subtags[2] .. ' cannot be a class node because ' ..
+                         current_phonology.nodes[current_parent].name ..
+                         ', its parent, is a feature node')
+                end
+                feature = false
+              elseif subtags[i] == 'SCALE' then
+                if i == #subtags then
+                  qerror('No scalar specified for node ' .. subtags[2])
+                end
+                i = i + 1
+                scalar = tonumber(subtags[i])
               elseif subtags[i] == 'ADD' then
                 if i == #subtags then
                   qerror('No symbol specified for node ' .. subtags[2])
                 end
                 i = i + 1
-                add_symbol = subtags[i]
+                add_symbol = unescape(subtags[i])
               elseif subtags[i] == 'REMOVE' then
                 if i == #subtags then
                   qerror('No symbol specified for node ' .. subtags[2])
                 end
                 i = i + 1
-                remove_symbol = subtags[i]
+                remove_symbol = unescape(subtags[i])
               else
                 qerror('Unknown subtag ' .. subtags[i])
               end
               i = i + 1
             end
+            if current_parent == 0 then
+              current_dimension = current_dimension + 1
+            end
             table.insert(current_phonology.nodes,
                          {name=subtags[2], parent=current_parent,
                           add=add_symbol, remove=remove_symbol,
-                          sonorous=sonorous})
+                          sonorous=sonorous, feature_class=feature_class,
+                          dimension=current_dimension, feature=feature,
+                          scalar=scalar, score=0})
             current_parent = #current_phonology.nodes
             table.insert(current_phonology.constraints,
                          {type='Ident', feature=#current_phonology.nodes})
@@ -1380,7 +2159,68 @@ function load_phonologies()
             if current_parent == 0 then
               qerror('Misplaced END tag')
             end
+            local children = {}
+            local i = #current_phonology.nodes
+            while i > 0 do
+              if current_phonology.nodes[i].parent == current_parent then
+                table.insert(children, current_phonology.nodes[i])
+                i = i - 1
+              else
+                i = current_phonology.nodes[i].parent
+              end
+            end
+            local score = 1 / (#children + 1)
+            for _, child in pairs(children) do
+              child.score = score
+            end
             current_parent = current_phonology.nodes[current_parent].parent
+          elseif subtags[1] == 'IMPLIES' then
+            if not current_phonology then
+              qerror('Orphaned IMPLIES tag: ' .. tag)
+            end
+            if #subtags ~= 5 and #subtags ~= 6 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local ante_val = true
+            if subtags[2] == '-' then
+              ante_val = false
+            elseif subtags[2] ~= '+' then
+              qerror('Antecedent value must be + or -: ' .. tag)
+            end
+            local cons_val = true
+            if subtags[4] == '-' then
+              cons_val = false
+            elseif subtags[4] ~= '+' then
+              qerror('Consequent value must be + or -: ' .. tag)
+            end
+            local ante = utils.linear_index(current_phonology.nodes,
+                                            subtags[3], 'name')
+            if not ante then
+              qerror('No such node: ' .. subtags[3])
+            elseif not current_phonology.nodes[ante].feature then
+              qerror('Node must not be a class node: ' .. subtags[3])
+            end
+            local cons = utils.linear_index(current_phonology.nodes,
+                                            subtags[5], 'name')
+            if not cons then
+              qerror('No such node: ' .. subtags[5])
+            elseif not current_phonology.nodes[cons].feature then
+              qerror('Node must not be a class node: ' .. subtags[5])
+            end
+            if ante == cons then
+              qerror('Same node twice in one implication: ' .. subtags[3])
+            elseif cons < ante then
+              ante, cons = cons, ante
+              ante_val, cons_val = not cons_val, not ante_val
+            end
+            local prob = tonumber(subtags[6]) or DEFAULT_IMPLICATION_PROBABILITY
+            if prob < 0 then
+              qerror('Probability must not be negative: ' .. subtags[6])
+            end
+            table.insert(
+              current_phonology.implications,
+              {ante_val=ante_val, ante=ante, cons_val=cons_val, cons=cons,
+               prob=prob})
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned SYMBOL tag: ' .. tag)
@@ -1400,7 +2240,7 @@ function load_phonologies()
               nodes[n] = true
               i = i + 1
             end
-            current_phonology.symbols[subtags[2]] = nodes
+            current_phonology.symbols[unescape(subtags[2])] = nodes
           elseif subtags[1] == 'CONSTRAINT' then
             if not current_phonology then
               qerror('Orphaned CONSTRAINT tag: ' .. tag)
@@ -1416,7 +2256,7 @@ function load_phonologies()
                   qerror('Incomplete boundary: ' .. tag)
                 end
                 local boundary = subtags[i + 1]
-                validate_scope(boundary, scope)
+                validate_boundary(boundary, scope)
                 insert_skip(constraint, domain, scope, boundary)
                 table.insert(constraint, {type='boundary', boundary=boundary})
                 i = i + 1
@@ -1443,7 +2283,7 @@ function load_phonologies()
                   qerror('No scope for constraint: ' .. tag)
                 end
                 scope = subtags[i + 1]
-                validate_scope(scope)
+                validate_boundary(scope)
                 i = i + 1
               elseif subtags[i] == 'THEN' then
                 insert_skip(constraint, domain, scope)
@@ -1536,8 +2376,7 @@ of the historical figure in the civilization's language.
 ]]
 function load_fluency_data()
   fluency_data = {}
-  local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
-                       '/raw/objects/fluency_data.txt')
+  local file = io.open(dfhack.getSavePath() .. '/raw/objects/fluency_data.txt')
   if file then
     for line in file:lines() do
       local fields = utils.split_string(line, ' ')
@@ -1564,8 +2403,8 @@ The documentation for `load_fluency_data` describes the file and its
 format.
 ]]
 function write_fluency_data()
-  local file = io.open('data/save/' .. df.global.world.cur_savegame.save_dir ..
-                       '/raw/objects/fluency_data.txt', 'w')
+  local file = io.open(dfhack.getSavePath() .. '/raw/objects/fluency_data.txt',
+                       'w')
   if file then
     for hf_id, hf_data in pairs(fluency_data) do
       for civ_id, fluency_record in pairs(hf_data) do
@@ -1677,8 +2516,7 @@ Overwrites the default language files in the raws directory.
 The new files use the same format but contain additional data.
 ]]
 function overwrite_language_files()
-  local dir = 'data/save/' .. df.global.world.cur_savegame.save_dir ..
-    '/raw/objects'
+  local dir = dfhack.getSavePath() .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
     if dfhack.filesystem.isfile(path) then
@@ -2397,6 +3235,62 @@ if #args >= 1 then
     if timer then
       dfhack.timeout_active(timer, nil)
     end
+  elseif args[1] == 'test' then
+    phonologies = nil
+    load_phonologies()
+    local rng = dfhack.random.new(134)
+    --[[
+    local combinations = get_combinations(phonologies[1].nodes, utils.linear_index(phonologies[1].nodes, 'PLACE', 'name'), phonologies[1].implications)
+    local q = 100
+    for i, com in ipairs(combinations) do
+      if com.score ~= 0 then
+        if q <= 0 then break end
+        q = q - 1
+        print('\nscore: '..com.score)
+        for _, x in ipairs(com) do
+          print('\t'..phonologies[1].nodes[x].name)
+        end
+      end
+    end
+    print('total combos: '..#combinations)
+    print('total score:  '..combinations.total)
+    ]]
+    local dims = random_dimensions_2(rng, phonologies[1])
+    --[[
+    print('total dims: '..#dims)
+    local dim = dims[1]
+    while true do
+      local ci = dim.next()
+      if ci == nil then break end
+      local com = dim.combinations[ci]
+      print('\n' .. com.feature_class)
+      for _, x in ipairs(com) do
+        print('\t'..phonologies[1].nodes[x].name)
+      end
+    end
+    ]]
+    --local inv = random_inventory_2(phonologies[1], rng, dims, 10)
+    local inv = random_inventory_top(phonologies[1], 2553)
+    for _, ph in pairs(inv) do
+      print('\n'..get_lemma(phonologies[1], {ph}))
+      for i = 1, #phonologies[1].nodes do
+        if ph[i] and phonologies[1].nodes[i].feature then
+          print('\t'..phonologies[1].nodes[i].name)
+        end
+      end
+    end
+    print(#inv)
+    --[[
+    local inv = random_inventory(phonologies[1], 113)
+    for i, ph in pairs(inv) do
+      print(i..' ['..ph.sonority..'] '..get_lemma(phonologies[1], {ph}))
+      for n, v in ipairs(ph) do
+        if phonologies[1].nodes[n].parent ~= 0 then
+          print('\t'..phonologies[1].nodes[n].name, v)
+        end
+      end
+    end
+    ]]
   else
     usage()
   end
