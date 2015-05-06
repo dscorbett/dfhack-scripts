@@ -202,40 +202,39 @@ function translate(language, topic, topic1, topic2, topic3)
   local word
   if topic == true then
     word = 'FORCE_GOODBYE'
-  -- TODO: df.talk_choice_type.Greet etc. instead of numbers with comments
-  elseif topic == 0 then  -- Greet
+  elseif topic == df.talk_choice_type.Greet then
     word = 'GREETINGS'
   --[[
-  elseif topic == 1 then  -- Nevermind
-  elseif topic == 2 then  -- Trade
-  elseif topic == 3 then  -- AskJoin
-  elseif topic == 4 then  -- AskSurroundings
+  elseif topic == df.talk_choice_type.Nevermind then
+  elseif topic == df.talk_choice_type.Trade then
+  elseif topic == df.talk_choice_type.AskJoin then
+  elseif topic == df.talk_choice_type.AskSurroundings then
   ]]
-  elseif topic == 5 then  -- SayGoodbye
+  elseif topic == df.talk_choice_type.SayGoodbye then
     word = 'GOODBYE'
   --[[
-  elseif topic == 6 then  -- AskStructure
-  elseif topic == 7 then  -- AskFamily
-  elseif topic == 8 then  -- AskProfession
-  elseif topic == 9 then  -- AskPermissionSleep
-  elseif topic == 10 then  -- AccuseNightCreature
-  elseif topic == 11 then  -- AskTroubles
-  elseif topic == 12 then  -- BringUpEvent
-  elseif topic == 13 then  -- SpreadRumor
-  elseif topic == 14 then  -- ReplyGreeting
-  elseif topic == 15 then  -- RefuseConversation
-  elseif topic == 16 then  -- ReplyImpersonate
-  elseif topic == 17 then  -- BringUpIncident
-  elseif topic == 18 then  -- TellNothingChanged
-  elseif topic == 19 then  -- Goodbye2
-  elseif topic == 20 then  -- ReturnTopic
-  elseif topic == 21 then  -- ChangeSubject
-  elseif topic == 22 then  -- AskTargetAction
-  elseif topic == 23 then  -- RequestSuggestAction
-  elseif topic == 24 then  -- AskJoinInsurrection
-  elseif topic == 25 then  -- AskJoinRescue
+  elseif topic == df.talk_choice_type.AskStructure then
+  elseif topic == df.talk_choice_type.AskFamily then
+  elseif topic == df.talk_choice_type.AskProfession then
+  elseif topic == df.talk_choice_type.AskPermissionSleep then
+  elseif topic == df.talk_choice_type.AccuseNightCreature then
+  elseif topic == df.talk_choice_type.AskTroubles then
+  elseif topic == df.talk_choice_type.BringUpEvent then
+  elseif topic == df.talk_choice_type.SpreadRumor then
+  elseif topic == df.talk_choice_type.ReplyGreeting then
+  elseif topic == df.talk_choice_type.RefuseConversation then
+  elseif topic == df.talk_choice_type.ReplyImpersonate then
+  elseif topic == df.talk_choice_type.BringUpIncident then
+  elseif topic == df.talk_choice_type.TellNothingChanged then
+  elseif topic == df.talk_choice_type.Goodbye2 then
+  elseif topic == df.talk_choice_type.ReturnTopic then
+  elseif topic == df.talk_choice_type.ChangeSubject then
+  elseif topic == df.talk_choice_type.AskTargetAction then
+  elseif topic == df.talk_choice_type.RequestSuggestAction then
+  elseif topic == df.talk_choice_type.AskJoinInsurrection then
+  elseif topic == df.talk_choice_type.AskJoinRescue then
   ]]
-  elseif topic == 26 then  -- StateOpinion
+  elseif topic == df.talk_choice_type.StateOpinion then
     if topic1 == 0 then
       word = 'VIOLENT'
     elseif topic1 == 2 then
@@ -248,79 +247,152 @@ function translate(language, topic, topic1, topic2, topic3)
       -- TODO: more opinions
       word = 'OPINION'
     end
+  -- elseif topic == 28 then
+  -- elseif topic == 29 then
   --[[
-  elseif topic == 29 then  -- AllowPermissionSleep
-  elseif topic == 30 then  -- DenyPermissionSleep
-  elseif topic == 32 then  -- AskJoinAdventure
-  elseif topic == 33 then  -- AskGuideLocation
-  elseif topic == 34 then  -- RespondJoin
-  elseif topic == 35 then  -- RespondJoin2
-  elseif topic == 36 then  -- OfferCondolences
-  elseif topic == 37 then  -- StateNotAcquainted
-  elseif topic == 38 then  -- SuggestTravel
-  elseif topic == 39 then  -- SuggestTalk
-  elseif topic == 40 then  -- SuggestSelfRescue
-  elseif topic == 41 then  -- AskWhatHappened
-  elseif topic == 42 then  -- AskBeRescued
-  elseif topic == 43 then  -- SayNotRemember
-  elseif topic == 45 then  -- SayNoFamily
-  elseif topic == 46 then  -- StateUnitLocation
-  elseif topic == 47 then  -- ReferToElder
-  elseif topic == 48 then  -- AskComeCloser
-  elseif topic == 49 then  -- DoBusiness
-  elseif topic == 50 then  -- AskComeStoreLater
-  elseif topic == 51 then  -- AskComeMarketLater
-  elseif topic == 52 then  -- TellTryShopkeeper
-  elseif topic == 53 then  -- DescribeSurroundings
-  elseif topic == 54 then  -- AskWaitUntilHome
-  elseif topic == 55 then  -- DescribeFamily
-  elseif topic == 56 then  -- StateAge
-  elseif topic == 57 then  -- DescribeProfession
-  elseif topic == 58 then  -- AnnounceNightCreature
-  elseif topic == 59 then  -- StateIncredulity
-  elseif topic == 60 then  -- BypassGreeting
-  elseif topic == 61 then  -- AskCeaseHostilities
-  elseif topic == 62 then  -- DemandYield
-  elseif topic == 63 then  -- HawkWares
-  elseif topic == 64 then  -- YieldTerror
-  elseif topic == 65 then  -- Yield
-  elseif topic == 66 then  -- ExpressOverwhelmingEmotion
-  elseif topic == 67 then  -- ExpressGreatEmotion
-  elseif topic == 68 then  -- ExpressionEmotion
-  elseif topic == 69 then  -- ExpressMinorEmotion
-  elseif topic == 70 then  -- ExpressLackEmotion
-  elseif topic == 71 then  -- OutburstFleeConflict
-  elseif topic == 72 then  -- StateFleeConflict
-  elseif topic == 73 then  -- MentionJourney
-  elseif topic == 74 then  -- SummarizeTroubles
-  elseif topic == 75 then  -- AskAboutIncident
-  elseif topic == 76 then  -- AskDirectionsPerson
-  elseif topic == 77 then  -- AskDirectionsPlace
-  elseif topic == 78 then  -- AskWhereabouts
-  elseif topic == 79 then  -- RequestGuide
-  elseif topic == 80 then  -- RequestGuide2
-  elseif topic == 81 then  -- ProvideDirections
-  elseif topic == 82 then  -- ProvideWhereabouts
-  elseif topic == 83 then  -- TellTargetSelf
-  elseif topic == 84 then  -- TellTargetDead
-  elseif topic == 85 then  -- RecommentGuide
-  elseif topic == 86 then  -- ProfessIgnorance
-  elseif topic == 87 then  -- TellAboutPlace
-  elseif topic == 88 then  -- AskFavorMenu
-  elseif topic == 89 then  -- AskWait
-  elseif topic == 90 then  -- AskFollow
-  elseif topic == 91 then  -- ApologizeBusy
-  elseif topic == 92 then  -- ComplyOrder
-  elseif topic == 93 then  -- AgreeFollow
-  elseif topic == 94 then  -- ExchangeItems
-  elseif topic == 95 then  -- AskComeCloser2
-  elseif topic == 96 then  -- InitiateBarter
-  elseif topic == 97 then  -- AgreeCeaseHostile
-  elseif topic == 98 then  -- RefuseCeaseHostile
-  elseif topic == 99 then  -- RefuseCeaseHostile2
+  elseif topic == df.talk_choice_type.AllowPermissionSleep then
+  elseif topic == df.talk_choice_type.DenyPermissionSleep then
+  -- elseif topic == 32 then
+  elseif topic == df.talk_choice_type.AskJoinAdventure then
+  elseif topic == df.talk_choice_type.AskGuideLocation then
+  elseif topic == df.talk_choice_type.RespondJoin then
+  elseif topic == df.talk_choice_type.RespondJoin2 then
+  elseif topic == df.talk_choice_type.OfferCondolences then
+  elseif topic == df.talk_choice_type.StateNotAcquainted then
+  elseif topic == df.talk_choice_type.SuggestTravel then
+  elseif topic == df.talk_choice_type.SuggestTalk then
+  elseif topic == df.talk_choice_type.RequestSelfRescue then
+  elseif topic == df.talk_choice_type.AskWhatHappened then
+  elseif topic == df.talk_choice_type.AskBeRescued then
+  elseif topic == df.talk_choice_type.SayNotRemember then
+  -- elseif topic == 45 then
+  elseif topic == df.talk_choice_type.SayNoFamily then
+  elseif topic == df.talk_choice_type.StateUnitLocation then
+  elseif topic == df.talk_choice_type.ReferToElder then
+  elseif topic == df.talk_choice_type.AskComeCloser then
+  elseif topic == df.talk_choice_type.DoBusiness then
+  elseif topic == df.talk_choice_type.AskComeStoreLater then
+  elseif topic == df.talk_choice_type.AskComeMarketLater then
+  elseif topic == df.talk_choice_type.TellTryShopkeeper then
+  elseif topic == df.talk_choice_type.DescribeSurroundings then
+  elseif topic == df.talk_choice_type.AskWaitUntilHome then
+  elseif topic == df.talk_choice_type.DescribeFamily then
+  elseif topic == df.talk_choice_type.StateAge then
+  elseif topic == df.talk_choice_type.DescribeProfession then
+  elseif topic == df.talk_choice_type.AnnounceNightCreature then
+  elseif topic == df.talk_choice_type.StateIncredulity then
+  elseif topic == df.talk_choice_type.BypassGreeting then
+  elseif topic == df.talk_choice_type.AskCeaseHostilities then
+  elseif topic == df.talk_choice_type.DemandYield then
+  elseif topic == df.talk_choice_type.HawkWares then
+  elseif topic == df.talk_choice_type.YieldTerror then
+  elseif topic == df.talk_choice_type.Yield then
+  elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
+  elseif topic == df.talk_choice_type.ExpressGreatEmotion then
+  elseif topic == df.talk_choice_type.ExpressEmotion then
+  elseif topic == df.talk_choice_type.ExpressMinorEmotion then
+  elseif topic == df.talk_choice_type.ExpressLackEmotion then
+  elseif topic == df.talk_choice_type.OutburstFleeConflict then
+  elseif topic == df.talk_choice_type.StateFleeConflict then
+  elseif topic == df.talk_choice_type.MentionJourney then
+  elseif topic == df.talk_choice_type.SummarizeTroubles then
+  elseif topic == df.talk_choice_type.AskAboutIncident then
+  elseif topic == df.talk_choice_type.AskDirectionsPerson then
+  elseif topic == df.talk_choice_type.AskDirectionsPlace then
+  elseif topic == df.talk_choice_type.AskWhereabouts then
+  elseif topic == df.talk_choice_type.RequestGuide then
+  elseif topic == df.talk_choice_type.RequestGuide2 then
+  elseif topic == df.talk_choice_type.ProvideDirections then
+  elseif topic == df.talk_choice_type.ProvideWhereabouts then
+  elseif topic == df.talk_choice_type.TellTargetSelf then
+  elseif topic == df.talk_choice_type.TellTargetDead then
+  elseif topic == df.talk_choice_type.RecommendGuide then
+  elseif topic == df.talk_choice_type.ProfessIgnorance then
+  elseif topic == df.talk_choice_type.TellAboutPlace then
+  elseif topic == df.talk_choice_type.AskFavorMenu then
+  elseif topic == df.talk_choice_type.AskWait then
+  elseif topic == df.talk_choice_type.AskFollow then
+  elseif topic == df.talk_choice_type.ApologizeBusy then
+  elseif topic == df.talk_choice_type.ComplyOrder then
+  elseif topic == df.talk_choice_type.AgreeFollow then
+  elseif topic == df.talk_choice_type.ExchangeItems then
+  elseif topic == df.talk_choice_type.AskComeCloser2 then
+  elseif topic == df.talk_choice_type.InitiateBarter then
+  elseif topic == df.talk_choice_type.AgreeCeaseHostile then
+  elseif topic == df.talk_choice_type.RefuseCeaseHostile then
+  elseif topic == df.talk_choice_type.RefuseCeaseHostile2 then
+  elseif topic == df.talk_choice_type.RefuseYield then
+  elseif topic == df.talk_choice_type.RefuseYield2 then
+  elseif topic == df.talk_choice_type.Brag then
+  elseif topic == df.talk_choice_type.DescribeRelation then
+  -- elseif topic == 105 then
+  elseif topic == df.talk_choice_type.AnnounceLairHunt then
+  elseif topic == df.talk_choice_type.RequestDuty then
+  elseif topic == df.talk_choice_type.AskJoinService then
+  elseif topic == df.talk_choice_type.AcceptService then
+  elseif topic == df.talk_choice_type.TellRemainVigilant then
+  elseif topic == df.talk_choice_type.GiveServiceOrder then
+  elseif topic == df.talk_choice_type.WelcomeSelfHome then
+  -- elseif topic == 113 then
+  elseif topic == df.talk_choice_type.AskTravelReason then
+  elseif topic == df.talk_choice_type.TellTravelReason then
+  elseif topic == df.talk_choice_type.AskLocalRuler then
+  elseif topic == df.talk_choice_type.ComplainAgreement then
+  elseif topic == df.talk_choice_type.CancelAgreement then
+  elseif topic == df.talk_choice_type.SummarizeConflict then
+  elseif topic == df.talk_choice_type.SummarizeViews then
+  elseif topic == df.talk_choice_type.AskClaimStrength then
+  elseif topic == df.talk_choice_type.AskArmyPosition then
+  elseif topic == df.talk_choice_type.AskOtherClaims then
+  elseif topic == df.talk_choice_type.AskDeserters then
+  elseif topic == df.talk_choice_type.AskSiteNeighbors then
+  elseif topic == df.talk_choice_type.DescribeSiteNeighbors then
+  elseif topic == df.talk_choice_type.RaiseAlarm then
+  elseif topic == df.talk_choice_type.DemandDropWeapon then
+  elseif topic == df.talk_choice_type.AgreeComplyDemand then
+  elseif topic == df.talk_choice_type.RefuseComplyDemand then
+  elseif topic == df.talk_choice_type.AskLocationObject then
+  elseif topic == df.talk_choice_type.DemandTribute then
+  elseif topic == df.talk_choice_type.AgreeGiveTribute then
+  elseif topic == df.talk_choice_type.RefuseGiveTribute then
+  elseif topic == df.talk_choice_type.OfferGiveTribute then
+  elseif topic == df.talk_choice_type.AgreeAcceptTribute then
+  elseif topic == df.talk_choice_type.RefuseAcceptTribute then
+  elseif topic == df.talk_choice_type.CancelTribute then
+  elseif topic == df.talk_choice_type.OfferPeace then
+  elseif topic == df.talk_choice_type.AgreePeace then
+  elseif topic == df.talk_choice_type.RefusePeace then
+  elseif topic == df.talk_choice_type.AskTradeDepotLater then
+  elseif topic == df.talk_choice_type.ExpressAstonishment then
+  elseif topic == df.talk_choice_type.CommentWeather then
+  elseif topic == df.talk_choice_type.CommentNature then
+  elseif topic == df.talk_choice_type.SummarizeTerritory then
+  elseif topic == df.talk_choice_type.SummarizePatrols then
+  elseif topic == df.talk_choice_type.SummarizeOpposition then
+  elseif topic == df.talk_choice_type.DescribeRefugees then
+  elseif topic == df.talk_choice_type.AccuseTroublemaker then
+  elseif topic == df.talk_choice_type.AskAdopt then
+  elseif topic == df.talk_choice_type.AgreeAdopt then
+  elseif topic == df.talk_choice_type.RefuseAdopt then
+  elseif topic == df.talk_choice_type.RevokeService then
+  elseif topic == df.talk_choice_type.InviteService then
+  elseif topic == df.talk_choice_type.AcceptInviteService then
+  elseif topic == df.talk_choice_type.RefuseShareInformation then
+  elseif topic == df.talk_choice_type.RefuseInviteService then
+  elseif topic == df.talk_choice_type.RefuseRequestService then
+  elseif topic == df.talk_choice_type.OfferService then
+  elseif topic == df.talk_choice_type.AcceptPositionService then
+  elseif topic == df.talk_choice_type.RefusePositionService then
+  elseif topic == df.talk_choice_type.InvokeNameBanish then
+  elseif topic == df.talk_choice_type.InvokeNameService then
+  elseif topic == df.talk_choice_type.GrovelMaster then
+  elseif topic == df.talk_choice_type.DemandItem then
+  elseif topic == df.talk_choice_type.GiveServiceReport then
+  elseif topic == df.talk_choice_type.OfferEncouragement then
+  elseif topic == df.talk_choice_type.PraiseTaskCompleter then
   ]]
   else
-    -- TODO: more topics
+    -- TODO: This should never happen, once the above are uncommented.
     word = 'BLAH_BLAH_BLAH'
   end
   local languages = df.global.world.raws.language
@@ -1553,7 +1625,7 @@ function update_word(resource_id, word, noun_sing, noun_plur, adj,
     word.flags.the_compound_adj = true
   end
   for _, entity in pairs(df.global.world.entities.all) do
-    if entity.type == 0 then  -- Civilization
+    if entity.type == df.historical_entity_type.Civilization then
       local language = civ_native_language(entity)
       local parameters = parameter_sets[entity.id]
       if not parameters then
@@ -2849,7 +2921,8 @@ function babel()
     if #df.global.world.entities.all > entities_done then
       print('\nent: ' .. #df.global.world.entities.all .. '>' .. entities_done)
       for i = entities_done, #df.global.world.entities.all - 1 do
-        if df.global.world.entities.all[i].type == 0 then  -- Civilization
+        if (df.global.world.entities.all[i].type ==
+            df.historical_entity_type.Civilization) then
           create_language(df.global.world.entities.all[i])
         end
         df.global.world.entities.all[i].name.nickname = 'Ent' .. i
@@ -2940,7 +3013,8 @@ function babel()
         local report = reports[i]
         local announcement_index = utils.linear_index(announcements,
                                                       report.id, 'id')
-        if report.unk_v40_1 == -1 or df.global.gamemode ~= 1 then  -- ADVENTURE
+        if (report.unk_v40_1 == -1 or
+            df.global.gamemode ~= df.game_mode.ADVENTURE) then
           -- TODO: Combat logs in Fortress mode can have conversations.
           print('  not a conversation: ' .. report.text)
           report.id = report.id + id_delta
