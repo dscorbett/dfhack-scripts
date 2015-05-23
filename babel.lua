@@ -77,17 +77,27 @@ A conjunction of conditions which can apply to a unit. Each key in the
 table can be nil, in which case that condition always applies. If all
 the conditions apply to a unit, the articulator is present in that unit.
   bp: A body part token string. The unit must have a body part with this
-    token.
+    token. Example: 'U_LIP'.
   bp_category: A body part category string. The unit must have a body
-    part with this category.
+    part with this category. Example: 'LIP'.
+  bp_flag: A body part flag. The unit must have a body part with this
+    flag. Example: 'HEAR'. At most one of `bp`, `bp_category`, and
+    `bp_flag` can be non-nil.
   creature_index: An index into `df.global.world.raws.creatures.all`.
     The unit must be an instance of the creature at this index.
   creature_class: A creature class string. The unit must be an instance
-    of a creature of this creature class.
+    of a creature of this creature class. Example: 'GENERAL_POISON'.
+  creature_flag: A creature flag. The unit must be an instance of a
+    creature with this flag. Example: 'FANCIFUL'. At most one of
+    `creature_index`, `creature_class`, and `creature_flag` can be
+    non-nil.
   caste_index: An index into
     `df.global.world.raws.creatures.all[creature_index].caste`. The
     unit's caste must be at this index. If `creature_index` is nil,
     this field must be too.
+  caste_flag: A caste flag. The unit's caste must have this flag.
+    Example: 'EXTRAVISION'. At most one of `caste_index` and
+    `caste_flag` can be non-nil.
 
 Node:
   name: A string, used only for parsing the phonology raw file.
@@ -1360,6 +1370,10 @@ function can_articulate(creature_index, articulators)
            creature_index ~= articulator.creature_index) or
           (articulator.caste_index and
            caste_index ~= articulator.caste_index) or
+          (articulator.creature_flag and
+           not creature.flags[articulator.creature_flag]) or
+          (articulator.caste_flag and
+           not caste.flags[articulator.caste_flag]) or
           (articulator.creature_class and not utils.linear_index(
            caste.creature_class, articulator.creature_class, 'value'))) then
         castes_okay = false
@@ -1367,7 +1381,8 @@ function can_articulate(creature_index, articulators)
       end
       local bp_applies = not articulator.bp
       local bp_category_applies = not articulator.bp_category
-      if not (bp_applies and bp_category_applies) then
+      local bp_flag_applies = not articulator.bp_flag
+      if not (bp_applies and bp_category_applies and bp_flag_applies) then
         for _, bp in ipairs(caste.body_info.body_parts) do
           if bp.token == articulator.bp then
             bp_applies = true
@@ -1375,10 +1390,13 @@ function can_articulate(creature_index, articulators)
           elseif bp.category == articulator.bp_category then
             bp_category_applies = true
             break
+          elseif articulator.bp_flag and bp.flags[articulator.bp_flag] then
+            bp_flag_applies = true
+            break
           end
         end
       end
-      if not (bp_applies and bp_category_applies) then
+      if not (bp_applies and bp_category_applies and bp_flag_applies) then
         castes_okay = false
         break
       end
@@ -1393,23 +1411,36 @@ end
 if TEST then
   local df_orig = df
   df = {global={world={raws={creatures={all={
-    {caste={{body_info={body_parts={{token='BP1', category='BC1'},
-                                    {token='BP2', category='BC2'}}},
-             creature_class={{value='CC1'}}}}}}}}}}}
+    {caste={{body_info={body_parts={{token='BP1', category='BC1',
+                                     flags={BFT1=true, BFF1=false}},
+                                    {token='BP2', category='BC2',
+                                     flags={BFT2=true, BFF2=false}}}},
+             creature_class={{value='CC1'}},
+             flags={CFT1=true, CFF1=false}}},
+     flags={FT1=true, FF1=false}}}}}}}}
   assert_eq(can_articulate(1, {}), true)
   assert_eq(can_articulate(1, {{}}), true)
   assert_eq(can_articulate(1, {{bp='x'}}), false)
   assert_eq(can_articulate(1, {{bp_category='x'}}), false)
+  assert_eq(can_articulate(1, {{bp_flag='BFF1'}}), false)
   assert_eq(can_articulate(1, {{creature_index=2}}), false)
   assert_eq(can_articulate(1, {{creature_class='x'}}), false)
+  assert_eq(can_articulate(1, {{creature_flag='FF1'}}), false)
   assert_eq(can_articulate(1, {{caste_index=2}}), false)
+  assert_eq(can_articulate(1, {{caste_flag='CFF1'}}), false)
   assert_eq(can_articulate(1, {{bp='BP1'}}), true)
   assert_eq(can_articulate(1, {{bp_category='BC1'}}), true)
+  assert_eq(can_articulate(1, {{bp_flag='BFT2'}}), true)
   assert_eq(can_articulate(1, {{creature_index=1}}), true)
   assert_eq(can_articulate(1, {{creature_class='CC1'}}), true)
+  assert_eq(can_articulate(1, {{creature_flag='FT1'}}), true)
   assert_eq(can_articulate(1, {{caste_index=1}}), true)
+  assert_eq(can_articulate(1, {{caste_flag='CFT1'}}), true)
   assert_eq(can_articulate(1, {{bp='x'}, {}}), true)
   assert_eq(can_articulate(1, {{bp='BP1', bp_category='x'}}), false)
+  assert_eq(
+    can_articulate(1, {{bp='BP1', creature_flag='FT1', caste_flag='CFT1'}}),
+    true)
   df = df_orig
 end
 
@@ -2291,52 +2322,90 @@ function load_phonologies()
             end
             local bp = nil
             local bp_category = nil
+            local bp_flag = nil
             local creature = nil
             local creature_class = nil
+            local creature_flag = nil
             local caste = nil
-            local creature_index = nil
-            local caste_index = nil
+            local caste_flag = nil
             local i = 2
             while i <= #subtags do
               if i == #subtags then
                 qerror('No value specified for ' .. subtags[i] .. ': ' .. tag)
               end
               if subtags[i] == 'BP' then
-                if bp or bp_category then
-                  qerror('BP or BP_CATEGORY already specified: ' .. tag)
+                if bp or bp_category or bp_flag then
+                  qerror('Extra BP or BP_CATEGORY or BP_FLAG: ' .. tag)
                 end
                 i = i + 1
                 bp = subtags[i]
               elseif subtags[i] == 'BP_CATEGORY' then
-                if bp or bp_category then
-                  qerror('BP or BP_CATEGORY already specified: ' .. tag)
+                if bp or bp_category or bp_flag then
+                  qerror('Extra BP or BP_CATEGORY or BP_FLAG: ' .. tag)
                 end
                 i = i + 1
                 bp_category = subtags[i]
+              elseif subtags[i] == 'BP_FLAG' then
+                if bp or bp_category or bp_flag then
+                  qerror('Extra BP or BP_CATEGORY or BP_FLAG: ' .. tag)
+                end
+                i = i + 1
+                bp_flag = subtags[i]
+                if copyall(df.global.world.raws.creatures.all[0].caste[0]
+                           .body_info.body_parts[0].flags)[bp_flag] == nil then
+                  qerror('No such body part flag: ' .. bp_flag)
+                end
               elseif subtags[i] == 'CREATURE' then
-                if creature or creature_category then
-                  qerror('CREATURE or CREATURE_CATEGORY already specified: ' ..
-                         tag)
+                if creature or creature_category or creature_flag then
+                  qerror(
+                    'Extra CREATURE or CREATURE_CATEGORY or CREATURE_FLAG: ' ..
+                    tag)
                 end
                 i = i + 1
                 creature = subtags[i]
               elseif subtags[i] == 'CREATURE_CLASS' then
-                if creature or creature_category then
-                  qerror('CREATURE or CREATURE_CLASS already specified: '.. tag)
+                if creature or creature_category or creature_flag then
+                  qerror(
+                    'Extra CREATURE or CREATURE_CATEGORY or CREATURE_FLAG: ' ..
+                    tag)
                 end
                 i = i + 1
                 creature_category = subtags[i]
+              elseif subtags[i] == 'CREATURE_FLAG' then
+                if creature or creature_category or creature_flag then
+                  qerror(
+                    'Extra CREATURE or CREATURE_CATEGORY or CREATURE_FLAG: ' ..
+                    tag)
+                end
+                i = i + 1
+                creature_flag = subtags[i]
+                if (copyall(df.global.world.raws.creatures.all[0].flags)
+                    [creature_flag] == nil) then
+                  qerror('No such creature flag: ' .. creature_flag)
+                end
               elseif subtags[i] == 'CASTE' then
                 if caste then
-                  qerror('CASTE already specified: ' .. tag)
+                  qerror('Extra CASTE or CASTE_FLAG: ' .. tag)
                 end
                 i = i + 1
                 caste = subtags[i]
+              elseif subtags[i] == 'CASTE_FLAG' then
+                if caste then
+                  qerror('Extra CASTE or CASTE_FLAG: ' .. tag)
+                end
+                i = i + 1
+                caste_flag = subtags[i]
+                if copyall(df.global.world.raws.creatures.all[0].caste[0]
+                           .flags)[caste_flag] == nil then
+                  qerror('No such caste flag: ' .. caste_flag)
+                end
               else
                 qerror('Unknown subtag ' .. subtags[i])
               end
               i = i + 1
             end
+            local creature_index = nil
+            local caste_index = nil
             if creature then
               local index, creature_raw = utils.linear_index(
                 df.global.world.raws.creatures.all, creature, 'creature_id')
