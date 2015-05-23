@@ -18,7 +18,6 @@ TODO:
 * [LISP] (which is not lisping but hissing)
 * [UTTERANCES]
 * Lisping, stuttering, Broca's aphasia, Wernicke's aphasia, muteness
-* Ears required for oral languages and eyes for sign languages
 * Language acquisition: babbling, jargon, holophrastic stage, telegraphic stage
 * Effects of missing the critical period
 * Creolization by kidnapped children
@@ -53,7 +52,7 @@ Data definitions:
 Language:
 A persistent entry with the keys:
   value: The name of the language, for debugging.
-  ints: A sequence of 4 integers:
+  ints:
     [1]: The number of this language among all languages.
     [2]: The ID of the associated civilization.
     [3]: The index of the language's phonology in `phonologies`.
@@ -64,6 +63,7 @@ Phonology:
   scalings: A sequence of scalings.
   nodes: A sequence of nodes.
   symbols: A sequence of symbols.
+  articulators: A sequence of articulators.
 
 Symbol:
   symbol: A string.
@@ -291,7 +291,7 @@ Args:
   s2: A sequence.
 
 Returns:
-  A merged sorted sequence.  
+  A merged sorted sequence.
 ]]
 function merge_sorted_sequences(s1, s2)
   local rv = {}
@@ -1462,6 +1462,11 @@ function get_dimension(rng, phonology, creature_index)
   local dimensions = {}
   local node_to_dimension = {}
   local inarticulable_node_index = nil
+  if not can_articulate(creature_index, phonology.articulators) then
+    -- TODO: Handle this problem by choosing another phonology.
+    qerror(df.global.world.raws.creatures.all[creature_index].creature_id ..
+           ' cannot use its assigned phonology.')
+  end
   for i, node in ipairs(nodes) do
     if not (inarticulable_node_index and
             dominates(inarticulable_node_index, i, nodes)) then
@@ -2241,7 +2246,7 @@ function load_phonologies()
             end
             table.insert(phonologies,
                          {name=subtags[2], nodes={}, scalings={},
-                          symbols={}, affixes={},
+                          symbols={}, affixes={}, articulators={},
                           constraints={{type='Max'}, {type='Dep'}}})
             current_phonology = phonologies[#phonologies]
           elseif subtags[1] == 'NODE' then
@@ -2317,7 +2322,7 @@ function load_phonologies()
             table.insert(current_phonology.constraints,
                          {type='Ident', feature=current_parent})
           elseif subtags[1] == 'ARTICULATOR' then
-            if not current_phonology or current_parent == 0 then
+            if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
             end
             local bp = nil
@@ -2425,7 +2430,8 @@ function load_phonologies()
               qerror('CASTE requires CREATURE: ' .. tag)
             end
             table.insert(
-              current_phonology.nodes[current_parent].articulators,
+              (current_parent == 0 and current_phonology or
+               current_phonology.nodes[current_parent]).articulators,
               {bp=bp, bp_category=bp_category, creature_index=creature_index,
                creature_class=creature_class, caste_index=caste_index})
           elseif subtags[1] == 'END' then
