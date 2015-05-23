@@ -18,7 +18,7 @@ TODO:
 * [LISP] (which is not lisping but hissing)
 * [UTTERANCES]
 * Lisping, stuttering, Broca's aphasia, Wernicke's aphasia, muteness
-* Specific organs required for phonetic features
+* Ears required for oral languages and eyes for sign languages
 * Language acquisition: babbling, jargon, holophrastic stage, telegraphic stage
 * Effects of missing the critical period
 * Creolization by kidnapped children
@@ -72,6 +72,23 @@ Symbol:
 Constraint:
 -- TODO
 
+Articulator:
+A conjunction of conditions which can apply to a unit. Each key in the
+table can be nil, in which case that condition always applies. If all
+the conditions apply to a unit, the articulator is present in that unit.
+  bp: A body part token string. The unit must have a body part with this
+    token.
+  bp_category: A body part category string. The unit must have a body
+    part with this category.
+  creature_index: An index into `df.global.world.raws.creatures.all`.
+    The unit must be an instance of the creature at this index.
+  creature_class: A creature class string. The unit must be an instance
+    of a creature of this creature class.
+  caste_index: An index into
+    `df.global.world.raws.creatures.all[creature_index].caste`. The
+    unit's caste must be at this index. If `creature_index` is nil,
+    this field must be too.
+
 Node:
   name: A string, used only for parsing the phonology raw file.
   parent: The index of the node's parent node in the associated
@@ -86,6 +103,8 @@ Node:
     node.
   prob: The probability that a phoneme has this node. It is 1 for class
     nodes.
+  articulators: A sequence of articulators. At least one must be present
+    in a unit for that unit to produce a phoneme with this node.
 
 Language parameter table:
   inventory: A sequence of phonemes used by this language.
@@ -1317,34 +1336,124 @@ if TEST then
 end
 
 --[[
-Randomly generates a dimension for a phonology.
+Determines whether a creature has at least one of a set of articulators.
+
+Args:
+  creature_index: The index of a creature in
+    `df.global.world.raws.creatures.all`.
+  articulators: A possibly empty sequence of articulators.
+
+Returns:
+  Whether at least one articulator from `articulators` would be present
+  in an unwounded `df.global.world.raws.creatures.all[creature_index]`,
+  of no matter what caste; or true, if `articulators` is empty.
+]]
+function can_articulate(creature_index, articulators)
+  if not next(articulators) then
+    return true
+  end
+  local creature = df.global.world.raws.creatures.all[creature_index]
+  for _, articulator in ipairs(articulators) do
+    local castes_okay = true
+    for caste_index, caste in ipairs(creature.caste) do
+      if ((articulator.creature_index and
+           creature_index ~= articulator.creature_index) or
+          (articulator.caste_index and
+           caste_index ~= articulator.caste_index) or
+          (articulator.creature_class and not utils.linear_index(
+           caste.creature_class, articulator.creature_class, 'value'))) then
+        castes_okay = false
+        break
+      end
+      local bp_applies = not articulator.bp
+      local bp_category_applies = not articulator.bp_category
+      if not (bp_applies and bp_category_applies) then
+        for _, bp in ipairs(caste.body_info.body_parts) do
+          if bp.token == articulator.bp then
+            bp_applies = true
+            break
+          elseif bp.category == articulator.bp_category then
+            bp_category_applies = true
+            break
+          end
+        end
+      end
+      if not (bp_applies and bp_category_applies) then
+        castes_okay = false
+        break
+      end
+    end
+    if castes_okay then
+      return true
+    end
+  end
+  return false
+end
+
+if TEST then
+  local df_orig = df
+  df = {global={world={raws={creatures={all={
+    {caste={{body_info={body_parts={{token='BP1', category='BC1'},
+                                    {token='BP2', category='BC2'}}},
+             creature_class={{value='CC1'}}}}}}}}}}}
+  assert_eq(can_articulate(1, {}), true)
+  assert_eq(can_articulate(1, {{}}), true)
+  assert_eq(can_articulate(1, {{bp='x'}}), false)
+  assert_eq(can_articulate(1, {{bp_category='x'}}), false)
+  assert_eq(can_articulate(1, {{creature_index=2}}), false)
+  assert_eq(can_articulate(1, {{creature_class='x'}}), false)
+  assert_eq(can_articulate(1, {{caste_index=2}}), false)
+  assert_eq(can_articulate(1, {{bp='BP1'}}), true)
+  assert_eq(can_articulate(1, {{bp_category='BC1'}}), true)
+  assert_eq(can_articulate(1, {{creature_index=1}}), true)
+  assert_eq(can_articulate(1, {{creature_class='CC1'}}), true)
+  assert_eq(can_articulate(1, {{caste_index=1}}), true)
+  assert_eq(can_articulate(1, {{bp='x'}, {}}), true)
+  assert_eq(can_articulate(1, {{bp='BP1', bp_category='x'}}), false)
+  df = df_orig
+end
+
+--[[
+Randomly generates a dimension for a phonology given a target creature.
 
 Args:
   rng: A random number generator.
   phonology: A phonology.
+  creature_index: The index of a creature in
+    `df.global.world.raws.creatures.all`.
 
 Returns:
   A dimension which is the root of a binary tree of dimensions. The
   children of a node in the tree are in `d1` and `d2`.
 ]]
-function get_dimension(rng, phonology)
+function get_dimension(rng, phonology, creature_index)
   local nodes = phonology.nodes
   local dimensions = {}
   local node_to_dimension = {}
+  local inarticulable_node_index = nil
   for i, node in ipairs(nodes) do
-    local dimension =
-      {id=i, domain={i}, nodes={},
-       cache=node.feature and {{score=1 - node.prob}, {score=node.prob, i}} or
-       {{score=1, i}}}
-    table.insert(dimensions, dimension)
-    node_to_dimension[i] = dimension
+    if not (inarticulable_node_index and
+            dominates(inarticulable_node_index, i, nodes)) then
+      if can_articulate(creature_index, node.articulators) then
+        local dimension =
+          {id=i, domain={i}, nodes={}, cache=node.feature and
+           {{score=1 - node.prob}, {score=node.prob, i}} or {{score=1, i}}}
+        table.insert(dimensions, dimension)
+        node_to_dimension[i] = dimension
+      else
+        inarticulable_node_index = i
+      end
+    end
   end
   local scalings = random_scalings(rng, phonology.scalings)
   local links = {}
   for _, scaling in ipairs(scalings) do
-    table.insert(links, {d1=node_to_dimension[scaling.node_1],
-                         d2=node_to_dimension[scaling.node_2],
-                         scalings={scaling}, strength=scaling.strength})
+    local d1 = node_to_dimension[scaling.node_1]
+    local d2 = node_to_dimension[scaling.node_2]
+    if d1 and d2 then
+      table.insert(links, {d1=d1, d2=d2, scalings={scaling},
+                           strength=scaling.strength})
+    end
   end
   utils.sort_vector(links, 'strength', utils.compare)
   while #dimensions > 1 do
@@ -1584,13 +1693,16 @@ Randomly generates a phonemic inventory.
 Args:
   rng: A random number generator.
   phonology: A phonology.
+  creature_index: The index of a creature in
+    `df.global.world.raws.creatures.all`.
 
 Returns:
   A sequence of dimension values which have some similarities to each
-  other and form a cohesive and plausible phonemic inventory.
+  other and form a cohesive and plausible phonemic inventory, and which
+  are pronounceable by the creature at the given index.
 ]]
-function random_inventory(rng, phonology)
-  local dimension = get_dimension(rng, phonology)
+function random_inventory(rng, phonology, creature_index)
+  local dimension = get_dimension(rng, phonology, creature_index)
   local target_size = 10 + rng:random(21)  -- TODO: better distribution
   local inventory = {}
   repeat
@@ -2163,7 +2275,7 @@ function load_phonologies()
                          {name=subtags[2], parent=current_parent,
                           add=add_symbol, remove=remove_symbol,
                           sonorous=sonorous, feature_class=feature_class,
-                          feature=feature, prob=prob})
+                          feature=feature, prob=prob, articulators={}})
             if current_parent ~= 0 then
               table.insert(current_phonology.scalings,
                            {val_1=true, node_1=#current_phonology.nodes,
@@ -2173,6 +2285,80 @@ function load_phonologies()
             current_parent = #current_phonology.nodes
             table.insert(current_phonology.constraints,
                          {type='Ident', feature=current_parent})
+          elseif subtags[1] == 'ARTICULATOR' then
+            if not current_phonology or current_parent == 0 then
+              qerror('Orphaned tag: ' .. tag)
+            end
+            local bp = nil
+            local bp_category = nil
+            local creature = nil
+            local creature_class = nil
+            local caste = nil
+            local creature_index = nil
+            local caste_index = nil
+            local i = 2
+            while i <= #subtags do
+              if i == #subtags then
+                qerror('No value specified for ' .. subtags[i] .. ': ' .. tag)
+              end
+              if subtags[i] == 'BP' then
+                if bp or bp_category then
+                  qerror('BP or BP_CATEGORY already specified: ' .. tag)
+                end
+                i = i + 1
+                bp = subtags[i]
+              elseif subtags[i] == 'BP_CATEGORY' then
+                if bp or bp_category then
+                  qerror('BP or BP_CATEGORY already specified: ' .. tag)
+                end
+                i = i + 1
+                bp_category = subtags[i]
+              elseif subtags[i] == 'CREATURE' then
+                if creature or creature_category then
+                  qerror('CREATURE or CREATURE_CATEGORY already specified: ' ..
+                         tag)
+                end
+                i = i + 1
+                creature = subtags[i]
+              elseif subtags[i] == 'CREATURE_CLASS' then
+                if creature or creature_category then
+                  qerror('CREATURE or CREATURE_CLASS already specified: '.. tag)
+                end
+                i = i + 1
+                creature_category = subtags[i]
+              elseif subtags[i] == 'CASTE' then
+                if caste then
+                  qerror('CASTE already specified: ' .. tag)
+                end
+                i = i + 1
+                caste = subtags[i]
+              else
+                qerror('Unknown subtag ' .. subtags[i])
+              end
+              i = i + 1
+            end
+            if creature then
+              local index, creature_raw = utils.linear_index(
+                df.global.world.raws.creatures.all, creature, 'creature_id')
+              if not index then
+                qerror('No such creature: ' .. creature)
+              end
+              creature_index = index
+              if caste then
+                local caste_index, caste_raw =
+                  utils.linear_index(creature_raw.caste, caste, 'caste_id')
+                if not index then
+                  qerror('No such caste for ' .. creature .. ': ' .. caste)
+                end
+                caste_index = caste
+              end
+            elseif caste then
+              qerror('CASTE requires CREATURE: ' .. tag)
+            end
+            table.insert(
+              current_phonology.nodes[current_parent].articulators,
+              {bp=bp, bp_category=bp_category, creature_index=creature_index,
+               creature_class=creature_class, caste_index=caste_index})
           elseif subtags[1] == 'END' then
             if not current_phonology or current_parent == 0 then
               qerror('Orphaned tag: ' .. tag)
@@ -3267,9 +3453,9 @@ if #args >= 1 then
       print_dimension(nodes, dimension.d1, indent)
       print_dimension(nodes, dimension.d2, indent)
     end
-    print_dimension(phonologies[1].nodes, get_dimension(rng, phonologies[1]), '')
-    local dim = get_dimension(rng, phonologies[1])
-    local inv = random_inventory(rng, phonologies[1])
+    local dim = get_dimension(rng, phonologies[1], 466)
+    print_dimension(phonologies[1].nodes, dim, '')
+    local inv = random_inventory(rng, phonologies[1], 466)
     print('-----------------------')
     for _, val in ipairs(inv) do
       local ph = {}
