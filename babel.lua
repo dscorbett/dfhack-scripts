@@ -4,7 +4,6 @@ local utils = require('utils')
 
 --[[
 TODO:
-* Documentation: which sequences may be empty (i.e. not really Lua sequences)
 * Put words in GEN_DIVINE.
 * Update any new names in GEN_DIVINE to point to the moved GEN_DIVINE.
 * Protect against infinite loops due to sonority dead ends in random_word.
@@ -36,6 +35,8 @@ local UTTERANCES_PER_XP = 16
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
 local FEATURE_CLASS_CONSONANT = 2
+
+local AGREE = nil
 
 local phonologies = nil
 local parameter_sets = {}
@@ -116,11 +117,6 @@ Node:
   articulators: A sequence of articulators. At least one must be present
     in a unit for that unit to produce a phoneme with this node.
 
-Language parameter table:
-  inventory: A sequence of phonemes used by this language.
-  min_sonority: The minimum sonority of all phonemes in `inventory`.
-  max_sonority: The maximum sonority of all phonemes in `inventory`.
-
 Environment:
 A table whose keys are indices of features and whose values are feature
 environments for those features.
@@ -137,10 +133,6 @@ environment.
     value of the variable that this variable is defined in terms of.
   var: The index of the variable that this variable is defined in
     terms of.
-
-Word:
-A sequence of phonemes.
--- TODO: for now, anyway
 
 Phoneme:
 A table whose keys are feature indices and whose values are booleans.
@@ -203,6 +195,67 @@ is. The details of the relationship are not specified here.
 Boundary:
 A string representing a boundary.
 -- TODO: Enumerate them.
+
+Word:
+A sequence of phonemes.
+-- TODO: for now, anyway
+
+SFI:
+A syntactic feature instance.
+  feature: A feature.
+  head: The constituent this instance of `feature` is on.
+  depth: The depth of `head`.
+
+Language parameter table:
+  inventory: A sequence of phonemes used by this language.
+  min_sonority: The minimum sonority of all phonemes in `inventory`.
+  max_sonority: The maximum sonority of all phonemes in `inventory`.
+-- TODO: and/or the following
+  strategies: A map from features to movement strategy or `AGREE`.
+  overt_trace: Whether the language keeps traces in the phonological
+    form.
+  swap: Whether the language is head-final.
+
+Movement strategy:
+What sort of movement to do when checking a certain feature.
+  lower: Whether to lower rather than raise.
+  pied_piping: Whether to pied-pipe the constituents dominated by the
+    maximal projection of the moving constituent along with it.
+
+Constituent:
+A node in a syntactic tree.
+  n1: A child constituent.
+  n2: A child constituent, which is nil if `n1` is.
+  features: A map of features to feature values.
+  morphemes: A sequence of morphemes.
+  is_phrase: Whether this constituent is a phrase, i.e. a maximal
+    projection.
+  depth: The depth of the constituent from the root, where the root has
+    a depth of 0 and all others have depths one greater than their
+    parents'.
+  ref: The key of another constituent in the lexicon that this
+    constituent is to be replaced with.
+  maximal: The maximal projection of this constituent, or nil if none.
+  moved_to: The constituent to which this constituent was moved.
+  TODO:
+  sibling:
+  text: A string.
+  var: A key to look up in a context table. At most one of `n1`, `word`,
+    `text`, and `var` can be non-nil.
+
+Morpheme:
+  id: A unique ID for this morpheme within its language.
+  features: A map of features to feature values.
+  affix: Whether this is a bound morpheme.
+  after: Whether this morpheme goes after (as opposed to before) another
+    morpheme when dislocating.
+  initial: Whether `after` should be taken in reference to the first
+    subunit of the unit relative to which this morpheme is dislocated.
+  fusion: A map of morpheme IDs to morphemes, representing the fusion of
+    this morpheme and the key to produce the value.
+  dummy: A morpheme to insert if this is a bound morpheme but there are
+    no morphemes to bind to, or nil if this morpheme should just be
+    deleted in that case.
 
 Translation:
 A sequence of tag strings in the format of the values of
@@ -1423,7 +1476,7 @@ Determines whether a creature has at least one of a set of articulators.
 Args:
   creature_index: The index of a creature in
     `df.global.world.raws.creatures.all`.
-  articulators: A possibly empty sequence of articulators.
+  articulators: A sequence of articulators.
 
 Returns:
   Whether at least one articulator from `articulators` would be present
@@ -1908,6 +1961,1012 @@ local function random_word(language, parameters)
 end
 
 --[[
+Creates a comparator function for SFIs.
+
+Args:
+  parameters: A language parameter table.
+
+Returns:
+  A function suitable for sorting SFIs with `utils.sort_vector`.
+  TODO: Describe the order.
+]]
+local function compare_sfis(parameters)
+  return function(a, b)
+    if a.depth < b.depth then
+      return -1
+    elseif a.depth > b.depth then
+      return 1
+    elseif (parameters.strategies[a.feature] ~= AGREE and
+            parameters.strategies[b.feature] == AGREE) then
+      return -1
+    elseif (parameters.strategies[a.feature] == AGREE and
+            parameters.strategies[b.feature] ~= AGREE) then
+      return 1
+    elseif a.feature < b.feature then
+      return -1
+    elseif a.feature > b.feature then
+      return 1
+    end
+    return 0
+  end
+end
+
+if TEST then
+  local cmpfun = compare_sfis({strategies={a={}, b=AGREE, c=AGREE}})
+  local sfi_0_a = {depth=0, head={x=1}, feature='a'}
+  local sfi_0_b = {depth=0, head={x=1}, feature='b'}
+  local sfi_0_c = {depth=0, head={x=1}, feature='c'}
+  local sfi_1_a = {depth=1, head={x=1}, feature='a'}
+  assert_eq(
+    utils.sort_vector({sfi_1_a, sfi_0_b, sfi_0_a, sfi_0_c}, nil, cmpfun),
+    {sfi_0_a, sfi_0_b, sfi_0_c, sfi_1_a})
+end
+
+--[[
+Gets the best pair of SFIs for the purpose of agreement.
+
+A pair of SFIs is eligible for agreement if they have the same feature
+and exactly one of their heads has a value for that feature.
+
+A pair of SFIs is better than another if the minimum of its two depths
+is lower; otherwise if the maximum of its two depths is lower; otherwise
+if its merging strategy is not merely agreement but the other's is.
+
+One SFI from each sequence is chosen to maximize the quality of the
+pair. They are removed from their sequences, along with any other pairs
+with between the same two heads that would be eligible for agreement.
+
+Args:
+  sfis_1! A sequence of SFIs sorted in decreasing order of quality as
+    defined above.
+  sfis_2! A sequence of SFIs sorted the same way.
+
+Returns:
+  The best SFI from `sfis_1`.
+  The best SFI from `sfis_2`.
+]]
+-- TODO: Find better terminology than "good" and "SFI".
+local function get_best_sfis(sfis_1, sfis_2)
+  local best_1, best_2
+  local i = 1 --#sfis_1
+  local j = 1 --#sfis_2
+  local incrementing_i = false
+  while i <= #sfis_1 and j <= #sfis_2 do
+    local sfi_1 = sfis_1[i]
+    local sfi_2 = sfis_2[j]
+    local f = sfi_1.feature
+    if (f == sfi_2.feature and
+        not sfi_1.head.moved_to and not sfi_2.head.moved_to and
+        not sfi_1.head.features[f] ~= not sfi_2.head.features[f]) then
+      if incrementing_i ~= nil then
+        best_1, best_2 = sfis_1[i], sfis_2[j]
+        incrementing_i = nil
+      elseif sfi_1.head == best_1.head and sfi_2.head == best_2.head then
+        table.remove(sfis_1, i)
+        table.remove(sfis_2, j)
+      else
+        break
+      end
+    elseif incrementing_i == nil then
+      break
+    end
+    if incrementing_i then
+      if i == #sfis_1 then
+        incrementing_i = false
+        i = j + 1
+        j = i
+      else
+        i = i + 1
+      end
+    elseif incrementing_i == false then
+      if j == #sfis_2 then
+        incrementing_i = true
+        j = i
+        i = j + 1
+      else
+        j = j + 1
+      end
+    end
+  end
+  return best_1, best_2
+end
+
+if TEST then
+  local f_unvalued = {feature='f', head={features={}}}
+  local f_1 = {feature='f', head={features={f=1}}}
+  local f_2 = {feature='f', head={features={f=2}}}
+  local g_unvalued = {feature='g', head={features={}}}
+  assert_eq(get_best_sfis({}, {}), nil)
+  assert_eq(get_best_sfis({f_unvalued}, {}), nil)
+  assert_eq(get_best_sfis({f_unvalued}, {f_unvalued}), nil)
+  assert_eq(get_best_sfis({f_unvalued}, {g_unvalued}), nil)
+  assert_eq(table.pack(get_best_sfis({f_unvalued}, {f_1})),
+            {n=2, f_unvalued, f_1})
+  assert_eq(get_best_sfis({f_1}, {f_1}), nil)
+  assert_eq(get_best_sfis({f_1}, {g_unvalued}), nil)
+  assert_eq(get_best_sfis({f_1}, {f_2}), nil)
+  assert_eq(table.pack(get_best_sfis({f_unvalued}, {f_1, f_2})),
+            {n=2, f_unvalued, f_1})
+  assert_eq(table.pack(get_best_sfis({f_unvalued}, {f_2, f_1})),
+            {n=2, f_unvalued, f_2})
+  assert_eq(get_best_sfis({}, {f_unvalued}), nil)
+  assert_eq(get_best_sfis({g_unvalued}, {f_unvalued}), nil)
+  assert_eq(table.pack(get_best_sfis({f_1}, {f_unvalued})),
+            {n=2, f_1, f_unvalued})
+  assert_eq(get_best_sfis({g_unvalued}, {f_1}), nil)
+  assert_eq(get_best_sfis({f_2}, {f_1}), nil)
+  assert_eq(table.pack(get_best_sfis({f_1, f_2}, {f_unvalued})),
+            {n=2, f_1, f_unvalued})
+  assert_eq(table.pack(get_best_sfis({f_2, f_1}, {f_unvalued})),
+            {n=2, f_2, f_unvalued})
+  local sfis_1 = {f_1, f_1, f_1, f_1, f_1, f_1, f_1}
+  local sfis_2 = {f_1, f_1, f_unvalued, f_unvalued, g_unvalued}
+  assert_eq(table.pack(get_best_sfis(sfis_1, sfis_2)), {n=2, f_1, f_unvalued})
+  assert_eq(sfis_1, {f_1, f_1, f_1, f_1, f_1})
+  assert_eq(sfis_2, {f_1, f_1, g_unvalued})
+end
+
+--[[
+Makes two SFIs agree (have the same value for their feature).
+
+The SFIs must share the same feature. Exactly one must have a head which
+has a value for that feature.
+
+Args:
+  sfi_1! An SFI.
+  sfi_2! An SFI.
+]]
+local function agree(sfi_1, sfi_2)
+  local goal, probe = sfi_1, sfi_2
+  if sfi_1.head.features[sfi_1.feature] then
+    goal, probe = probe, goal
+  end
+  goal.head.features[goal.feature] =
+    probe.head.features[probe.feature]
+end
+
+if TEST then
+  local sfi_1 = {depth=1, feature='f', head={features={f=1}}}
+  local sfi_2 = {depth=1, feature='f', head={features={f=false}}}
+  agree(sfi_1, sfi_2)
+  assert_eq(sfi_1.head, {features={f=1}})
+  assert_eq(sfi_2.head, {features={f=1}})
+
+  local sfi_1 = {depth=1, feature='f', head={features={f=1}}}
+  local sfi_2 = {depth=1, feature='f', head={features={f=false}}}
+  agree(sfi_2, sfi_1)
+  assert_eq(sfi_1.head, {features={f=1}})
+  assert_eq(sfi_2.head, {features={f=1}})
+end
+
+--[[
+Copies a constituent deeply.
+
+Args:
+  constituent: A constituent.
+
+Returns:
+  A deep copy of the constituent.
+]]
+local function copy_constituent(constituent)
+  return {n1=constituent.n1 and copy_constituent(constituent.n1),
+          n2=constituent.n2 and copy_constituent(constituent.n2),
+          features=copyall(constituent.features),
+          morphemes=constituent.morphemes, is_phrase=constituent.is_phrase}
+end
+
+if TEST then
+  local constituent = {n1={features={f=1, g=2}, morphemes={'x', 'y'}},
+                       features={f=1, g=2}, morphemes={}, is_phrase=true}
+  assert_eq(copy_constituent(constituent), constituent)
+end
+
+--[[
+TODO
+
+Args:
+  dislocated: A morpheme.
+  static: A morpheme.
+
+Returns:
+  TODO
+]]
+local function should_dislocate(dislocated, static)
+  print'should dislocate?'
+  print' dislocated:';printall(dislocated)
+  print' static:';printall(static)
+  for f, v in pairs(dislocated.features or {}) do -- TODO rm
+    print(f,v,static.features[f])
+    if not (v or static.features[f]) then
+      print' =====> false\n'
+      return false
+    end
+  end
+  print' =====> true\n'
+  return true
+end
+
+if TEST then
+  --TODO
+end
+
+--[[
+Concatenate with local dislocation.
+
+`s1` and `s2` must be sequences of the same type.
+
+TODO: Explain this better.
+
+Args:
+  s1: A sequence of morphemes or words.
+  s2: A sequence of morphemes or words.
+  s1_onto_s2: Whether to dislocate from `s1` to `s2` or vice versa.
+
+Returns:
+  The concatenation of the two sequences of morphemes with local
+    dislocation of the morphemes at the boundary between them. Morphemes
+    from only one of the two sequences can be locally dislocated; this
+    is controlled by `s1_onto_s2`. If the sequences are of words, then
+    only monomorphemic words dislocate.
+]]
+local function dislocate(s1, s2, s1_onto_s2)
+  if not s1 or #s1 == 0 then
+    return s2
+  elseif not s2 or #s2 == 0 then
+    return s1
+  end
+  local rv = copyall(s1)
+  for _, e in ipairs(s2) do
+    rv[#rv + 1] = e
+  end
+  print('d----------',#s1,#s2,s1_onto_s2)
+  print's1'; for _, e in ipairs(s1) do if e[1] then print(_); for _, f in ipairs(e) do printall(f); if f.features then printall(f.features) end end end end
+  print()
+  print's2'; for _, e in ipairs(s2) do if e[1] then print(_); for _, f in ipairs(e) do printall(f); if f.features then printall(f.features) end end end end
+  print()
+  --if true then return rv end
+  local i = #s1 + (s1_onto_s2 and 0 or 1)
+  local addend = s1_onto_s2 and -1 or 1
+  while rv[i] do
+    print('__',#rv); for _, e in ipairs(rv) do if e[1] then print(_); for _, f in ipairs(e) do printall(f); if f.features then printall(f.features) end end end end
+    print()
+    local dislocator = rv[i]
+    if #dislocator ~= 0 then
+      dislocator = dislocator[1]
+    end
+    if dislocator.affix then
+      local e = table.remove(rv, i)
+      local j = (e[1] and i or
+                 (s1_onto_s2 and (dislocator.initial and i or #rv) or
+                  (dislocator.initial and 1 or i - 1)))
+      local static = rv[j]
+      if #static ~= 0 then
+        static = static[1]
+      end
+      if should_dislocate(dislocator, static) then
+        if #rv[j] == 0 then
+          table.insert(rv, j + (dislocator.after and 1 or 0), e)
+        else
+          print('i='..i..' j='..j..' x='..(dislocator.initial and 1 or #rv[j])..'+'..(dislocator.after and 1 or 0))
+          table.insert(rv[j], (dislocator.initial and 1 or #rv[j]) +
+                       (dislocator.after and 1 or 0), e[1])
+        end
+        i = i + addend
+      else
+        table.insert(rv, i, e)
+        break
+      end
+    else
+      break
+    end
+  end
+  print'rv'; for _, e in ipairs(rv) do if e[1] then print(_); for _, f in ipairs(e) do printall(f); if f.features then printall(f.features) end end end end
+  print()
+  return rv
+end
+
+if TEST and TODO then
+  local xs = {{x=2, features={}}, {x=3, features={}}, {x=4, features={}}}
+  assert_eq(dislocate({}, {}, true), {})
+  assert_eq(dislocate({{x=1, features={}}}, {}, true), {{x=1, features={}}})
+  assert_eq(dislocate({}, {{x=1, features={}}}, true), {{x=1, features={}}})
+  assert_eq(dislocate({{x=1, features={}}}, {{x=2, features={}}}, true),
+            {{x=1, features={}}, {x=2, features={}}})
+  assert_eq(dislocate({{x=1, features={}}}, xs, true),
+            {{x=1, features={}}, {x=2, features={}}, {x=3, features={}},
+             {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={}, affix=true}}, xs, true),
+            {{x=2, features={}}, {x=3, features={}},
+             {x=1, features={}, affix=true}, {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={}, affix=true, initial=true}}, xs, true),
+            {{x=1, features={}, affix=true, initial=true}, {x=2, features={}},
+             {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={}, affix=true, after=true}}, xs, true),
+            {{x=2, features={}}, {x=3, features={}}, {x=4, features={}},
+             {x=1, features={}, affix=true, after=true}})
+  assert_eq(dislocate({{x=1, features={}, affix=true, initial=true,
+                        after=true}}, xs, true),
+            {{x=2, features={}},
+             {x=1, features={}, affix=true, initial=true, after=true},
+             {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate({{x=0, features={}}, {x=1, features={}, affix=true}},
+                      {{x=2, features={}}, {x=3, features={}}}, true),
+            {{x=0, features={}}, {x=2, features={}},
+             {x=1, features={}, affix=true}, {x=3, features={}}})
+  assert_eq(dislocate({{x=0, features={}, affix=true}, {x=1, features={}}},
+                      {{x=2, features={}}, {x=3, features={}}}, true),
+            {{x=0, features={}, affix=true}, {x=1, features={}},
+             {x=2, features={}}, {x=3, features={}}})
+  assert_eq(dislocate({{x=0, features={}, affix=true},
+                       {x=1, features={}, affix=true}},
+                      {{x=2, features={}}, {x=3, features={}}}, true),
+            {{x=2, features={}}, {x=1, features={}, affix=true},
+             {x=0, features={}, affix=true}, {x=3, features={}}})
+  assert_eq(dislocate(xs, {{x=1, features={}, affix=true}}, true),
+            {{x=2, features={}}, {x=3, features={}}, {x=4, features={}},
+             {x=1, features={}, affix=true}})
+  assert_eq(dislocate(xs, {{x=1, features={}, affix=true}}, false),
+            {{x=2, features={}}, {x=3, features={}},
+             {x=1, features={}, affix=true}, {x=4, features={}}})
+  assert_eq(dislocate(xs, {{x=1, features={}, affix=true, initial=true}},
+                      false),
+            {{x=1, features={}, affix=true, initial=true}, {x=2, features={}},
+             {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate(xs, {{x=1, features={}, affix=true, after=true}}, false),
+            {{x=2, features={}}, {x=3, features={}}, {x=4, features={}},
+             {x=1, features={}, affix=true, after=true}})
+  assert_eq(
+    dislocate(xs,
+              {{x=1, features={}, affix=true, initial=true, after=true}},
+              false),
+    {{x=2, features={}},
+     {x=1, features={}, affix=true, initial=true, after=true},
+     {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate({{x=2, features={}}, {x=3, features={}}},
+                      {{x=0, features={}}, {x=1, features={}, affix=true}},
+                      false),
+            {{x=2, features={}}, {x=3, features={}}, {x=0, features={}},
+             {x=1, features={}, affix=true}})
+  assert_eq(dislocate({{x=2, features={}}, {x=3, features={}}},
+                      {{x=0, features={}, affix=true}, {x=1, features={}}},
+                      false),
+            {{x=2, features={}}, {x=0, features={}, affix=true},
+             {x=3, features={}}, {x=1, features={}}})
+  assert_eq(dislocate({{x=2, features={}}, {x=3, features={}}},
+                      {{x=0, features={}, affix=true},
+                       {x=1, features={}, affix=true}}, false),
+            {{x=2, features={}}, {x=0, features={}, affix=true},
+             {x=1, features={}, affix=true}, {x=3, features={}}})
+  assert_eq(dislocate({{x=1, features={}, affix=true}}, xs, false),
+            {{x=1, features={}, affix=true}, {x=2, features={}},
+             {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={f=false}, affix=true}}, xs, true),
+            {{x=1, features={f=false}, affix=true}, {x=2, features={}},
+             {x=3, features={}}, {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={f=1}, affix=true}}, xs, true),
+            {{x=2, features={}}, {x=3, features={}},
+             {x=1, features={f=1}, affix=true}, {x=4, features={}}})
+  assert_eq(dislocate({{x=1, features={f=false}, affix=true}},
+                      {{x=2, features={f=1}}, {x=3, features={}},
+                       {x=4, features={}}}, true),
+            {{x=1, features={f=false}, affix=true}, {x=2, features={f=1}},
+             {x=3, features={}}, {x=4, features={}}})
+  -- TODO: test word dislocation
+end
+
+--[[
+Merges constituents.
+
+The target becomes a copy of the consituent, maintaining its old data
+when not conflicting with the source's. The new constituent's morphemes
+are a concatenation of both input constituents'. The source is given a
+`moved_to` value of the target.
+
+Args:
+  target! A constituent.
+  source! A constituent.
+]]
+local function merge_constituents(target, source)
+  print('merge_constituents',(target.morphemes and target.morphemes[1] and target.morphemes[1].id or '-'),(source.morphemes and source.morphemes[1] and source.morphemes[1].id or '-'))
+  target.n1 = source.n1 and copy_constituent(source.n1)
+  target.n2 = source.n2 and copy_constituent(source.n2)
+  target.is_phrase = source.is_phrase
+  -- TODO: or should it be true?
+  target.morphemes = dislocate(target.morphemes, source.morphemes, false)
+  print('\n\n\n::>')
+  printall(source)
+  for feature, value in pairs(source.features) do
+    target.features[feature] = value
+  end
+  source.moved_to = target
+end
+
+if TEST and TODO then
+  local n1 = {n1={features={f=1, g=2}, morphemes={}}, features={f=1, g=2},
+              morphemes={}, is_phrase=true}
+  local target = {morphemes={{x=1, affix=true}}, features={f=4, i=5}}
+  local source = {n1=n1, n2=copy_constituent(n1), is_phrase=true,
+                  morphemes={{x=2}, {x=3}, {x=4}}, features={f=1, g=2, h=3}}
+  merge_constituents(target, source)
+  assert_eq(target,
+            {n1=n1, n2=n1, is_phrase=true, features={f=1, g=2, h=3, i=5},
+             morphemes={{x=1, affix=true}, {x=2}, {x=3}, {x=4}}})
+  assert_eq(source,
+            {n1=n1, n2=copy_constituent(n1), is_phrase=true, moved_to=target,
+             morphemes={{x=2}, {x=3}, {x=4}}, features={f=1, g=2, h=3}})
+end
+
+--[[
+TODO
+
+Args:
+  parameters:
+  sfis_1!
+  sfis_2!
+]]
+local function agree_and_maybe_merge(parameters, sfis_1, sfis_2)
+  local sfi_1, sfi_2 = get_best_sfis(sfis_1, sfis_2)
+  if sfi_1 then
+    print('a&mm',(sfi_1.head.morphemes[1] and sfi_1.head.morphemes[1].id or '-'),(sfi_2.head.morphemes[1] and sfi_2.head.morphemes[1].id or '-'))
+    local strategy = parameters.strategies[sfi_1.feature]
+    local merge_target, merge_source = sfi_1.head, sfi_2.head
+    if (strategy ~= AGREE and
+        strategy.lower == (merge_target.depth < merge_source.depth)) then
+      print('lower:',strategy.lower)
+      if (strategy.lower and
+          merge_target.complement ~= merge_source.maximal) then
+          strategy = AGREE
+      else
+        merge_target, merge_source = merge_source, merge_target
+      end
+    end
+    if strategy ~= AGREE and strategy.pied_piping then
+      merge_source = merge_source.maximal or merge_source
+    end
+    if (strategy ~= AGREE and
+        (merge_target.n1 or
+         not (merge_source.n1 or next(merge_source.morphemes)) or
+         merge_source.n1 and next(merge_target.morphemes))) then
+      strategy = AGREE
+    end
+    print'strategy:';if strategy then printall(strategy) else print('AGREE') end
+    agree(sfi_1, sfi_2)
+    if strategy ~= AGREE then
+      printall(merge_target)
+      printall(merge_source)
+      merge_constituents(merge_target, merge_source)
+    end
+  end
+end
+
+if TEST and TODO then
+--sfi: feature
+--head: depth complement maximal n1 morphemes
+  local parameters = {strategies={}}
+  -- strategy: AGREE
+  agree_and_maybe_merge(parameters, {}, {})
+  -- strategy: raise
+  -- strategy: lower
+  -- strategy: lower but can't do it
+  -- strategy: raise pp
+  -- strategy: lower pp
+  -- strategy: not AGREE but target is nonhead
+  -- strategy: not AGREE but source is null head
+  -- strategy: not AGREE but source is nonhead and target is not null
+end
+
+--[[
+TODO: update this
+
+Expands constituents and determines their heights.
+
+Every constituent which is a reference into the lexicon is recursively
+expanded until there are no more references.
+
+The height of a constituent is 1 more than the greatest of its
+childrens' heights or 0 if it has no children.
+
+Args:
+  constituent! A constituent.
+  lexicon: A lexicon.
+  parameters: A language parameter table.
+
+Returns:
+  The expanded constituent.
+  The sequence of all constituents in the syntax tree sorted in
+    increasing order by height.
+]]
+local function expand_constituents(constituent, lexicon, parameters)
+  local expand_constituents  -- forward declaration
+  local function expand_and_tidy(constituent, n, depth, heads_without_phrases,
+                                 sfis)
+    local sfis_n = {}
+    constituent[n] = expand_constituents(constituent[n], depth + 1,
+                                         heads_without_phrases, sfis_n)
+    for _, sfi in ipairs(sfis_n) do
+      sfis[#sfis + 1] = sfi
+    end
+    if constituent.is_phrase then
+      for i, head in ipairs(heads_without_phrases) do
+        head.maximal = constituent
+        heads_without_phrases[i] = nil
+      end
+    end
+    return sfis_n
+  end
+  expand_constituents = function(constituent, depth, heads_without_phrases,
+                                 sfis)
+    constituent.depth = depth
+    if constituent.n1 then
+      local sfis_1 =
+        expand_and_tidy(constituent, 'n1', depth, heads_without_phrases, sfis)
+      if constituent.n2 then
+        if not constituent.n1.n1 then
+          constituent.n1.complement = constituent.n2
+        end
+        local sfis_2 =
+          expand_and_tidy(constituent, 'n2', depth, heads_without_phrases, sfis)
+        utils.sort_vector(sfis, nil, compare_sfis(parameters))
+        agree_and_maybe_merge(parameters, sfis_1, sfis_2)
+      end
+    else
+      local replacement = lexicon[constituent.ref]
+      if replacement then
+        return expand_constituents(utils.clone(replacement, true), depth,
+                                   heads_without_phrases, sfis)
+      elseif constituent.ref then
+        qerror('No morpheme with ID ' .. constituent.ref)
+      else
+        if constituent.is_phrase then
+          constituent.maximal = constituent
+        else
+          heads_without_phrases[#heads_without_phrases + 1] = constituent
+        end
+        for _, morpheme in ipairs(constituent.morphemes) do
+          for feature, value in pairs(morpheme.features or {}) do  --TODO rm
+            -- TODO: Which takes precendence, constituent's or morpheme's?
+            constituent.features[feature] = value
+          end
+        end
+        for feature, value in pairs(constituent.features) do
+          sfis[#sfis + 1] = {depth=depth, head=constituent, feature=feature}
+        end
+      end
+    end
+    return constituent
+  end
+  return expand_constituents(constituent, 0, {}, {})
+end
+
+if TEST and TODO then
+  local constituent = expand_constituents({text='x'}, {})
+  assert_eq(constituent, {height=0, text='x'})
+  constituent = expand_constituents({n1={text='x'}}, {})
+  assert_eq(constituent, {height=1, n1={height=0, text='x'}})
+  constituent = expand_constituents({n1={n1={text='x'}}}, {})
+  assert_eq(constituent, {height=2, n1={height=1, n1={height=0, text='x'}}})
+  constituent = expand_constituents({n1={text='x'}, n2={text='y'}}, {})
+  assert_eq(constituent,
+           {height=1, n1={height=0, text='x'}, n2={height=0, text='y'}})
+  constituent = expand_constituents({n1={n1={text='x'}}, n2={text='y'}}, {})
+  assert_eq(constituent, {height=2, n1={height=1, n1={height=0, text='x'}},
+                          n2={height=0, text='y'}})
+  constituent = expand_constituents({n1={text='x'}, n2={n1={text='y'}}}, {})
+  assert_eq(constituent, {height=2, n1={height=0, text='x'},
+                          n2={height=1, n1={height=0, text='y'}}})
+  local lexicon = {X={text='x'}, Y={n1={text='y'}}}
+  local lexicon_2 = {X={text='x'}, Y={n1={text='y'}}}
+  constituent = expand_constituents({ref='X'}, lexicon)
+  assert_eq(constituent, {height=0, text='x'})
+  assert_eq(constituents, {constituent})
+  constituent = expand_constituents({ref='Y'}, lexicon)
+  assert_eq(constituent, {height=1, n1={height=0, text='y'}})
+  assert_eq(constituents, {constituent.n1, constituent})
+  assert_eq(lexicon, lexicon_2)
+end
+
+local function c_command(constituent)
+  local i = 0
+  local constituents = {constituent.sibling}
+  return function()
+    i = i + 1
+    if i <= #constituents then
+      local constituent = constituents[i]
+      if constituent.n1 then
+        table.insert(constituents, constituent.n1)
+        if constituent.n2 then
+          table.insert(constituents, constituent.n2)
+        end
+      end
+      return constituent
+    end
+  end
+end
+
+if TEST and TODO then
+  local constituent = {text='x'}
+  local iter = c_command(constituent)
+  assert_eq(nil, iter())
+
+  constituent = {n1={n1={text='x'}, n2={n1={text='y'}}}, n2={text='z'}}
+  constituent.n1.sibling = constituent.n2
+  constituent.n2.sibling = constituent.n1
+  constituent.n1.n1.sibling = constituent.n1.n2
+  constituent.n1.n2.sibling = constituent.n1.n1
+  iter = c_command(constituent.n2)
+  assert_eq(true, iter() == constituent.n1)
+  assert_eq(true, iter() == constituent.n1.n1)
+  assert_eq(true, iter() == constituent.n1.n2)
+  assert_eq(true, iter() == constituent.n1.n2.n1)
+  assert_eq(nil, iter())
+
+  iter = c_command(constituent.n1)
+  assert_eq(true, constituent.n2 == iter())
+  assert_eq(nil, iter())
+end
+
+--[[
+Linearizes a constituent.
+
+A linearization is the sequence of the words of the heads dominated by a
+constituent in breadth-first order. If a constituent has two children,
+the second is linearized first if the `swap` parameter is set, and the
+two linearizations are dislocated around each other.
+
+Args:
+  constituent: A constituent.
+  parameters: A language parameter table.
+
+Returns:
+  The linearization of the constituent as a sequence of words. If
+  `constituent` is nil, the sequence is empty.
+]]
+local function linearize(constituent, parameters)
+  if (not constituent or
+      (constituent.moved_to and not parameters.overt_trace)) then
+    return {}
+  elseif not constituent.n1 then
+    return {constituent.morphemes}
+  end
+  local n1, n2 = 'n1', 'n2'
+  if parameters.swap then
+    n1, n2 = n2, n1
+  end
+  return dislocate(linearize(constituent[n1], parameters),
+                   linearize(constituent[n2], parameters), not parameters.swap)
+end
+
+if TEST and TODO then
+  local n1 = {features={f=1, g=2}, morphemes={{x=1}, {x=2}}}
+  local constituent = {n1=n1,
+                       n2={n1={morphemes={{x=3}}},
+                           n2={features={g=2}, morphemes={{x=2}}, moved_to=n1},
+                       features={}, morphemes={}}}
+  assert_eq(linearize(constituent, {}),
+            {constituent.n1.morphemes, constituent.n2.n1.morphemes})
+  assert_eq(linearize(constituent, {overt_trace=true}),
+            {constituent.n1.morphemes, constituent.n2.n1.morphemes,
+             constituent.n2.n2.morphemes})
+  assert_eq(linearize(constituent, {swap=true}),
+            {constituent.n2.n1.morphemes, constituent.n1.morphemes})
+  assert_eq(linearize(constituent, {overt_trace=true, swap=true}),
+            {constituent.n2.n2.morphemes, constituent.n2.n1.morphemes,
+             constituent.n1.morphemes})
+  assert_eq(linearize({n1={morphemes={{x='que', affix=true, initial=true,
+                                       after=true, features={}}}},
+                       n2={morphemes={{x='populus', features={}}}}}, {}),
+            {{{x='populus', features={}}},
+             {{x='que', affix=true, initial=true, after=true, features={}}}})
+end
+
+--[[
+Fuse two morphemes in a sequence.
+
+It tries to fuse `morphemes[i]` and `morphemes[i + 1]`, where both of
+those indices are valid. If it fuses, both morphemes are replaced with
+the new fused morpheme in the same place in the sequence.
+
+Args:
+  morphemes! A sequence of morphemes.
+  i: The index in `morphemes` of the first morpheme to fuse.
+
+Returns:
+  Whether the morphemes were fused.
+]]
+local function fuse(morphemes, i)
+  print'fuse'
+  local m1 = morphemes[i]
+  local m2 = morphemes[i + 1]
+  print('\tsearch for '..tostring(m2.id))
+  local fused = m1.fusion[m2.id]
+  if fused then
+    print'new fused form!'
+    morphemes[i] = fused
+    table.remove(morphemes, i + 1)
+  end
+  return fused
+end
+
+if TEST and TODO then
+  local m3 = {id=3, fusion={}}
+  local m4 = {id=4, fusion={}}
+  local morphemes =
+    {{id=1, fusion={}},
+     {id=2, fusion={[3]={id=5, fusion={[4]={id=6, fusion={}}}}}}, m3, m4}
+  assert_eq(not fuse(morphemes, 1), true)
+  assert_eq(morphemes,
+            {{id=1, fusion={}},
+             {id=2, fusion={[3]={id=5, fusion={[4]={id=6, fusion={}}}}}}, m3,
+             m4})
+  assert_eq(not fuse(morphemes, 2), false)
+  assert_eq(morphemes,
+            {{id=1, fusion={}}, {id=5, fusion={[4]={id=6, fusion={}}}}, m4})
+end
+
+--[[
+Rearranges a sequence of morphemes with fusion.
+
+The output sequence is the final phonological form of the word, except
+for dummy support.
+
+Args:
+  morphemes! A sequence of morphemes.
+
+Returns:
+  `morphemes`.
+]]
+local function make_word(morphemes)
+  print'make_word'
+  print('morphemes',#morphemes); for _, f in ipairs(morphemes) do printall(f); if f.features then printall(f.features) end end
+  local i = 1
+  while i < #morphemes do
+    if fuse(morphemes, i) then
+      -- now #morphemes is 1 less than before the fusion
+      if morphemes[i].affix then
+        table.remove(morphemes, i)
+        if morpheme[i].after then
+          table.insert(morphemes, morpheme)
+        else
+          table.insert(morphemes, 1, morpheme)
+          i = 1
+        end
+      end
+    else
+      i = i + 1
+    end
+  end
+  return morphemes
+end
+
+if TEST and TODO then
+  local will = {id='will', fusion={}}
+  local past = {id='PAST', fusion={}}
+  local went = {id='went', fusion={}}
+  local go = {id='go', fusion={PAST=went}}
+  local morphemes = {will, go}
+  make_word(morphemes)
+  assert_eq(morphemes, {will, go})
+  morphemes = {go, past}
+  make_word(morphemes)
+  assert_eq(morphemes, {went})
+end
+
+--[[
+local function make_word(lexicon, morphemes)
+  local affixes = {}
+  for morpheme_subset in all_subsets(morphemes) do
+    local affix, core = look_up(morpheme_subset, lexicon)
+    if affix and not (core is a subset of any other core) then
+      table.insert(affixes, affix)
+    end
+  end
+  sort(affixes, 'level')
+  return join(MORPHEME_BOUNDARY, affixes)
+end
+]]
+
+--[[
+Gets a word with dummy support if necessary and possible.
+
+Args:
+  word: A sequence of morphemes.
+
+Returns:
+  If `word` has a free morpheme, `word`; if not, `word` with dummy
+  support for one of the morphemes; if no morpheme has a dummy, `word`.
+]]
+local function get_dummy(word)
+  print'get_dummy'
+  local dummy
+  for _, morpheme in ipairs(word) do
+    if morpheme.affix then
+      dummy = dummy or morpheme.dummy
+    else
+      return word
+    end
+  end
+  if dummy then
+    for f, v in pairs(dummy.features) do
+      -- TODO: Precedence? See above.
+      dummy.features[f] = v
+    end
+  end
+  return dummy and dislocate(word, {dummy}, true) or word
+end
+
+if TEST and TODO then
+  local do_ = {id='do', features={}}
+  local past = {id='PAST', features={}, affiid=true, after=true, dummy=do_}
+  assert_eq(get_dummy({{id='go'}, past}), {{id='go'}, past})
+  assert_eq(get_dummy({past}), {do_, past})
+end
+
+--[[
+Converts a constituent to a sequence of words.
+
+Args:
+  constituent! A constituent.
+  lexicon: A lexicon.
+  parameters: A language parameter table.
+
+Returns:
+  A sequence of words.
+]]
+local function make_utterance(constituent, lexicon, parameters)
+  local words = {}
+  for _, word in ipairs(linearize(expand_constituents(constituent, lexicon,
+                                                      parameters),
+                                  parameters)) do
+    local new_word = word
+    print'got a new word:::'
+    repeat
+      print('repeating...',new_word)
+      word = make_word(new_word)
+      new_word = get_dummy(word)
+    until new_word == word
+    words[#words + 1] = word
+  end
+  return words
+end
+
+--[[
+Gets the string representation of a morpheme.
+
+Args:
+  morpheme: A morpheme.
+
+Returns:
+  The string representation of `morpheme`.
+]]
+local function spell_morpheme(morpheme)
+  if morpheme.text then
+    return morpheme.text
+  else
+    -- TODO
+    return '[' .. tostring(morpheme.id or '?') .. ']'
+  end
+end
+
+--[[
+Gets the string representation of a sequence of words.
+
+Every word has a space after it.
+
+Args:
+  utterance: A sequence of words.
+
+Returns:
+  The string representation of `utterance`.
+]]
+local function spell_utterance(utterance)
+  local s = ''
+  for _, word in ipairs(utterance) do
+    for _, morpheme in ipairs(word) do
+      s = s .. spell_morpheme(morpheme)
+    end
+    s = s .. ' '
+  end
+  return s
+end
+
+if TEST then
+  --[[
+  assert_eq(spell_utterance(make_utterance({features={},
+                                            morphemes={{text='a', fusion={}},
+                                                       {text='b', fusion={}}}},
+                                           {}, {strategies={}})),
+    'ab ')
+  assert_eq(
+    spell_utterance(make_utterance(
+      {n1={features={}, morphemes={{text='a', fusion={}}}}, features={},
+       n2={features={}, morphemes={{text='b', fusion={}}}}},
+      {}, {strategies={}})),
+    'a b ')
+  assert_eq(
+    spell_utterance(make_utterance(
+      {n1={features={}, morphemes={{text='a', fusion={}}}}, features={},
+       n2={features={}, morphemes={{text='b', fusion={}}}}},
+      {}, {strategies={}, swap=true})),
+    'b a ')
+  assert_eq(
+    spell_utterance(make_utterance(
+      {n1={ref='X'}, features={},
+       n2={features={}, morphemes={{text='b', fusion={}}}}},
+      {X={ref='Y'}, Y={features={}, morphemes={{text='z', fusion={}}}}},
+      {strategies={}})),
+    'z b ')
+  local n1 = {features={f=1, g=2},
+              morphemes={{text='1', fusion={}}, {text='2', fusion={}}}}
+  local constituent =
+    {n1=n1, features={},
+     n2={n1={features={}, morphemes={{text='3', fusion={}}}}, features={},
+         n2={features={g=2}, morphemes={{text='4', fusion={}}}, moved_to=n1},
+     features={}, morphemes={}}}
+  assert_eq(spell_utterance(make_utterance(constituent, {}, {strategies={}})),
+            '12 3 ')
+  assert_eq(spell_utterance(make_utterance(constituent, {},
+                                           {strategies={}, overt_trace=true})),
+            '12 3 4 ')
+  ]]
+  local en_past = {features={}}
+  local en_not =
+    {features={}, morphemes={{id='not', text='not', fusion={}, features={}}}}
+  local en_walk = {features={}, morphemes={{id='walk', text='walk', fusion={},
+                                            features={v=true}}}}
+  local en_do =
+    {morphemes={{id='do', text='do', features={v=true},
+                 fusion={PAST={id='do.PAST', text='did', fusion={},
+                               features={v=true}}}}},
+     features={}}
+  en_past.morphemes =
+    {{id='PAST', text='ed', fusion={}, features={v=false, q=false}, affix=true,
+      after=true, dummy=en_do.morphemes[1]}}
+  local en_you =
+    {morphemes={{id='you', text='you', features={}, fusion={}}}, features={}}
+  local en_what = {features={}, morphemes={{id='what', text='what',
+                                            features={wh=true}, fusion={}}}}
+  local en_thing = {features={}, morphemes={{id='thing', text='thing',
+                                             features={}, fusion={}}}}
+  local en_lexicon = {PAST=en_past, ['not']=en_not, walk=en_walk, you=en_you,
+                      what=en_what, thing=en_thing, ['do']=en_do}
+  local en_parameters =
+    {strategies={v={lower=true}, wh={pied_piping=true}, q={}}}
+  local early_en_parameters = {strategies={v={}}}
+  --[[
+  assert_eq(spell_utterance(make_utterance({is_phrase=true,
+                                            n1={ref='PAST'},
+                                            n2={is_phrase=true,
+                                                n1={n1={ref='walk'}}}},
+                                           en_lexicon, en_parameters)),
+            'walked ')
+  ]]
+  local en_did_not_walk =
+    {is_phrase=true, n1={ref='PAST'}, n2={n1={ref='not'}, is_phrase=true,
+                                          n2={is_phrase=true,
+                                              n1={ref='walk'}}}}
+  --[[
+  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
+                                           en_parameters)),
+            'did not walk ')
+  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
+                                           early_en_parameters)),
+            'walked not ')
+  ]]
+  local en_what_thing_did_you_do =
+    {n1={features={wh=false}, morphemes={}}, features={},
+     n2={n1={features={q=true}, morphemes={}},
+         n2={n1={ref='PAST'}, features={},
+             n2={n1={ref='you'}, features={},
+                 n2={n1={ref='do'}, features={},
+                     n2={is_phrase=true, features={},
+                         n1={ref='what'},
+                         n2={ref='thing'}}}}}}}
+  assert_eq(spell_utterance(make_utterance(en_what_thing_did_you_do,
+                                           en_lexicon, en_parameters)),
+            'what thing did you do ')
+end
+
+--[[
 Gets the two translations associated with a language.
 
 Args:
@@ -2288,6 +3347,7 @@ Loads all phonology raw files into `phonologies`.
 The raw files must match 'phonology_*.txt'.
 ]]
 local function load_phonologies()
+  qerror('TODO: keep working')
   local dir = dfhack.getSavePath() .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
