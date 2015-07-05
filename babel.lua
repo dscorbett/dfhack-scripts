@@ -2581,8 +2581,13 @@ local function do_syntax(constituent, lexicon, parameters)
     else
       local replacement = lexicon[constituent.ref]
       if replacement then
-        return do_syntax(utils.clone(replacement, true), depth,
-                         heads_without_phrases, sfis)
+        replacement = utils.clone(replacement, true)
+        if constituent.features then
+          for feature, value in pairs(constituent.features) do
+            replacement.features[feature] = value
+          end
+        end
+        return do_syntax(replacement, depth, heads_without_phrases, sfis)
       elseif constituent.ref then
         qerror('No morpheme with ID ' .. constituent.ref)
       else
@@ -2829,7 +2834,7 @@ end
 --[[
 Gets the string representation of a sequence of words.
 
-Every word has a space after it.
+Every word has a space after it, except those without morphemes.
 
 Args:
   utterance: A sequence of words.
@@ -2843,7 +2848,9 @@ local function spell_utterance(utterance)
     for _, morpheme in ipairs(word) do
       s = s .. spell_morpheme(morpheme)
     end
-    s = s .. ' '
+    if next(word) then
+      s = s .. ' '
+    end
   end
   return s
 end
@@ -2914,7 +2921,7 @@ if TEST then
   local en_lexicon = {PAST=en_past, ['not']=en_not, walk=en_walk, you=en_you,
                       what=en_what, thing=en_thing, ['do']=en_do}
   local en_parameters =
-    {strategies={v={lower=true}, wh={pied_piping=true}, q={}}}
+    {strategies={v={lower=true}, wh={pied_piping=true}, q={}, d={}}}
   local early_en_parameters = {strategies={v={}}}
   assert_eq(spell_utterance(make_utterance({is_phrase=true,
                                             n1={ref='PAST'},
@@ -2944,6 +2951,20 @@ if TEST then
   assert_eq(spell_utterance(make_utterance(en_what_thing_did_you_do,
                                            en_lexicon, en_parameters)),
             'what thing did you do ')
+  local en_you_did_thing =
+    {n1={features={}, morphemes={}}, features={}, is_phrase=true,
+     n2={n1={features={}, morphemes={}}, features={},
+         n2={n1={features={d=false}, morphemes={}}, features={}, is_phrase=true,
+             n2={n1={ref='PAST'}, features={},
+                 n2={features={}, is_phrase=true,
+                     n1={ref='you', features={d=true}},
+                     n2={n1={ref='do'}, features={},
+                         n2={is_phrase=true, features={},
+                             n1={features={}, morphemes={}},
+                             n2={ref='thing'}}}}}}}}
+  assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lexicon,
+                                           en_parameters)),
+            'you did thing ')
 end
 
 --[[
