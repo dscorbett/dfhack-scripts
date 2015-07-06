@@ -2027,8 +2027,8 @@ Returns:
 ]]
 local function get_best_sfis(sfis_1, sfis_2)
   local best_1, best_2
-  local i = 1 --#sfis_1
-  local j = 1 --#sfis_2
+  local i = 1
+  local j = 1
   local incrementing_i = false
   while i <= #sfis_1 and j <= #sfis_2 do
     local sfi_1 = sfis_1[i]
@@ -2548,11 +2548,10 @@ Returns:
 ]]
 local function do_syntax(constituent, lexicon, parameters)
   local do_syntax
-  local function expand_and_tidy(constituent, n, depth, heads_without_phrases,
-                                 sfis)
+  local heads_without_phrases = {}
+  local function extend_sfis(constituent, n, depth, sfis)
     local sfis_n = {}
-    constituent[n] =
-      do_syntax(constituent[n], depth + 1, heads_without_phrases, sfis_n)
+    constituent[n] = do_syntax(constituent[n], depth + 1, sfis_n)
     for _, sfi in ipairs(sfis_n) do
       sfis[#sfis + 1] = sfi
     end
@@ -2564,17 +2563,15 @@ local function do_syntax(constituent, lexicon, parameters)
     end
     return sfis_n
   end
-  do_syntax = function(constituent, depth, heads_without_phrases, sfis)
+  do_syntax = function(constituent, depth, sfis)
     constituent.depth = depth
     if constituent.n1 then
-      local sfis_1 =
-        expand_and_tidy(constituent, 'n1', depth, heads_without_phrases, sfis)
+      local sfis_1 = extend_sfis(constituent, 'n1', depth, sfis)
       if constituent.n2 then
         if not constituent.n1.n1 then
           constituent.n1.complement = constituent.n2
         end
-        local sfis_2 =
-          expand_and_tidy(constituent, 'n2', depth, heads_without_phrases, sfis)
+        local sfis_2 = extend_sfis(constituent, 'n2', depth, sfis)
         utils.sort_vector(sfis, nil, compare_sfis(parameters))
         agree_and_maybe_merge(parameters, get_best_sfis(sfis_1, sfis_2))
       end
@@ -2587,7 +2584,7 @@ local function do_syntax(constituent, lexicon, parameters)
             replacement.features[feature] = value
           end
         end
-        return do_syntax(replacement, depth, heads_without_phrases, sfis)
+        return do_syntax(replacement, depth, sfis)
       elseif constituent.ref then
         qerror('No morpheme with ID ' .. constituent.ref)
       else
@@ -2609,7 +2606,7 @@ local function do_syntax(constituent, lexicon, parameters)
     end
     return constituent
   end
-  return do_syntax(constituent, 0, {}, {})
+  return do_syntax(constituent, 0, {})
 end
 
 --[[
@@ -2723,7 +2720,6 @@ local function make_word(morphemes)
   local i = 1
   while i < #morphemes do
     if fuse(morphemes, i) then
-      -- now #morphemes is 1 less than before the fusion
       if morphemes[i].affix then
         table.remove(morphemes, i)
         if morpheme[i].after then
