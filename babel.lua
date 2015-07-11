@@ -4,6 +4,7 @@ local utils = require('utils')
 
 --[[
 TODO:
+* Find names for anon and unk fields.
 * Put words in GEN_DIVINE.
 * Update any new names in GEN_DIVINE to point to the moved GEN_DIVINE.
 * Protect against infinite loops due to sonority dead ends in random_word.
@@ -26,6 +27,7 @@ TODO:
 
 local TEST = true
 
+local REPORT_LINE_LENGTH = 73
 local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.9375
 local DEFAULT_IMPLICATION_PROBABILITY = 1
 local MINIMUM_FLUENCY = -32768
@@ -36,10 +38,25 @@ local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
 local FEATURE_CLASS_CONSONANT = 2
 
+local total_handlers = {
+  get={},
+  process_new={},
+  types={
+    -- TODO: Track structures.
+    'historical_figures',
+    'units',  -- TODO: should not be persistent
+    'entities',
+    'sites',
+    'artifacts',
+    'regions',
+    'events',
+  }
+}
+local next_report_index = 0
+
 local phonologies = nil
 local parameter_sets = {}
 local fluency_data = nil
-local next_report_index = 0
 
 if enabled == nil then
   enabled = false
@@ -120,7 +137,7 @@ A table whose keys are indices of features and whose values are feature
 environments for those features.
 
 Feature environment:
-A sequence of two sequences, each of whose keys are variable indexes and
+A sequence of two sequences, each of whose keys are variable indices and
 whose values are assignments. The two subsequences correspond to two
 patterns in the scope of which the feature environment is being used.
 
@@ -869,7 +886,7 @@ local function translate(language, topic, topic1, topic2, topic3)
   local word_index, _ = utils.linear_index(languages.words, 'REPORT;' .. word,
                                            'word')
   if not word_index then
-    return topic .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
+    return tostring(topic) .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
   end
   -- TODO: Capitalize the result.
   local phonology = phonologies[language.ints[3]]
@@ -2990,7 +3007,7 @@ Returns:
 ]]
 local function civ_native_language(civ)
   if civ then
-    local all_languages = dfhack.persistent.get_all('babel/language')
+    local all_languages = dfhack.persistent.get_all('babel/language') or {}
     for _, language in pairs(all_languages) do
       if language.ints[2] == civ.id then
         return language
@@ -3344,7 +3361,11 @@ Loads all phonology raw files into `phonologies`.
 The raw files must match 'phonology_*.txt'.
 ]]
 local function load_phonologies()
-  local dir = dfhack.getSavePath() .. '/raw/objects'
+  local dir = dfhack.getSavePath()
+  if not dir then
+    return
+  end
+  dir = dir .. '/raw/objects'
   for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
     local path = dir .. '/' .. filename
     if (dfhack.filesystem.isfile(path) and
@@ -4106,68 +4127,6 @@ local function create_language(civ)
 end
 
 --[[
-Simulate the linguistic effects of a historical event.
-
-This can modify anything related to translations or languages.
-
-Args:
-  event: A historical event.
-]]
-local function process_event(event)
-  local loans = {}
-  local civ1, civ2
-  if (df.history_event_war_attacked_sitest:is_instance(event) or
-      df.history_event_war_destroyed_sitest:is_instance(event) or
-      df.history_event_war_field_battlest:is_instance(event)) then
-    loan_words(event.attacker_civ, event.defender_civ, WAR)
-    loan_words(event.defender_civ, event.attacker_civ, WAR)
-  --[=[ TODO: Do these ever happen?
-  elseif df.history_event_first_contactst:is_instance(event) then
-    loan_words(event.contactor, event.contacted, GENERAL)
-    loan_words(event.contacted, event.contactor, GENERAL)
-  elseif df.history_event_topicagreement_madest:is_instance(event) then
-    -- TODO: should depend on the topic
-    loan_words(event.source, event.destination, TRADE)
-    loan_words(event.destination, event.source, TRADE)
-  elseif df.history_event_merchantst:is_instance(event) then
-    -- TODO: should depend on flags2
-    loan_words(event.source, event.destination, GENERAL)
-    loan_words(event.source, event.destination, TRADE)
-    loan_words(event.destination, event.source, TRADE)
-  elseif df.history_event_entity_incorporatedst:is_instance(event) then
-    -- TODO: migrant_entity no longer speaks their language
-  elseif df.history_event_masterpiece_createdst:is_instance(event) then
-    --[[TODO: maker_entity coins word for item/building type
-    civ1 = event.maker_entity
-    topics.new = CIV1
-    table.insert(referrents, )
-    ]]
-  ]=]
-  elseif df.history_event_war_plundered_sitest:is_instance(event) then
-    loan_words(event.attacker_civ, event.defender_civ, TRADE)
-  elseif df.history_event_war_site_taken_overst:is_instance(event) then
-    --[[TODO: What happens to the original inhabitants?
-    civ1 = event.attacker_civ
-    civ2 = event.defender_civ
-    topics.government = CIV2
-    topics.general = CIV1
-    ]]
-  elseif df.history_event_hist_figure_abductedst:is_instance(event) then
-    --[[TODO: Does this include goblin child-snatching?
-    civ1 = df.historical_figure.find(event.target).civ_id
-    civ2 = df.historical_figure.find(event.snatcher).civ_id
-    ]]
-  elseif df.history_event_item_stolenst:is_instance(event) then
-    --[[TODO: thief (histfig?)'s entity takes item/item_subtype words from entity
-    civ1 = df.historical_figure.find(event.histfig).civ_id
-    civ2 = entity
-    topics.specific = CIV1
-    table.insert(referrents, )
-    ]]
-  end
-end
-
---[[
 Determines whether a historical figure is not a unit.
 
 Args:
@@ -4188,19 +4147,6 @@ local function is_unprocessed_hf(hf)
     end
   end
   return true
-end
-
---[[
-Nicknames a historical figure.
-
-Args:
-  hf! A historical figure.
-]]
--- TODO: Make more interesting.
-local function process_hf(hf)
-  if is_unprocessed_hf(hf) then
-    hf.name.nickname = 'Hf' .. hf.id
-  end
 end
 
 --[[
@@ -4299,309 +4245,383 @@ local function report_language(report)
   end
 end
 
---[[
-Runs the simulation.
-]]
-local function babel()
-  if not dfhack.isWorldLoaded() then
-    print('not loaded')
-    write_fluency_data()
-    return
+local function initialize()
+  load_phonologies()
+  if not phonologies then
+    qerror('At least one phonology must be defined.')
   end
-  dfhack.with_suspend(function()
-    local entry1 = dfhack.persistent.get('babel/config1')
-    local first_time = false
-    if not entry1 then
-      first_time = true
-      entry1 = dfhack.persistent.save{key='babel/config1',
-                                     ints={0, 0, 0, 0, 0, 0, 0}}
-      -- TODO: Is there always exactly one generated translation, the last?
-      entry2 = dfhack.persistent.save{
-        key='babel/config2',
-        ints={#df.global.world.raws.language.translations - 1}}
+  if not fluency_data then
+    load_fluency_data()
+  end
+  local entry2 = dfhack.persistent.get('babel/config2')
+  -- TODO: why this truncation?
+  if entry2 then
+    local translations = df.global.world.raws.language.translations
+    translations:insert(entry2.ints[1], translations[#translations - 1])
+    translations:erase(#translations - 1)
+  end
+  local entry1 = dfhack.persistent.get('babel/config1')
+  local first_time = false
+  if not entry1 then
+    first_time = true
+    entry1 = dfhack.persistent.save{key='babel/config1',
+                                    ints={0, 0, 0, 0, 0, 0, 0}}
+    -- TODO: Is there always exactly one generated translation, the last?
+    entry2 = dfhack.persistent.save{
+      key='babel/config2',
+      ints={#df.global.world.raws.language.translations - 1}}
+  end
+  df.global.world.status.announcements:resize(0)
+  next_report_index = 0
+end
+
+local function handle_new_items(i, item_type)
+  local entry1 = dfhack.persistent.get('babel/config1')
+  local new_items = total_handlers.get[item_type]()
+  if #new_items > entry1.ints[i] then
+    print('\n' .. item_type .. ': ' .. #new_items .. '>' .. entry1.ints[i])
+    for i = entry1.ints[i], #new_items - 1 do
+      total_handlers.process_new[item_type](new_items[i], i)
     end
-    -- TODO: Track structures.
-    local entities_done = entry1.ints[3]
-    if #df.global.world.entities.all > entities_done then
-      print('\nent: ' .. #df.global.world.entities.all .. '>' .. entities_done)
-      for i = entities_done, #df.global.world.entities.all - 1 do
-        if (df.global.world.entities.all[i].type ==
-            df.historical_entity_type.Civilization) then
-          create_language(df.global.world.entities.all[i])
-        end
-        df.global.world.entities.all[i].name.nickname = 'Ent' .. i
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[3]=#df.global.world.entities.all}}
-      if first_time then
-        expand_lexicons()
-        overwrite_language_files()
-      end
-    end
-    local events_done = entry1.ints[7]
-    if #df.global.world.history.events > events_done then
-      print('\nevent: ' .. #df.global.world.history.events .. '>' .. events_done)
-      for i = events_done, #df.global.world.history.events - 1 do
-        process_event(df.global.world.history.events[i])
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[7]=#df.global.world.history.events}}
-    end
-    local hist_figures_done = entry1.ints[1]
-    if #df.global.world.history.figures > hist_figures_done then
-      print('\nhf: ' .. #df.global.world.history.figures .. '>' .. hist_figures_done)
-      for i = hist_figures_done, #df.global.world.history.figures - 1 do
-        process_hf(df.global.world.history.figures[i])
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[1]=#df.global.world.history.figures}}
-    end
-    -- TODO: units_done shouldn't be persistent
-    local units_done = entry1.ints[2]
-    if #df.global.world.units.all > units_done then
-      print('\nunit: ' .. #df.global.world.units.all .. '>' .. units_done)
-      for i = units_done, #df.global.world.units.all - 1 do
---        print('#' .. i .. '\t' .. df.global.world.units.all[i].name.first_name .. '\t' .. df.global.world.units.all[i].hist_figure_id)
-        if df.global.world.units.all[i].hist_figure_id == -1 then
-          df.global.world.units.all[i].name.nickname = 'U' .. i
-        end
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[2]=#df.global.world.units.all}}
-    end
-    local sites_done = entry1.ints[4]
-    if #df.global.world.world_data.sites > sites_done then
-      print('\nsite ' .. #df.global.world.world_data.sites .. '>' .. sites_done)
-      for i = sites_done, #df.global.world.world_data.sites - 1 do
-        df.global.world.world_data.sites[i].name.nickname = 'S' .. i
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[4]=#df.global.world.world_data.sites}}
-    end
-    local artifacts_done = entry1.ints[5]
-    if #df.global.world.artifacts.all > artifacts_done then
-      print('\nartifact ' .. #df.global.world.artifacts.all .. '>' .. artifacts_done)
-      for i = artifacts_done, #df.global.world.artifacts.all - 1 do
-        df.global.world.artifacts.all[i].name.nickname = 'A' .. i
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[5]=#df.global.world.artifacts.all}}
-    end
-    local regions_done = entry1.ints[6]
-    if #df.global.world.world_data.regions > regions_done then
-      print('\nregion ' .. #df.global.world.world_data.regions .. '>' .. regions_done)
-      for i = regions_done, #df.global.world.world_data.regions - 1 do
-        df.global.world.world_data.regions[i].name.nickname = 'Reg' .. i
-      end
-      dfhack.persistent.save{key='babel/config1',
-                             ints={[6]=#df.global.world.world_data.regions}}
-    end
-    local reports = df.global.world.status.reports
-    if #reports > next_report_index then
-      print('\nreport: ' .. #reports .. ' > ' .. next_report_index)
-      local counts = {}
-      for i = next_report_index, #reports - 1 do
-        local activity_id = reports[i].unk_v40_1
-        if activity_id ~= -1 and not reports[i].flags.continuation then
-          if counts[activity_id] then
-            counts[activity_id] = counts[activity_id] + 1
-          else
-            counts[activity_id] = 1
-          end
-        end
-      end
-      local announcements = df.global.world.status.announcements
-      local id_delta = 0
-      local i = next_report_index
-      while i < #reports do
-        local report = reports[i]
-        local announcement_index = utils.linear_index(announcements,
-                                                      report.id, 'id')
-        if (report.unk_v40_1 == -1 or
-            df.global.gamemode ~= df.game_mode.ADVENTURE) then
-          -- TODO: Combat logs in Fortress mode can have conversations.
-          print('  not a conversation: ' .. report.text)
-          report.id = report.id + id_delta
-          i = i + 1
+--    entry1.ints[i] = #new_items
+--    entry1:save()
+    dfhack.persistent.save{key='babel/config1', ints={[i]=#new_items}}
+  end
+end
+
+function total_handlers.get.entities()
+  return df.global.world.entities.all
+end
+
+function total_handlers.process_new.entities(entity, i)
+  if entity.type == df.historical_entity_type.Civilization then
+    create_language(entity)
+  end
+  entity.name.nickname = 'Ent' .. i
+end
+
+function total_handlers.get.events()
+  return df.global.world.history.events
+end
+
+--[[
+Simulate the linguistic effects of a historical event.
+
+This can modify anything related to translations or languages.
+
+Args:
+  event: A historical event.
+]]
+function total_handlers.process_new.events(event, i)
+  if true then return end
+  local loans = {}
+  local civ1, civ2
+  if (df.history_event_war_attacked_sitest:is_instance(event) or
+      df.history_event_war_destroyed_sitest:is_instance(event) or
+      df.history_event_war_field_battlest:is_instance(event)) then
+    loan_words(event.attacker_civ, event.defender_civ, WAR)
+    loan_words(event.defender_civ, event.attacker_civ, WAR)
+  --[=[ TODO: Do these ever happen?
+  elseif df.history_event_first_contactst:is_instance(event) then
+    loan_words(event.contactor, event.contacted, GENERAL)
+    loan_words(event.contacted, event.contactor, GENERAL)
+  elseif df.history_event_topicagreement_madest:is_instance(event) then
+    -- TODO: should depend on the topic
+    loan_words(event.source, event.destination, TRADE)
+    loan_words(event.destination, event.source, TRADE)
+  elseif df.history_event_merchantst:is_instance(event) then
+    -- TODO: should depend on flags2
+    loan_words(event.source, event.destination, GENERAL)
+    loan_words(event.source, event.destination, TRADE)
+    loan_words(event.destination, event.source, TRADE)
+  elseif df.history_event_entity_incorporatedst:is_instance(event) then
+    -- TODO: migrant_entity no longer speaks their language
+  elseif df.history_event_masterpiece_createdst:is_instance(event) then
+    --[[TODO: maker_entity coins word for item/building type
+    civ1 = event.maker_entity
+    topics.new = CIV1
+    table.insert(referrents, )
+    ]]
+  ]=]
+  elseif df.history_event_war_plundered_sitest:is_instance(event) then
+    loan_words(event.attacker_civ, event.defender_civ, TRADE)
+  elseif df.history_event_war_site_taken_overst:is_instance(event) then
+    --[[TODO: What happens to the original inhabitants?
+    civ1 = event.attacker_civ
+    civ2 = event.defender_civ
+    topics.government = CIV2
+    topics.general = CIV1
+    ]]
+  elseif df.history_event_hist_figure_abductedst:is_instance(event) then
+    --[[TODO: Does this include goblin child-snatching?
+    civ1 = df.historical_figure.find(event.target).civ_id
+    civ2 = df.historical_figure.find(event.snatcher).civ_id
+    ]]
+  elseif df.history_event_item_stolenst:is_instance(event) then
+    --[[TODO: thief (histfig?)'s entity takes item/item_subtype words from entity
+    civ1 = df.historical_figure.find(event.histfig).civ_id
+    civ2 = entity
+    topics.specific = CIV1
+    table.insert(referrents, )
+    ]]
+  end
+end
+
+
+function total_handlers.get.historical_figures()
+  return df.global.world.history.figures
+end
+
+--[[
+Nicknames a historical figure.
+
+Args:
+  historical_figure! A historical figure.
+]]
+function total_handlers.process_new.historical_figures(historical_figure)
+  if is_unprocessed_hf(historical_figure) then
+    historical_figure.name.nickname = 'Hf' .. historical_figure.id
+  end
+end
+
+function total_handlers.get.units()
+  return df.global.world.units.all
+end
+
+function total_handlers.process_new.units(unit, i)
+  if unit.hist_figure_id == -1 then
+    unit.name.nickname = 'U' .. i
+  end
+end
+
+function total_handlers.get.sites()
+  return df.global.world.world_data.sites
+end
+
+function total_handlers.process_new.sites(site, i)
+  site.name.nickname = 'S' .. i
+end
+
+function total_handlers.get.artifacts()
+  return df.global.world.artifacts.all
+end
+
+function total_handlers.process_new.artifacts(artifact, i)
+  artifact.name.nickname = 'A' .. i
+end
+
+function total_handlers.get.regions()
+  return df.global.world.world_data.regions
+end
+
+function total_handlers.process_new.regions(region, i)
+  region.name.nickname = 'Reg' .. i
+end
+
+function total_handlers.get.reports()
+  return df.global.world.status.reports
+end
+
+local function handle_new_reports()
+  local reports = df.global.world.status.reports
+  if #reports > next_report_index then
+    print('\nreport: ' .. #reports .. ' > ' .. next_report_index)
+    local counts = {}
+    for i = next_report_index, #reports - 1 do
+      local activity_id = reports[i].unk_v40_1
+      if activity_id ~= -1 and not reports[i].flags.continuation then
+        if counts[activity_id] then
+          counts[activity_id] = counts[activity_id] + 1
         else
-          local report_language = report_language(report)
-          print('  [' .. report.unk_v40_1 .. ']: ' .. report.text)
-          local adventurer = df.global.world.units.active[0]
-          local adv_hf = df.historical_figure.find(adventurer.hist_figure_id)
-          local adv_languages = unit_languages(adventurer)
-          for i = 1, #adv_languages do
-            print('adv knows: ' .. adv_languages[i].value)
-          end
-          if report_language then
-            print('speaker is speaking: ' .. report_language.value)
+          counts[activity_id] = 1
+        end
+      end
+    end
+    local announcements = df.global.world.status.announcements
+    local id_delta = 0
+    local i = next_report_index
+    while i < #reports do
+      local report = reports[i]
+      local announcement_index = utils.linear_index(announcements,
+                                                    report.id, 'id')
+      if (report.unk_v40_1 == -1 or
+          df.global.gamemode ~= df.game_mode.ADVENTURE) then
+        -- TODO: Combat logs in Fortress mode can have conversations.
+        print('  not a conversation: ' .. report.text)
+        report.id = report.id + id_delta
+        i = i + 1
+      else
+        local report_language = report_language(report)
+        print('  [' .. report.unk_v40_1 .. ']: ' .. report.text)
+        if #df.global.world.units.active == 0 then next_report_index = i; return end
+        local adventurer = df.global.world.units.active[0]
+        local adv_hf = df.historical_figure.find(adventurer.hist_figure_id)
+        local adv_languages = unit_languages(adventurer)
+        for i = 1, #adv_languages do
+          print('adv knows: ' .. adv_languages[i].value)
+        end
+        if report_language then
+          print('speaker is speaking: ' .. report_language.value)
+        else
+          print('speaker speaks no language')
+        end
+        if (report_language and not in_list(report_language, adv_languages, 1)) or (report.flags.continuation and just_learned) then
+          if report.flags.continuation then
+            print('  ...: ' .. report.text)
+            reports:erase(i)
+            if announcement_index then
+              announcements:erase(announcement_index)
+            end
+            id_delta = id_delta - 1
           else
-            print('speaker speaks no language')
-          end
-          if (report_language and not in_list(report_language, adv_languages, 1)) or (report.flags.continuation and just_learned) then
-            if report.flags.continuation then
-              print('  ...: ' .. report.text)
-              reports:erase(i)
-              if announcement_index then
-                announcements:erase(announcement_index)
+            just_learned = false
+            local fluency_record = get_fluency(adv_hf.id,
+                                               report_language.ints[2])
+            local unit = df.unit.find(report.unk_v40_3)
+            fluency_record.fluency = math.min(
+              MAXIMUM_FLUENCY, fluency_record.fluency +
+              math.ceil(adventurer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
+            print('strength <-- ' .. fluency_record.fluency)
+            if fluency_record.fluency == MAXIMUM_FLUENCY then
+              dfhack.gui.showAnnouncement('You have learned ' ..
+                dfhack.TranslateName(report_language.value) .. '.',
+                COLOR_GREEN)
+              just_learned = true
+            end
+            local conversation_id = report.unk_v40_1
+            local n = counts[conversation_id]
+            counts[conversation_id] = counts[conversation_id] - 1
+            local conversation = df.activity_entry.find(conversation_id)
+            -- TODO: Fix this bug more nicely.
+            if not conversation then next_report_index = i; return end
+            local force_goodbye = false
+            local participants = conversation.events[0].anon_1
+            local speaker_index, hearer_index = 0, 1
+            if #participants > 0 then
+              if participants[0].anon_1 ~= unit.id then
+                speaker_index, hearer_index = 1, 0
               end
-              id_delta = id_delta - 1
-            else
-              just_learned = false
-              local fluency_record = get_fluency(adv_hf.id,
-                                                 report_language.ints[2])
-              local unit = df.unit.find(report.unk_v40_3)
-              fluency_record.fluency = math.min(
-                MAXIMUM_FLUENCY, fluency_record.fluency +
-                math.ceil(adventurer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
-              print('strength <-- ' .. fluency_record.fluency)
-              if fluency_record.fluency == MAXIMUM_FLUENCY then
-                dfhack.gui.showAnnouncement('You have learned ' ..
-                  dfhack.TranslateName(report_language.value) .. '.',
-                  COLOR_GREEN)
-                just_learned = true
-              end
-              local conversation_id = report.unk_v40_1
-              local n = counts[conversation_id]
-              counts[conversation_id] = counts[conversation_id] - 1
-              local conversation = df.activity_entry.find(conversation_id)
-              local force_goodbye = false
-              local participants = conversation.events[0].anon_1
-              local speaker_index, hearer_index = 0, 1
-              if #participants > 0 then
-                if participants[0].anon_1 ~= unit.id then
-                  speaker_index, hearer_index = 1, 0
-                end
-                if (participants[0].anon_1 == adventurer.id or
-                    (#participants > 1 and
-                     participants[1].anon_1 == adventurer.id)) then
-                  conversation.events[0].anon_2 = 7
-                  if participants[0].anon_1 == adventurer.id then
-                    force_goodbye = true
-                  end
-                end
-              end
-              reports:erase(i)
-              if announcement_index then
-                announcements:erase(announcement_index)
-              end
-              local details = conversation.events[0].anon_9
-              details = details[#details - n]
-              local text = ''
-              -- TODO: participants is invalid for goodbyes, because that data has been deleted by then.
-              -- TODO: What if the adventurer knows the participants' names?
-              if #participants > speaker_index then
-                local speaker = df.unit.find(participants[speaker_index].anon_1)
-                text = df.profession.attrs[speaker.profession].caption
-              end
-              if #participants > 1 and participants[hearer_index].anon_1 ~= adventurer.id then
-                local hearer = df.unit.find(participants[hearer_index].anon_1)
-                text = text .. ' (to ' .. df.profession.attrs[hearer.profession].caption .. ')'
-              end
-              text = text .. ': ' ..
-                translate(report_language, force_goodbye or details.anon_3,
-                          details.anon_11, details.anon_12, details.anon_13)
-              local continuation = false
-              while not continuation or text ~= '' do
-                print('text:' .. text)
-                -- TODO: Break on whitespace preferably.
-                local size = math.min(string.len(text), 73)
-                new_report = {new=true,
-                              type=report.type,
-                              text=string.sub(text, 1, 73),
-                              color=report.color,
-                              bright=report.bright,
-                              duration=report.duration,
-                              flags={new=true,
-                                     continuation=continuation},
-                              repeat_count=report.repeat_count,
-                              id=report.id + id_delta,
-                              year=report.year,
-                              time=report.time,
-                              unk_v40_1=report.unk_v40_1,
-                              unk_v40_2=report.unk_v40_2,
-                              unk_v40_3=report.unk_v40_3}
-                text = string.sub(text, 74)
-                continuation = true
-                reports:insert(i, new_report)
-                i = i + 1
-                if announcement_index then
-                  announcements:insert(announcement_index, new_report)
-                  announcement_index = announcement_index + 1
+              if (participants[0].anon_1 == adventurer.id or
+                  (#participants > 1 and
+                   participants[1].anon_1 == adventurer.id)) then
+                -- 7 makes "Say goodbye" the only available option.
+                -- TODO: Figure out why.
+                -- TODO: df.global.ui_advmode.conversation.choices instead?
+                conversation.events[0].anon_2 = 7
+                if participants[0].anon_1 == adventurer.id then
+                  force_goodbye = true
                 end
               end
             end
-          else
-            just_learned = false
-            i = i + 1
+            reports:erase(i)
+            if announcement_index then
+              announcements:erase(announcement_index)
+            end
+            local details = conversation.events[0].anon_9
+            details = details[#details - n]
+            local text = ''
+            -- TODO: participants is invalid for goodbyes, because that data has been deleted by then.
+            -- TODO: What if the adventurer knows the participants' names?
+            if #participants > speaker_index then
+              local speaker = df.unit.find(participants[speaker_index].anon_1)
+              text = df.profession.attrs[speaker.profession].caption
+            end
+            if #participants > 1 and participants[hearer_index].anon_1 ~= adventurer.id then
+              local hearer = df.unit.find(participants[hearer_index].anon_1)
+              text = text .. ' (to ' .. df.profession.attrs[hearer.profession].caption .. ')'
+            end
+            text = text .. ': ' ..
+              translate(report_language, force_goodbye or details.anon_3,
+                        details.anon_11, details.anon_12, details.anon_13)
+            local continuation = false
+            while not continuation or text ~= '' do
+              print('text:' .. text)
+              -- TODO: Break on whitespace preferably.
+              local size = math.min(string.len(text), REPORT_LINE_LENGTH)
+              new_report = {new=true,
+                            type=report.type,
+                            text=string.sub(text, 1, REPORT_LINE_LENGTH),
+                            color=report.color,
+                            bright=report.bright,
+                            duration=report.duration,
+                            flags={new=true,
+                                   continuation=continuation},
+                            repeat_count=report.repeat_count,
+                            id=report.id + id_delta,
+                            year=report.year,
+                            time=report.time,
+                            unk_v40_1=report.unk_v40_1,
+                            unk_v40_2=report.unk_v40_2,
+                            unk_v40_3=report.unk_v40_3}
+              text = string.sub(text, REPORT_LINE_LENGTH + 1)
+              continuation = true
+              reports:insert(i, new_report)
+              i = i + 1
+              if announcement_index then
+                announcements:insert(announcement_index, new_report)
+                announcement_index = announcement_index + 1
+              end
+            end
           end
-        end -- conversation
-      end
-      next_report_index = i
-      df.global.world.status.next_report_id = i
+        else
+          just_learned = false
+          i = i + 1
+        end
+      end -- conversation
     end
-    if enabled then
-      timer = dfhack.timeout(1, 'frames', babel)
+    next_report_index = i
+    df.global.world.status.next_report_id = i
+  end
+end
+
+local function run()
+  for i, item_type in ipairs(total_handlers.types) do
+    handle_new_items(i, item_type)
+  end
+  handle_new_reports()
+  local viewscreen = dfhack.gui.getCurViewscreen()
+  if (dfhack.gui.getFocusString(viewscreen) == 'option' and
+      (viewscreen.in_retire_adv == 1 or
+       viewscreen.in_retire_dwf_abandon_adv == 1 or
+       viewscreen.in_abandon_dwf == 1)) then
+    -- Only do I/O right before retiring or abandoning.
+    -- TODO: Only do I/O once when on this screen.
+    write_fluency_data()
+    overwrite_language_files()
+  end
+end
+
+local function finalize()
+  phonologies = nil
+  fluency_data = nil
+end
+
+local function main()
+  if dfhack.isWorldLoaded() then
+    if not phonologies then
+      initialize()
     end
-  end)
+    run()
+  elseif phonologies then
+    finalize()
+  end
+  if enabled then
+    timer = dfhack.timeout(1, 'frames', main)
+  end
 end
 
 args = {...}
 if #args >= 1 then
   if args[1] == 'start' then
     enabled = true
-    if not phonologies then
-      load_phonologies()
-      if not phonologies then
-        qerror('At least one phonology must be defined')
-      end
-    end
-    if not fluency_data then
-      load_fluency_data()
-    end
-    df.global.world.status.announcements:resize(0)
-    local entry2 = dfhack.persistent.get('babel/config2')
-    if entry2 then
-      local translations = df.global.world.raws.language.translations
-      translations:insert(entry2.ints[1], translations[#translations - 1])
-      translations:erase(#translations - 1)
-    end
-    babel()
+    dfhack.with_suspend(main)
   elseif args[1] == 'stop' then
     enabled = false
     if timer then
       dfhack.timeout_active(timer, nil)
     end
   elseif args[1] == 'test' then
-    phonologies = nil
-    load_phonologies()
-    local rng = dfhack.random.new(121122)  -- 40221: too much ROUND
-    local function print_dimension(nodes, dimension, indent)
-      if not dimension then
-        return
-      end
-      print(indent .. (dimension.id and dimension.id .. ': ' .. nodes[dimension.id].name or '---'))
-      indent = indent .. '.'
-      print_dimension(nodes, dimension.d1, indent)
-      print_dimension(nodes, dimension.d2, indent)
-    end
-    local dim = get_dimension(rng, phonologies[1], 466)
-    print_dimension(phonologies[1].nodes, dim, '')
-    local inv = random_inventory(rng, phonologies[1], 466)
-    print('-----------------------')
-    for _, val in ipairs(inv) do
-      local ph = {}
-      for i, ni in pairs(val) do
-        if type(i) == 'number' then
-          ph[ni] = true
-        end
-      end
-      print(get_lemma(phonologies[1], {ph}), val.score)
-      for ni in pairs(ph) do
-        if phonologies[1].nodes[ni].feature then
-          print('\t'..phonologies[1].nodes[ni].name)
-        end
-      end
-    end
+    qerror('No tests')
   else
     usage()
   end
