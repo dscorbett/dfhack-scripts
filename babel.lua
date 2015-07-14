@@ -67,7 +67,7 @@ Data definitions:
 
 Language:
 A persistent entry with the keys:
-  value: The name of the language, for debugging.
+  value: The name of the language.
   ints:
     [1]: The number of this language among all languages.
     [2]: The ID of the associated civilization.
@@ -676,16 +676,18 @@ Translates an utterance into a language.
 
 Args:
   language: The language to translate into
-  topic: An integer corresponding to DFHack's `talk_choice_type` enum.
-  topic1,
-  topic2,
-  topic3: Integers whose exact interpretation depends on `topic`.
+  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
+    or `true` to force a goodbye.
+  topic1: An integer whose exact interpretation depends on `topic`.
+  topic2: An integer.
+  topic3: An integer.
+  english: The English text of the utterance.
 
 Returns:
   The translated utterance.
 ]]
-local function translate(language, topic, topic1, topic2, topic3)
-  print('translate ' .. tostring(topic) .. '/' .. topic1)
+local function translate(language, topic, topic1, topic2, topic3, english)
+  print('translate ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
   local word
   if topic == true then
     word = 'FORCE_GOODBYE'
@@ -4212,7 +4214,7 @@ Args:
 Returns:
   A sequence of languages the unit knows.
 ]]
-local function unit_languages(unit)
+local function get_unit_languages(unit)
   print('unit languages: unit.id=' .. unit.id)
   local _, hf = utils.linear_index(df.global.world.history.figures,
                                    unit.hist_figure_id, 'id')
@@ -4224,7 +4226,7 @@ local function unit_languages(unit)
 end
 
 --[[
-Gets the language a report should have been spoken in.
+Gets the language a report was spoken in.
 
 Args:
   report: A report representating part of a conversation.
@@ -4232,12 +4234,12 @@ Args:
 Returns:
   The language of the report.
 ]]
-local function report_language(report)
+local function get_report_language(report)
   print('report language: report.id=' .. report.id)
-  local unit = df.unit.find(report.unk_v40_3)
+  local speaker = df.unit.find(report.unk_v40_3)
   -- TODO: Take listener's language knowledge into account.
   if unit then
-    local languages = unit_languages(unit)
+    local languages = get_unit_languages(speaker)
     if #languages ~= 0 then
       -- TODO: Don't always choose the first one.
       return languages[1]
@@ -4272,7 +4274,9 @@ local function initialize()
       ints={#df.global.world.raws.language.translations - 1}}
   end
   df.global.world.status.announcements:resize(0)
+  df.global.world.status.reports:resize(0)
   next_report_index = 0
+  df.global.world.status.next_report_id = 0
 end
 
 local function handle_new_items(i, item_type)
@@ -4418,160 +4422,162 @@ function total_handlers.process_new.regions(region, i)
   region.name.nickname = 'Reg' .. i
 end
 
-function total_handlers.get.reports()
-  return df.global.world.status.reports
+local function get_new_turn_counts(reports, conversation_id)
+  local new_turn_counts = {}
+  for i = next_report_index, #reports - 1 do
+    local conversation_id = reports[i].unk_v40_1
+    if conversation_id ~= -1 and not reports[i].flags.continuation then
+      new_turn_counts[conversation_id] =
+        (new_turn_counts[conversation_id] or 0) + 1
+      print('NTC-'..i)
+      print(reports[i].text)
+      printall(df.activity_entry.find(conversation_id).events[0].anon_1)
+      print('---')
+    end
+  end
+  return new_turn_counts
+end
+
+local function update_fluency(acquirer, report_language)
+  local fluency_record =
+    get_fluency(acquirer.hist_figure_id, report_language.ints[2])
+  fluency_record.fluency = math.min(
+    MAXIMUM_FLUENCY, fluency_record.fluency +
+    math.ceil(acquirer.status.current_soul.mental_attrs
+              .LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
+  print('strength <-- ' .. fluency_record.fluency)
+  if fluency_record.fluency == MAXIMUM_FLUENCY then
+    dfhack.gui.showAnnouncement(
+      'You have learned ' .. dfhack.TranslateName(report_language.value) .. '.',
+      COLOR_GREEN)
+  end
+end
+
+local function get_participants(report, conversation)
+  local speaker_id = report.unk_v40_3
+  local participants = conversation.anon_1
+  local speaker = df.unit.find(speaker_id)
+  -- TODO: listener doesn't always exist.
+  print'conv:'
+  print(conversation)
+  local listener = #participants ~= 0 and df.unit.find(
+    participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
+  return speaker, listener
+end
+
+local function get_turn_preamble(report, conversation, adventurer)
+  -- TODO: Invalid for goodbyes: the data has been deleted by then.
+  local speaker, listener = get_participants(report, conversation)
+  local force_goodbye = false
+  if speaker == adventurer or listener == adventurer then
+    -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
+    -- TODO: df.global.ui_advmode.conversation.choices instead?
+    conversation.anon_2 = 7
+    if listener == adventurer then
+      force_goodbye = true
+    end
+  end
+  -- TODO: What if the adventurer knows the participants' names?
+  local text = speaker == adventurer and 'You' or
+    df.profession.attrs[speaker.profession].caption
+  if speaker ~= adventurer and listener ~= adventurer then
+    text = text .. ' (to ' ..
+      (listener and df.profession.attrs[listener.profession].caption or '???')
+      .. ')'
+  end
+  return text .. ': ', force_goodbye
+end
+
+local function replace_turn(conversation_id, new_turn_counts, english, id_delta, report, report_index, announcement_index, adventurer, report_language)
+  local conversation = df.activity_entry.find(conversation_id).events[0]
+  local turn = conversation.anon_9
+  turn = turn[#turn - new_turn_counts[conversation_id]]
+  new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
+  local continuation = false
+  local text, force_goodbye =
+    get_turn_preamble(report, conversation, adventurer)
+  text = text .. translate(report_language, force_goodbye or turn.anon_3,
+                           turn.anon_11, turn.anon_12, turn.anon_13, english)
+  repeat
+    id_delta = id_delta + 1
+    local new_report = {
+      new=true,
+      type=report.type,
+      text=text:sub(1, REPORT_LINE_LENGTH),
+      color=report.color,
+      bright=report.bright,
+      duration=report.duration,
+      flags={new=true, continuation=continuation},
+      repeat_count=report.repeat_count,
+      id=report.id + id_delta,
+      year=report.year,
+      time=report.time,
+      unk_v40_1=conversation_id,
+      unk_v40_2=report.unk_v40_2,
+      unk_v40_3=report.unk_v40_3,
+    }
+    print('id='..new_report.id)
+    text = text:sub(REPORT_LINE_LENGTH + 1)
+    continuation = true
+    df.global.world.status.reports:insert(report_index, new_report)
+    report_index = report_index + 1
+    if announcement_index then
+      df.global.world.status.announcements:insert(
+        announcement_index, new_report)
+      announcement_index = announcement_index + 1
+    end
+  until text == ''
+  return id_delta, report_index, announcement_index
 end
 
 local function handle_new_reports()
   local reports = df.global.world.status.reports
-  if #reports > next_report_index then
-    print('\nreport: ' .. #reports .. ' > ' .. next_report_index)
-    local counts = {}
-    for i = next_report_index, #reports - 1 do
-      local activity_id = reports[i].unk_v40_1
-      if activity_id ~= -1 and not reports[i].flags.continuation then
-        if counts[activity_id] then
-          counts[activity_id] = counts[activity_id] + 1
-        else
-          counts[activity_id] = 1
-        end
-      end
-    end
-    local announcements = df.global.world.status.announcements
-    local id_delta = 0
-    local i = next_report_index
-    while i < #reports do
-      local report = reports[i]
-      local announcement_index = utils.linear_index(announcements,
-                                                    report.id, 'id')
-      if (report.unk_v40_1 == -1 or
-          df.global.gamemode ~= df.game_mode.ADVENTURE) then
-        -- TODO: Combat logs in Fortress mode can have conversations.
-        print('  not a conversation: ' .. report.text)
+  if #reports <= next_report_index then
+    return
+  end
+  print('\nreports: ' .. #reports .. '>' .. next_report_index)
+  local new_turn_counts = get_new_turn_counts(reports)
+  local announcements = df.global.world.status.announcements
+  local id_delta = 0
+  local i = next_report_index
+  local english = ''
+  while i < #reports do
+    print(i .. ' / ' .. #reports .. ' +' .. id_delta)
+    local report = reports[i]
+    local announcement_index =
+      utils.linear_index(announcements, report.id, 'id')
+    local conversation_id = report.unk_v40_1
+    if conversation_id == -1 then
+      print('  not a conversation: ' .. report.text)
+      report.id = report.id + id_delta
+      i = i + 1
+    else
+      local report_language = get_report_language(report)
+      local adventurer = df.global.world.units.active[0]
+      local adventurer_languages = get_unit_languages(adventurer)
+      if in_list(report_language, adventurer_languages, 1) then
+        print('  adventurer understands: ' .. report.text)
         report.id = report.id + id_delta
         i = i + 1
       else
-        local report_language = report_language(report)
-        print('  [' .. report.unk_v40_1 .. ']: ' .. report.text)
-        if #df.global.world.units.active == 0 then next_report_index = i; return end
-        local adventurer = df.global.world.units.active[0]
-        local adv_hf = df.historical_figure.find(adventurer.hist_figure_id)
-        local adv_languages = unit_languages(adventurer)
-        for i = 1, #adv_languages do
-          print('adv knows: ' .. adv_languages[i].value)
+        english = english .. (english == '' and '' or ' ') .. report.text
+        reports:erase(i)
+        if announcement_index then
+          announcements:erase(announcement_index)
         end
-        if report_language then
-          print('speaker is speaking: ' .. report_language.value)
-        else
-          print('speaker speaks no language')
-        end
-        if (report_language and not in_list(report_language, adv_languages, 1)) or (report.flags.continuation and just_learned) then
-          if report.flags.continuation then
-            print('  ...: ' .. report.text)
-            reports:erase(i)
-            if announcement_index then
-              announcements:erase(announcement_index)
-            end
-            id_delta = id_delta - 1
-          else
-            just_learned = false
-            local fluency_record = get_fluency(adv_hf.id,
-                                               report_language.ints[2])
-            local unit = df.unit.find(report.unk_v40_3)
-            fluency_record.fluency = math.min(
-              MAXIMUM_FLUENCY, fluency_record.fluency +
-              math.ceil(adventurer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
-            print('strength <-- ' .. fluency_record.fluency)
-            if fluency_record.fluency == MAXIMUM_FLUENCY then
-              dfhack.gui.showAnnouncement('You have learned ' ..
-                dfhack.TranslateName(report_language.value) .. '.',
-                COLOR_GREEN)
-              just_learned = true
-            end
-            local conversation_id = report.unk_v40_1
-            local n = counts[conversation_id]
-            counts[conversation_id] = counts[conversation_id] - 1
-            local conversation = df.activity_entry.find(conversation_id)
-            -- TODO: Fix this bug more nicely.
-            if not conversation then next_report_index = i; return end
-            local force_goodbye = false
-            local participants = conversation.events[0].anon_1
-            local speaker_index, hearer_index = 0, 1
-            if #participants > 0 then
-              if participants[0].anon_1 ~= unit.id then
-                speaker_index, hearer_index = 1, 0
-              end
-              if (participants[0].anon_1 == adventurer.id or
-                  (#participants > 1 and
-                   participants[1].anon_1 == adventurer.id)) then
-                -- 7 makes "Say goodbye" the only available option.
-                -- TODO: Figure out why.
-                -- TODO: df.global.ui_advmode.conversation.choices instead?
-                conversation.events[0].anon_2 = 7
-                if participants[0].anon_1 == adventurer.id then
-                  force_goodbye = true
-                end
-              end
-            end
-            reports:erase(i)
-            if announcement_index then
-              announcements:erase(announcement_index)
-            end
-            local details = conversation.events[0].anon_9
-            details = details[#details - n]
-            local text = ''
-            -- TODO: participants is invalid for goodbyes, because that data has been deleted by then.
-            -- TODO: What if the adventurer knows the participants' names?
-            if #participants > speaker_index then
-              local speaker = df.unit.find(participants[speaker_index].anon_1)
-              text = df.profession.attrs[speaker.profession].caption
-            end
-            if #participants > 1 and participants[hearer_index].anon_1 ~= adventurer.id then
-              local hearer = df.unit.find(participants[hearer_index].anon_1)
-              text = text .. ' (to ' .. df.profession.attrs[hearer.profession].caption .. ')'
-            end
-            text = text .. ': ' ..
-              translate(report_language, force_goodbye or details.anon_3,
-                        details.anon_11, details.anon_12, details.anon_13)
-            local continuation = false
-            while not continuation or text ~= '' do
-              print('text:' .. text)
-              -- TODO: Break on whitespace preferably.
-              local size = math.min(string.len(text), REPORT_LINE_LENGTH)
-              new_report = {new=true,
-                            type=report.type,
-                            text=string.sub(text, 1, REPORT_LINE_LENGTH),
-                            color=report.color,
-                            bright=report.bright,
-                            duration=report.duration,
-                            flags={new=true,
-                                   continuation=continuation},
-                            repeat_count=report.repeat_count,
-                            id=report.id + id_delta,
-                            year=report.year,
-                            time=report.time,
-                            unk_v40_1=report.unk_v40_1,
-                            unk_v40_2=report.unk_v40_2,
-                            unk_v40_3=report.unk_v40_3}
-              text = string.sub(text, REPORT_LINE_LENGTH + 1)
-              continuation = true
-              reports:insert(i, new_report)
-              i = i + 1
-              if announcement_index then
-                announcements:insert(announcement_index, new_report)
-                announcement_index = announcement_index + 1
-              end
-            end
+        id_delta = id_delta - 1
+        if i == #reports or not reports[i].flags.continuation then
+          id_delta, i, announcement_index = replace_turn(conversation_id, new_turn_counts, english, id_delta, report, i, announcement_index, adventurer, report_language)
+          if report_language then
+            update_fluency(adventurer, report_language)
           end
-        else
-          just_learned = false
-          i = i + 1
         end
-      end -- conversation
+      end
     end
-    next_report_index = i
-    df.global.world.status.next_report_id = i
   end
+  -- TODO: Why have both of these?
+  next_report_index = i
+  df.global.world.status.next_report_id = i
 end
 
 local function run()
