@@ -29,7 +29,6 @@ local TEST = true
 
 local REPORT_LINE_LENGTH = 73
 local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.9375
-local DEFAULT_IMPLICATION_PROBABILITY = 1
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
@@ -167,21 +166,25 @@ A pair of a dimension value and an index.
     useful if a function specifies what the index means.
   candidate: A dimension value.
 
+Bitfield:
+A sequence of 32-bit unsigned integers representing a bitfield. Bit `b`
+of element `e` represents bit `(e - 1) * 32 + b` in that bitfield. The
+minimum bit is 0. There is no maximum bit; the bitfield will grow when
+needed.
+
 Scaling:
-A scaling factor to apply to the score of dimension value when two of
-its nodes have specific values.
-  val_1: Whether `node_1` must be present for the scaling to apply.
-  node_1: A node index.
-  val_2: Whether `node_2` must be present for the scaling to apply.
-  node_2: A node index.
+A scaling factor to apply to the score of dimension value if it matches
+a pattern of specific feature values.
+  mask: A bitfield. If and only if bit `b` is set, this scaling depends
+    on the value of node `b + 1` in the appropriate sequence of nodes.
+  values: A bitfield. If and only if bit `b` is set here and in `mask`,
+    this scaling applies only when the feature is present.
   scalar: How much to scale the score of a phoneme by for which this
     scaling applies. It is non-negative.
   strength: How strong the scaling factor is as a function of scalar.
     A scalar of 0 gets the maximum strength, then the strength decreases
     monotonically for scalars from 0 to 1, with a minimum strength at 1,
     then increases monotonically for scalars greater than 1.
-  prob: The probability that this scaling applies in a language. It is
-    in the range [0, 1].
 
 Dimension:
 A producer of dimension values. A dimension may have two subdimensions
@@ -189,14 +192,17 @@ from whose cross product its values are drawn.
   id: An ID for debugging.
   cache: A sequence of dimension values.
   nodes: A sequence of the node indices covered by this dimension.
-  d1: A dimension.
-  d2: A dimension.
-  values_1: A sequence of values chosen from `d1`.
-  values_2: A sequence of values chosen from `d2`.
+  d1: A dimension or nil.
+  d2: A dimension or nil. It is nil if and only if `d1` is.
+  values_1: A sequence of values chosen from `d1`, or nil if `d1` is
+    nil.
+  values_2: A sequence of values chosen from `d2`, or nil if `d2` is
+    nil.
   scalings: A sequence of scalings which apply to the nodes of this
     dimension but not to either of its subdimensions'. That is, each
     scaling's `node_1` and `node_2` are present in `d1.nodes` and
-    `d2.nodes`, respectively or vice versa.
+    `d2.nodes`, respectively or vice versa. If `d1` is nil, so is
+    `scalings`.
 
 Link:
 A relationship between two dimensions, and how close the relationship
@@ -1771,9 +1777,25 @@ end
 
 if TEST then
   local rng = {drandom=function(self) return 0 end}
-  assert_eq(remove_random_value(
-    rng, {{score=1, 1, 2, 3}, {score=2, 1, 2}, {score=0, 1, 3}}, {1}),
-    {score=2, 1, 2})
+  local candidates = {{score=1, 1, 2, 3}, {score=2, 1, 2}, {score=0, 1, 3}}
+  assert_eq(remove_random_value(rng, candidates, {1}), {score=2, 1, 2})
+  assert_eq(candidates, {{score=1, 1, 2, 3}, {score=0, 1, 3}})
+end
+
+local function print_val(val)
+  if not phonologies then return end
+  local ph = {}
+  for i, ni in pairs(val) do
+    if type(i) == 'number' then
+      ph[ni] = true
+    end
+  end
+  print(get_lemma(phonologies[1], {ph}), val.score)
+  for ni in pairs(ph) do
+    if phonologies[1].nodes[ni].feature then
+      print('\t'..phonologies[1].nodes[ni].name)
+    end
+  end
 end
 
 --[[
@@ -1827,6 +1849,7 @@ local function get_next_dimension_value(rng, dimension)
       end
       local value_a = dimension['value_' .. a]
       dimension['value_' .. a] = nil
+      -- TODO: Why not set value_b to nil?
       table.insert(dimension['values_' .. a], value_a)
       for _, value_b in ipairs(dimension['values_' .. b]) do
         local new_value = merge_sorted_sequences(value_a, value_b)
@@ -1839,9 +1862,11 @@ local function get_next_dimension_value(rng, dimension)
     end
     repeat
       local value = remove_random_value(rng, dimension.cache, dimension.nodes)
+--      print_val(value)
       for _, node_index in ipairs(value) do
         utils.insert_sorted(dimension.nodes, node_index, nil, utils.compare)
       end
+      -- TODO: If returning here, why have a repeat loop?
       return value
     until not next(dimension.cache)
   end
@@ -1862,6 +1887,30 @@ if TEST then
   assert_eq(get_next_dimension_value(rng, dim_3), {score=0.8 * 0.7 * 0.1, 1, 2})
   assert_eq(get_next_dimension_value(rng, dim_3), nil)
   assert_eq(get_next_dimension_value(rng, dim_3), nil)
+end
+
+--TODO
+local function wr(rng, sequence)
+  print'wr'
+  for i,e in ipairs(sequence) do
+    print(i,e.total)
+  end
+  print('total',sequence.total)
+  local target = rng:drandom() * sequence.total
+  local sum = 0
+  for i, e in ipairs(sequence) do
+    sum = sum + e.total
+    if sum > target then
+      local rv = table.remove(sequence, i)
+      sequence.total = 0
+      for _, e in ipairs(sequence) do
+        sequence.total = sequence.total + e.total
+      end
+      print('return',rv)
+      return rv
+    end
+  end
+  print'failure!'
 end
 
 --[[
@@ -3358,6 +3407,58 @@ if TEST then
 end
 
 --[[
+Extracts a bit from a bitfield.
+
+Args:
+  bitfield: A bitfield.
+  b: The bit to get.
+
+Returns:
+  The value of bit `b` in `bitfield`.
+]]
+local function bitfield_get(bitfield, b)
+  local int = bitfield[math.floor(b / 32) + 1]
+  return int and bit32.extract(int, b % 32) or 0
+end
+
+if TEST then
+  assert_eq(bitfield_get({}, 158), 0)
+  assert_eq(bitfield_get({0x0, 0x0, 0x2}, 65), 1)
+end
+
+--[[
+Sets a bit in a bitfield.
+
+Args:
+  bitfield! A bitfield.
+  b: The bit to set.
+  v: The value (0 or 1) to set it to.
+
+Returns:
+  `bitfield`.
+]]
+local function bitfield_set(bitfield, b, v)
+  local e = math.floor(b / 32) + 1
+  local int = bitfield[e]
+  if not int then
+    for i = #bitfield + 1, e do
+      bitfield[i] = 0
+    end
+  end
+  bitfield[e] = bit32.replace(bitfield[e], v, b % 32)
+  return bitfield
+end
+
+if TEST then
+  assert_eq(bitfield_set({}, 0, 1), {0x1})
+  assert_eq(bitfield_set({}, 1, 1), {0x2})
+  assert_eq(bitfield_set({}, 31, 1), {0x80000000})
+  assert_eq(bitfield_set({}, 32, 1), {0x0, 0x1})
+  assert_eq(bitfield_set({0xA0}, 0, 1), {0xA1})
+  assert_eq(bitfield_set({0xA0}, 5, 0), {0x80})
+end
+
+--[[
 Loads all phonology raw files into `phonologies`.
 
 The raw files must match 'phonology_*.txt'.
@@ -3470,10 +3571,11 @@ local function load_phonologies()
                           sonorous=sonorous, feature_class=feature_class,
                           feature=feature, prob=prob, articulators={}})
             if current_parent ~= 0 then
-              table.insert(current_phonology.scalings,
-                           {val_1=true, node_1=#current_phonology.nodes,
-                            val_2=false, node_2=current_parent, scalar=0,
-                            strength=1, prob=1})
+              table.insert(current_phonology.scalings, {
+                  mask=bitfield_set({}, #current_phonology.nodes, 1),
+                  values=bitfield_set({}, #current_phonology.nodes, 1),
+                  scalar=0, strength=math.huge, tag=tag
+                })
             end
             current_parent = #current_phonology.nodes
             table.insert(current_phonology.constraints,
@@ -3613,48 +3715,42 @@ local function load_phonologies()
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
             end
-            if #subtags ~= 6 and #subtags ~= 7 then
+            if #subtags < 4 or #subtags % 2 ~= 0 then
               qerror('Wrong number of subtags: ' .. tag)
             end
-            local val_1 = true
-            if subtags[2] == '-' then
-              val_1 = false
-            elseif subtags[2] ~= '+' then
-              qerror('First value must be + or -: ' .. tag)
-            end
-            local val_2 = true
-            if subtags[4] == '-' then
-              val_2 = false
-            elseif subtags[4] ~= '+' then
-              qerror('Second value must be + or -: ' .. tag)
-            end
-            local node_1 = utils.linear_index(current_phonology.nodes,
-                                              subtags[3], 'name')
-            if not node_1 then
-              qerror('No such node: ' .. subtags[3])
-            elseif not current_phonology.nodes[node_1].feature then
-              qerror('Node must not be a class node: ' .. subtags[3])
-            end
-            local node_2 = utils.linear_index(current_phonology.nodes,
-                                              subtags[5], 'name')
-            if not node_2 then
-              qerror('No such node: ' .. subtags[5])
-            elseif not current_phonology.nodes[node_2].feature then
-              qerror('Node must not be a class node: ' .. subtags[5])
-            elseif node_1 == node_2 then
-              qerror('Same node twice in one scaling: ' .. subtags[3])
-            end
-            local scalar = tonumber(subtags[6])
+            local scalar = tonumber(subtags[2])
             if not scalar or scalar < 0 then
-              qerror('Scalar must be a non-negative number: ' .. subtags[6])
+              qerror('Scalar must be a non-negative number: ' .. subtags[2])
             end
-            local strength = 1 - (scalar < 1 and 1 / scalar or scalar)
-            local prob =
-              tonumber(subtags[7]) or DEFAULT_IMPLICATION_PROBABILITY
+            local strength = (scalar < 1 and 1 / scalar or scalar) - 1
+            local mask = {}
+            local values = {}
+            local i = 3
+            while i < #subtags do
+              local value = 1
+              if subtags[i] == '-' then
+                value = 0
+              elseif subtags[i] ~= '+' then
+                qerror(
+                  'Value for ' .. subtags[i + 1] .. ' must be + or -: ' .. tag)
+              end
+              local node = utils.linear_index(current_phonology.nodes,
+                                              subtags[i + 1], 'name')
+              if not node then
+                qerror('No such node: ' .. subtags[i + 1])
+              elseif not current_phonology.nodes[node].feature then
+                qerror('Node must not be a class node: ' .. subtags[i + 1])
+              elseif bitfield_get(mask, node) == 1 then
+                qerror('Same node twice in one scaling: ' .. tag)
+              end
+              bitfield_set(mask, node, 1)
+              bitfield_set(values, node, value)
+              values[node] = value
+              i = i + 2
+            end
             table.insert(current_phonology.scalings,
-                         {val_1=val_1, node_1=node_1, val_2=val_2,
-                          node_2=node_2, scalar=scalar, strength=strength,
-                          prob=prob})
+                         {mask=mask, values=values, scalar=scalar,
+                          strength=strength, tag=tag})
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
@@ -4164,7 +4260,7 @@ Returns:
   A language, or nil if there is none.
 ]]
 local function hf_native_language(hf)
-  print('hf native language: hf.id=' .. hf.id)
+--  print('hf native language: hf.id=' .. hf.id)
   return civ_native_language(df.historical_entity.find(hf.civ_id))
 end
 
@@ -4178,7 +4274,7 @@ Returns:
   A sequence of languages the historical figure knows.
 ]]
 local function hf_languages(hf)
-  print('hf languages: hf.id=' .. hf.id)
+--  print('hf languages: hf.id=' .. hf.id)
   if not fluency_data[hf.id] then
     local language = hf_native_language(hf)
     if language then
@@ -4215,7 +4311,7 @@ Returns:
   A sequence of languages the unit knows.
 ]]
 local function get_unit_languages(unit)
-  print('unit languages: unit.id=' .. unit.id)
+--  print('unit languages: unit.id=' .. unit.id)
   local _, hf = utils.linear_index(df.global.world.history.figures,
                                    unit.hist_figure_id, 'id')
   if hf then
@@ -4235,7 +4331,7 @@ Returns:
   The language of the report.
 ]]
 local function get_report_language(report)
-  print('report language: report.id=' .. report.id)
+--  print('report language: report.id=' .. report.id)
   local speaker = df.unit.find(report.unk_v40_3)
   -- TODO: Take listener's language knowledge into account.
   if unit then
@@ -4425,14 +4521,11 @@ end
 local function get_new_turn_counts(reports, conversation_id)
   local new_turn_counts = {}
   for i = next_report_index, #reports - 1 do
+    print('r' .. i .. ': ' .. reports[i].text)
     local conversation_id = reports[i].unk_v40_1
     if conversation_id ~= -1 and not reports[i].flags.continuation then
       new_turn_counts[conversation_id] =
         (new_turn_counts[conversation_id] or 0) + 1
-      print('NTC-'..i)
-      print(reports[i].text)
-      printall(df.activity_entry.find(conversation_id).events[0].anon_1)
-      print('---')
     end
   end
   return new_turn_counts
@@ -4458,8 +4551,7 @@ local function get_participants(report, conversation)
   local participants = conversation.anon_1
   local speaker = df.unit.find(speaker_id)
   -- TODO: listener doesn't always exist.
-  print'conv:'
-  print(conversation)
+  -- TODO: Solution: cache all <activity_event_conversationst>s' participants.
   local listener = #participants ~= 0 and df.unit.find(
     participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
   return speaker, listener
@@ -4472,6 +4564,7 @@ local function get_turn_preamble(report, conversation, adventurer)
   if speaker == adventurer or listener == adventurer then
     -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
     -- TODO: df.global.ui_advmode.conversation.choices instead?
+    -- TODO: Cf. anon_15.
     conversation.anon_2 = 7
     if listener == adventurer then
       force_goodbye = true
@@ -4519,7 +4612,9 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
     print('id='..new_report.id)
     text = text:sub(REPORT_LINE_LENGTH + 1)
     continuation = true
+    print('insert: index=' .. report_index .. ' length=' .. #df.global.world.status.reports)
     df.global.world.status.reports:insert(report_index, new_report)
+    print('        new length='..#df.global.world.status.reports)
     report_index = report_index + 1
     if announcement_index then
       df.global.world.status.announcements:insert(
@@ -4542,7 +4637,7 @@ local function handle_new_reports()
   local i = next_report_index
   local english = ''
   while i < #reports do
-    print(i .. ' / ' .. #reports .. ' +' .. id_delta)
+--    print(i .. ' / ' .. #reports .. ' +' .. id_delta)
     local report = reports[i]
     local announcement_index =
       utils.linear_index(announcements, report.id, 'id')
@@ -4568,6 +4663,7 @@ local function handle_new_reports()
         id_delta = id_delta - 1
         if i == #reports or not reports[i].flags.continuation then
           id_delta, i, announcement_index = replace_turn(conversation_id, new_turn_counts, english, id_delta, report, i, announcement_index, adventurer, report_language)
+          english = ''
           if report_language then
             update_fluency(adventurer, report_language)
           end
@@ -4575,7 +4671,6 @@ local function handle_new_reports()
       end
     end
   end
-  -- TODO: Why have both of these?
   next_report_index = i
   df.global.world.status.next_report_id = i
 end
@@ -4627,7 +4722,46 @@ if #args >= 1 then
       dfhack.timeout_active(timer, nil)
     end
   elseif args[1] == 'test' then
-    qerror('No tests')
+    phonologies = nil
+    load_phonologies()
+local function toBits(num)
+    local t={} -- will contain the bits
+    while num>0 do
+        rest=math.fmod(num,2)
+        t[#t+1]=rest
+        num=(num-rest)/2
+    end
+    return t
+end
+    for _, scaling in pairs(phonologies[1].scalings) do
+      print('tag     ',scaling.tag)
+      print('strength',scaling.strength)
+      print('scalar  ',scaling.scalar)
+      print('mask:')
+      for i,e in ipairs(scaling.mask) do print(i,table.concat(toBits(e))) end
+      print'values:'
+      for i,e in ipairs(scaling.values) do print(i,table.concat(toBits(e))) end
+      print()
+    end
+    --[[
+    local rng = dfhack.random.new(121122)  -- 40221: too much ROUND
+    local function print_dimension(nodes, dimension, indent)
+      if not dimension then
+        return
+      end
+      print(indent .. (dimension.id and dimension.id .. ': ' .. nodes[dimension.id].name or '---'))
+      indent = indent .. '.'
+      print_dimension(nodes, dimension.d1, indent)
+      print_dimension(nodes, dimension.d2, indent)
+    end
+    local dim = get_dimension(rng, phonologies[1], 466)
+    print_dimension(phonologies[1].nodes, dim, '')
+    local inv = random_inventory(rng, phonologies[1], 466)
+    print('-----------------------')
+    for _, val in ipairs(inv) do
+      print_val(val)
+    end
+    ]]
   else
     usage()
   end
