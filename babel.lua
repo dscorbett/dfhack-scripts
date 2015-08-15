@@ -1592,6 +1592,118 @@ if TEST then
 end
 
 --[[
+Extracts a bit from a bitfield.
+
+Args:
+  bitfield: A bitfield.
+  b: The bit to get, from 0 up.
+
+Returns:
+  The value of bit `b` in `bitfield` (0 or 1).
+]]
+local function bitfield_get(bitfield, b)
+  local int = bitfield[math.floor(b / 32) + 1]
+  return int and bit32.extract(int, b % 32) or 0
+end
+
+if TEST then
+  assert_eq(bitfield_get({}, 158), 0)
+  assert_eq(bitfield_get({0x0, 0x0, 0x2}, 65), 1)
+end
+
+--[[
+Sets a bit in a bitfield.
+
+Args:
+  bitfield! A bitfield.
+  b: The bit to set, from 0 up.
+  v: The value (0 or 1) to set it to.
+
+Returns:
+  `bitfield`.
+]]
+local function bitfield_set(bitfield, b, v)
+  local e = math.floor(b / 32) + 1
+  local int = bitfield[e]
+  if not int then
+    for i = #bitfield + 1, e do
+      bitfield[i] = 0
+    end
+  end
+  bitfield[e] = bit32.replace(bitfield[e], v, b % 32)
+  return bitfield
+end
+
+if TEST then
+  assert_eq(bitfield_set({}, 0, 1), {0x1})
+  assert_eq(bitfield_set({}, 1, 1), {0x2})
+  assert_eq(bitfield_set({}, 31, 1), {0x80000000})
+  assert_eq(bitfield_set({}, 32, 1), {0x0, 0x1})
+  assert_eq(bitfield_set({0xA0}, 0, 1), {0xA1})
+  assert_eq(bitfield_set({0xA0}, 5, 0), {0x80})
+end
+
+--[[
+Converts a set of scalings to a set of links.
+
+Args:
+  scalings: A sequence of scalings.
+  node_to_dimension: A map of node indices to dimensions.
+  node_count: The number of nodes in the phonology.
+
+Returns:
+  A sequence of links sorted in increasing order by strength.
+]]
+local function make_links(scalings, node_to_dimension, node_count)
+  local links = {}
+  local links_map = {}
+  for _, scaling in ipairs(scalings) do
+    for n1 = 1, node_count - 1 do
+      local d1 = node_to_dimension[n1]
+      if d1 and bitfield_get(scaling.mask, n1 - 1) == 1 then
+        for n2 = n1 + 1, node_count do
+          local d2 = node_to_dimension[n2]
+          if d2 and bitfield_get(scaling.mask, n2 - 1) == 1 then
+            local link =
+              {d1=d1, d2=d2, scalings={scaling}, strength=scaling.strength}
+            if not links_map[d1] then
+              links_map[d1] = {[d2]=link}
+            elseif not links_map[d1][d2] then
+              links_map[d1][d2] = link
+            else
+              link = links_map[d1][d2]
+              link.scalings[#link.scalings + 1] = scaling
+              link.strength = link.strength + scaling.strength
+              link = nil
+            end
+            links[#links + 1] = link
+          end
+        end
+      end
+    end
+  end
+  return utils.sort_vector(links, 'strength', utils.compare)
+end
+
+if TEST then
+  local node_to_dimension = {}
+  for i = 1, 5 do
+    node_to_dimension[i] = {id=i}
+  end
+  assert_eq(make_links({}, node_to_dimension, 5), {})
+  local s123_3 = {mask={0x7}, values={}, scalar=0.25, strength=3}
+  local s23_7 = {mask={0x6}, values={}, scalar=0.125, strength=7}
+  local s23_9 = {mask={0x6}, values={}, scalar=0.1, strength=9}
+  local s34_4 = {mask={0xC}, values={}, scalar=0.2, strength=4}
+  assert_eq(make_links({s123_3, s23_7, s23_9, s34_4}, node_to_dimension, 5),
+            {{d1={id=1}, d2={id=2}, scalings={s123_3}, strength=3},
+             {d1={id=1}, d2={id=3}, scalings={s123_3}, strength=3},
+             {d1={id=3}, d2={id=4}, scalings={s34_4}, strength=4},
+             {d1={id=2}, d2={id=3}, scalings={s123_3, s23_7, s23_9},
+              strength=19}})
+end
+
+--[[
 Randomly generates a dimension for a phonology given a target creature.
 
 Args:
@@ -1621,24 +1733,14 @@ local function get_dimension(rng, phonology, creature_index)
         local dimension =
           {id=i, domain={i}, nodes={}, cache=node.feature and
            {{score=1 - node.prob}, {score=node.prob, i}} or {{score=1, i}}}
-        table.insert(dimensions, dimension)
+        dimensions[#dimensions + 1] = dimension
         node_to_dimension[i] = dimension
       else
         inarticulable_node_index = i
       end
     end
   end
-  local scalings = random_scalings(rng, phonology.scalings)
-  local links = {}
-  for _, scaling in ipairs(scalings) do
-    local d1 = node_to_dimension[scaling.node_1]
-    local d2 = node_to_dimension[scaling.node_2]
-    if d1 and d2 then
-      table.insert(links, {d1=d1, d2=d2, scalings={scaling},
-                           strength=scaling.strength})
-    end
-  end
-  utils.sort_vector(links, 'strength', utils.compare)
+  local links = make_links(phonology.scalings, node_to_dimension, #nodes)
   while #dimensions > 1 do
     merge_dimensions(dimensions, links)
   end
@@ -3407,58 +3509,6 @@ if TEST then
 end
 
 --[[
-Extracts a bit from a bitfield.
-
-Args:
-  bitfield: A bitfield.
-  b: The bit to get.
-
-Returns:
-  The value of bit `b` in `bitfield`.
-]]
-local function bitfield_get(bitfield, b)
-  local int = bitfield[math.floor(b / 32) + 1]
-  return int and bit32.extract(int, b % 32) or 0
-end
-
-if TEST then
-  assert_eq(bitfield_get({}, 158), 0)
-  assert_eq(bitfield_get({0x0, 0x0, 0x2}, 65), 1)
-end
-
---[[
-Sets a bit in a bitfield.
-
-Args:
-  bitfield! A bitfield.
-  b: The bit to set.
-  v: The value (0 or 1) to set it to.
-
-Returns:
-  `bitfield`.
-]]
-local function bitfield_set(bitfield, b, v)
-  local e = math.floor(b / 32) + 1
-  local int = bitfield[e]
-  if not int then
-    for i = #bitfield + 1, e do
-      bitfield[i] = 0
-    end
-  end
-  bitfield[e] = bit32.replace(bitfield[e], v, b % 32)
-  return bitfield
-end
-
-if TEST then
-  assert_eq(bitfield_set({}, 0, 1), {0x1})
-  assert_eq(bitfield_set({}, 1, 1), {0x2})
-  assert_eq(bitfield_set({}, 31, 1), {0x80000000})
-  assert_eq(bitfield_set({}, 32, 1), {0x0, 0x1})
-  assert_eq(bitfield_set({0xA0}, 0, 1), {0xA1})
-  assert_eq(bitfield_set({0xA0}, 5, 0), {0x80})
-end
-
---[[
 Loads all phonology raw files into `phonologies`.
 
 The raw files must match 'phonology_*.txt'.
@@ -3572,8 +3622,8 @@ local function load_phonologies()
                           feature=feature, prob=prob, articulators={}})
             if current_parent ~= 0 then
               table.insert(current_phonology.scalings, {
-                  mask=bitfield_set({}, #current_phonology.nodes, 1),
-                  values=bitfield_set({}, #current_phonology.nodes, 1),
+                  mask=bitfield_set({}, #current_phonology.nodes - 1, 1),
+                  values=bitfield_set({}, #current_phonology.nodes - 1, 1),
                   scalar=0, strength=math.huge, tag=tag
                 })
             end
@@ -3740,12 +3790,11 @@ local function load_phonologies()
                 qerror('No such node: ' .. subtags[i + 1])
               elseif not current_phonology.nodes[node].feature then
                 qerror('Node must not be a class node: ' .. subtags[i + 1])
-              elseif bitfield_get(mask, node) == 1 then
+              elseif bitfield_get(mask, node - 1) == 1 then
                 qerror('Same node twice in one scaling: ' .. tag)
               end
-              bitfield_set(mask, node, 1)
-              bitfield_set(values, node, value)
-              values[node] = value
+              bitfield_set(mask, node - 1, 1)
+              bitfield_set(values, node - 1, value)
               i = i + 2
             end
             table.insert(current_phonology.scalings,
@@ -4724,26 +4773,6 @@ if #args >= 1 then
   elseif args[1] == 'test' then
     phonologies = nil
     load_phonologies()
-local function toBits(num)
-    local t={} -- will contain the bits
-    while num>0 do
-        rest=math.fmod(num,2)
-        t[#t+1]=rest
-        num=(num-rest)/2
-    end
-    return t
-end
-    for _, scaling in pairs(phonologies[1].scalings) do
-      print('tag     ',scaling.tag)
-      print('strength',scaling.strength)
-      print('scalar  ',scaling.scalar)
-      print('mask:')
-      for i,e in ipairs(scaling.mask) do print(i,table.concat(toBits(e))) end
-      print'values:'
-      for i,e in ipairs(scaling.values) do print(i,table.concat(toBits(e))) end
-      print()
-    end
-    --[[
     local rng = dfhack.random.new(121122)  -- 40221: too much ROUND
     local function print_dimension(nodes, dimension, indent)
       if not dimension then
@@ -4756,6 +4785,7 @@ end
     end
     local dim = get_dimension(rng, phonologies[1], 466)
     print_dimension(phonologies[1].nodes, dim, '')
+    --[[
     local inv = random_inventory(rng, phonologies[1], 466)
     print('-----------------------')
     for _, val in ipairs(inv) do
