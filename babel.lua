@@ -4,6 +4,7 @@ local utils = require('utils')
 
 --[[
 TODO:
+* Split this giant file up into smaller pieces.
 * Find names for anon and unk fields.
 * Put words in GEN_DIVINE.
 * Update any new names in GEN_DIVINE to point to the moved GEN_DIVINE.
@@ -32,6 +33,7 @@ local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.9375
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
+local MINIMUM_DIMENSION_CACHE_SIZE = 64
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -172,6 +174,24 @@ of element `e` represents bit `(e - 1) * 32 + b` in that bitfield. The
 minimum bit is 0. There is no maximum bit; the bitfield will grow when
 needed.
 
+Grid metadata object:
+Metadata about rows or columns in a grid.
+  values: A sequence of dimension values associated with the rows or
+    columns.
+  mask: A bitfield representing the dimensions associated with this
+    row or column.
+Plus a sequence of the following, one per row or column:
+  score: The total score of the row or column.
+  value: The dimension value associated with the row or column.
+
+Grid:
+A grid of dimension values and metadata for the rows and columns.
+  grid: A sequence of sequences, each of which is the same length and
+    represents a row. The values in the grid are numbers, representing
+    the scores of dimension values.
+  rows: A grid metadata object for the rows.
+  cols: A grid metadata object for the columns.
+
 Scaling:
 A scaling factor to apply to the score of dimension value if it matches
 a pattern of specific feature values.
@@ -192,6 +212,7 @@ from whose cross product its values are drawn.
   id: An ID for debugging.
   cache: A sequence of dimension values.
   nodes: A sequence of the node indices covered by this dimension.
+  mask: A bitfield corresponding to `nodes`.
   d1: A dimension or nil.
   d2: A dimension or nil. It is nil if and only if `d1` is.
   values_1: A sequence of values chosen from `d1`, or nil if `d1` is
@@ -335,6 +356,29 @@ local function assert_eq(actual, expected, _k)
 end
 
 --[[
+Concatenates two sequences.
+
+Args:
+  a: A sequence.
+  b: A sequence.
+
+Returns:
+  The concatenation of `a` and `b`.
+]]
+local function concatenate(a, b)
+  local length = #a
+  local rv = copyall(a)
+  for i, v in ipairs(b) do
+    rv[length + i] = v
+  end
+  return rv
+end
+
+if TEST then
+  assert_eq(concatenate({1, '2'}, {{n=3}, false}), {1, '2', {n=3}, false})
+end
+
+--[[
 Determines whether an element is in a list.
 
 Args:
@@ -366,14 +410,13 @@ end
 Shuffles a sequence randomly.
 
 Args:
-  t: A sequence.
-  rng: A random number generator.
+  t! A sequence.
+  rng! A random number generator.
 
 Returns:
-  A copy of `t`, randomly shuffled.
+  `t`, randomly shuffled.
 ]]
 local function shuffle(t, rng)
-  t = copyall(t)
   local j
   for i = #t, 2, -1 do
     j = rng:random(i) + 1
@@ -525,7 +568,7 @@ local function merge_sorted_sequences(s1, s2)
     table.insert(rv, e)
   end
   for _, e in ipairs(s2) do
-    utils.insert_sorted(rv, e, nil, utils.compare)
+    utils.insert_sorted(rv, e)
   end
   return rv
 end
@@ -1314,7 +1357,7 @@ Constructs a random phoneme.
 
 Args:
   nodes: A sequence of nodes.
-  rng: A random number generator to use to choose nodes.
+  rng! A random number generator to use to choose nodes.
 
 Returns:
   A new random phoneme.
@@ -1340,7 +1383,7 @@ end
 Randomly selects a subset of a sequence of scalings.
 
 Args:
-  rng: A random number generator.
+  rng! A random number generator.
   scalings: A sequence of scalings.
 
 Returns:
@@ -1400,7 +1443,7 @@ local function merge_links(links)
       i = i + 1
     end
   end
-  utils.sort_vector(links, 'strength', utils.compare)
+  utils.sort_vector(links, 'strength')
 end
 
 if TEST then
@@ -1413,6 +1456,32 @@ if TEST then
   merge_links(links)
   assert_eq(links, {{d1=dim_1, d2=dim_3, scalings={}, strength=1},
                     {d1=dim_1, d2=dim_2, scalings={}, strength=3}})
+end
+
+--[[
+Calculates the disjunction of two bitfields.
+
+Args:
+  a: A bitfield.
+  b: A bitfield.
+
+Returns:
+  The bitwise disjunction of `a` and `b`.
+]]
+local function bitfield_or(a, b)
+  local rv = copyall(a)
+  for i = 1, #b do
+    rv[i] = a[i] and bit32.bor(a[i], b[i]) or b[i]
+  end
+  return rv
+end
+
+if TEST then
+  assert_eq(bitfield_or({0x1}, {0x3}), {0x3})
+  assert_eq(bitfield_or({0x3}, {0x1}), {0x3})
+  assert_eq(bitfield_or({0x2}, {0x1}), {0x3})
+  assert_eq(bitfield_or({0x0, 0x1}, {0x2}), {0x2, 0x1})
+  assert_eq(bitfield_or({0x2}, {0x0, 0x1}), {0x2, 0x1})
 end
 
 --[[
@@ -1440,7 +1509,9 @@ local function merge_dimensions(dimensions, links)
   if next(links) then
     local link = table.remove(links)
     local id = math.min(link.d1.id, link.d2.id)
-    local dimension = {id=id, cache={}, nodes={}, d1=link.d1, d2=link.d2,
+    local dimension = {id=id, cache={}, d1=link.d1, d2=link.d2,
+                       mask=bitfield_or(link.d1.mask, link.d2.mask),
+                       nodes=concatenate(link.d1.nodes, link.d2.nodes),
                        values_1={}, values_2={}, scalings=link.scalings}
     local i = 1
     while i <= #links do
@@ -1457,7 +1528,7 @@ local function merge_dimensions(dimensions, links)
       end
     end
     merge_links(links)
-    table.insert(dimensions, dimension)
+    dimensions[#dimensions + 1] = dimension
     i = 1
     while i <= #dimensions do
       if dimensions[i] == link.d1 or dimensions[i] == link.d2 then
@@ -1469,27 +1540,31 @@ local function merge_dimensions(dimensions, links)
   else
     local d1 = table.remove(dimensions)
     local d2 = table.remove(dimensions)
-    table.insert(dimensions, 1, {cache={}, nodes={}, d1=d1, d2=d2, values_1={},
-                                 values_2={}, scalings={}})
+    table.insert(dimensions, 1,
+                 {cache={}, d1=d1, d2=d2,
+                  nodes=concatenate(d1.nodes, d2.nodes),
+                  mask=bitfield_or(d1.mask, d2.mask),
+                  values_1={}, values_2={}, scalings={}})
   end
 end
 
 if TEST then
-  local dim_1 = {id=1}
-  local dim_2 = {id=2}
-  local dim_3 = {id=3}
-  local dim_5 = {id=5}
+  local dim_1 = {id=1, mask={0x1}, nodes={1}}
+  local dim_2 = {id=2, mask={0x2}, nodes={2}}
+  local dim_3 = {id=3, mask={0x3}, nodes={3}}
+  local dim_5 = {id=5, mask={0x5}, nodes={5}}
   local dimensions = {dim_3, dim_2, dim_5}
   local links = {{d1=dim_1, d2=dim_2, scalings={12}, strength=1},
                  {d1=dim_2, d2=dim_3, scalings={23}, strength=1}}
+  -- TODO: 23 is not a scaling
   merge_dimensions(dimensions, links)
-  local dim_23 = {id=2, cache={}, nodes={}, d1=dim_2, d2=dim_3, values_1={},
-                  values_2={}, scalings={23}}
+  local dim_23 = {id=2, cache={}, nodes={2, 3}, mask={0x3}, d1=dim_2, d2=dim_3,
+                  values_1={}, values_2={}, scalings={23}}
   assert_eq({dim_5, dim_23}, dimensions)
   assert_eq({{d1=dim_1, d2=dim_23, scalings={12}, strength=1}}, links)
   merge_dimensions(dimensions, {})
-  assert_eq({{cache={}, nodes={}, d1=dim_23, d2=dim_5, values_1={},
-              values_2={}, scalings={}}}, dimensions)
+  assert_eq({{cache={}, nodes={2, 3, 5}, mask={0x7}, d1=dim_23, d2=dim_5,
+              values_1={}, values_2={}, scalings={}}}, dimensions)
 end
 
 --[[
@@ -1644,6 +1719,47 @@ if TEST then
 end
 
 --[[
+Determines whether two bitfields are equal.
+
+Args:
+  a: A bitfield.
+  b: A bitfield.
+  ...: Any number of bitfields.
+
+Returns:
+  Whether `a` and `b` are equal, when both masked by the union of all
+  the masks in `...`.
+]]
+local function bitfield_equals(a, b, ...)
+  local m = math.max(#a, #b)
+  local masks_inside_out = {}
+  for _, mask in ipairs({...}) do
+    m = math.min(#mask)
+    for i = 1, m do
+      if not masks_inside_out[i] then
+        masks_inside_out[i] = {}
+      end
+      masks_inside_out[i][#masks_inside_out[i] + 1] = mask[i]
+    end
+  end
+  for i = 1, m do
+    if bit32.btest(bit32.bxor(a[i] or 0, b[i] or 0),
+                   table.unpack(masks_inside_out[i] or {})) then
+      return false
+    end
+  end
+  return true
+end
+
+if TEST then
+  assert_eq(bitfield_equals({0x8C}, {0x8C}), true)
+  assert_eq(bitfield_equals({0x8C}, {0x0, 0x8C}), false)
+  assert_eq(bitfield_equals({0x5}, {0x3}, {0x9}), true)
+  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}), false)
+  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}, {0xA0}), true)
+end
+
+--[[
 Converts a set of scalings to a set of links.
 
 Args:
@@ -1682,7 +1798,7 @@ local function make_links(scalings, node_to_dimension, node_count)
       end
     end
   end
-  return utils.sort_vector(links, 'strength', utils.compare)
+  return utils.sort_vector(links, 'strength')
 end
 
 if TEST then
@@ -1707,7 +1823,7 @@ end
 Randomly generates a dimension for a phonology given a target creature.
 
 Args:
-  rng: A random number generator.
+  rng! A random number generator.
   phonology: A phonology.
   creature_index: The index of a creature in
     `df.global.world.raws.creatures.all`.
@@ -1731,8 +1847,9 @@ local function get_dimension(rng, phonology, creature_index)
             dominates(inarticulable_node_index, i, nodes)) then
       if can_articulate(creature_index, node.articulators) then
         local dimension =
-          {id=i, domain={i}, nodes={}, cache=node.feature and
-           {{score=1 - node.prob}, {score=node.prob, i}} or {{score=1, i}}}
+          {id=i, nodes={i}, mask=bitfield_set({}, i - 1, 1),
+           cache=node.feature and {{score=1 - node.prob}, {score=node.prob, i}}
+           or {{score=1, i}}}
         dimensions[#dimensions + 1] = dimension
         node_to_dimension[i] = dimension
       else
@@ -1747,6 +1864,26 @@ local function get_dimension(rng, phonology, creature_index)
   return dimensions[1]
 end
 
+local function dimension_value_to_bitfield(value)
+  local value_bitfield = {}
+  for _, n in ipairs(value) do
+    bitfield_set(value_bitfield, n - 1, 1)
+  end
+  return value_bitfield
+end
+
+--TODO
+local function get_scalings_scalar(value, scalings)
+  local rv = 1
+  local value_bitfield = dimension_value_to_bitfield(value)
+  for _, scaling in ipairs(scalings) do
+    if bitfield_equals(value_bitfield, scaling.values, value_bitfield) then
+      rv = rv * scaling.scalar
+    end
+  end
+  return rv
+end
+
 --[[
 Gets the product of applicable scalings' scalars.
 
@@ -1758,13 +1895,13 @@ Returns:
   The product of the scalars of all the scalings in `scalings` which are
   satisfied by this value.
 ]]
-local function get_scalings_scalar(value, scalings)
+local function _get_scalings_scalar(value, scalings)
   local rv = 1
   for _, scaling in ipairs(scalings) do
     local _, found_1 =
-      utils.binsearch(value, scaling.node_1, nil, utils.compare)
+      utils.binsearch(value, scaling.node_1)
     local _, found_2 =
-      utils.binsearch(value, scaling.node_2, nil, utils.compare)
+      utils.binsearch(value, scaling.node_2)
     if found_1 == scaling.val_1 and found_2 == scaling.val_2 then
       rv = rv * scaling.scalar
     end
@@ -1772,7 +1909,7 @@ local function get_scalings_scalar(value, scalings)
   return rv
 end
 
-if TEST then
+if TEST and TODO then
   local scalings = {{val_1=true, node_1=1, val_2=false, node_2=2, scalar=2,
                      strength=4, prob=1},
                     {val_1=true, node_1=1, val_2=true, node_2=3, scalar=3,
@@ -1797,7 +1934,7 @@ Returns:
 local function get_nodes_difference(value, nodes)
   local difference = 0
   for _, node in ipairs(value) do
-    if not utils.binsearch(nodes, node, nil, utils.compare) then
+    if not utils.binsearch(nodes, node) then
       difference = difference + 1
     end
   end
@@ -1854,7 +1991,7 @@ choosing a given one for removal is proportional to its score out of
 the total score of the whole subset.
 
 Args:
-  rng: A random number generator.
+  rng! A random number generator.
   candidates! A sequence of dimension values.
   nodes: A sequence of node indices sorted in increasing order.
 
@@ -1895,131 +2032,315 @@ local function print_val(val)
   print(get_lemma(phonologies[1], {ph}), val.score)
   for ni in pairs(ph) do
     if phonologies[1].nodes[ni].feature then
-      print('\t'..phonologies[1].nodes[ni].name)
+      --print('\t'..phonologies[1].nodes[ni].name)
     end
   end
 end
 
 --[[
-Randomly gets the next dimension value from a dimension.
+Creates a grid.
 
 Args:
-  rng: A random number generator.
-  dimension: A dimension.
+  mask_1: A bitfield.
+  mask_2: A bitfield.
+  values_1: A sequence of dimension values.
+  values_2: A sequence of dimension values.
 
 Returns:
-  The next dimension value of `dimension`. It is random, but it prefers
-  getting dimension values similar to those it got before, i.e. using
-  a previously used value from one of the subdimensions. It also takes
-  scalings into account.
+  A grid using `mask_1` and `values_1` for the rows and `mask_2` and
+  `values_2` for the columns. The scores in the grid are the products of
+  the dimension values' scores from the relevant row and column.
 ]]
-local function get_next_dimension_value(rng, dimension)
-  while true do
-    while not next(dimension.cache) do
-      dimension.value_1 = dimension.value_1 or dimension.d1 and
-        get_next_dimension_value(rng, dimension.d1)
-      dimension.value_2 = dimension.value_2 or dimension.d2 and
-        get_next_dimension_value(rng, dimension.d2)
-      if not dimension.value_1 then
-        dimension.d1 = nil
-      end
-      if not dimension.value_2 then
-        dimension.d2 = nil
-      end
-      if not (dimension.d1 or dimension.d2) then
-        return nil
-      end
-      local a, b
-      if dimension.value_1 then
-        if dimension.value_2 then
-          if next(dimension.values_1) and next(dimension.values_2) then
-            if rng:drandom() < 0.5 then --* (dimension.value_1.score + dimension.value_2.score) < dimension.value_1.score then
-              a, b = '1', '2'
-            else
-              a, b = '2', '1'
-            end
-          elseif next(dimension.values_1) then
-            a, b = '2', '1'
-          else
-            a, b = '1', '2'
-          end
-        else
-          a, b = '1', '2'
-        end
-      else
-        a, b = '2', '1'
-      end
-      local value_a = dimension['value_' .. a]
-      dimension['value_' .. a] = nil
-      -- TODO: Why not set value_b to nil?
-      table.insert(dimension['values_' .. a], value_a)
-      for _, value_b in ipairs(dimension['values_' .. b]) do
-        local new_value = merge_sorted_sequences(value_a, value_b)
-        new_value.score = value_a.score * value_b.score *
-          get_scalings_scalar(new_value, dimension.scalings)
-        if new_value.score > 0 then
-          table.insert(dimension.cache, new_value)
-        end
+local function make_grid(mask_1, mask_2, values_1, values_2)
+  local grid = {rows={mask=mask_1, values=values_1},
+                cols={mask=mask_2, values=values_2}, grid={}}
+  for j, value_2 in ipairs(values_2) do
+    grid.cols[j] = {score=0, value=value_2}
+  end
+  for i, value_1 in ipairs(values_1) do
+    grid.rows[i] = {score=0, value=value_1}
+    grid.grid[i] = {}
+    for j, value_2 in ipairs(values_2) do
+      local score = value_1.score * value_2.score
+      grid.grid[i][j] = score
+      grid.rows[i].score = grid.rows[i].score + score
+      grid.cols[j].score = grid.cols[j].score + score
+    end
+  end
+  return grid
+end
+
+if TEST then
+  local mask_1 = {0x1}
+  local mask_2 = {0x2}
+  local values_1 = {{1, score=2}}
+  local values_2 = {{2, score=3}, {3, score=5}}
+  assert_eq(make_grid(mask_1, mask_2, values_1, values_2),
+            {rows={mask=mask_1, values=values_1, {score=16, value=values_1[1]}},
+             cols={mask=mask_2, values=values_2,
+                   {score=6, value=values_2[1]}, {score=10, value=values_2[2]}},
+             grid={{6, 10}}})
+end
+
+--[[
+Finds scalings which are as satisfied as possible by a row or column.
+
+Args:
+  roc_values: A bitfield representing the dimensions associated with a
+    row or column.
+  le: Whether to use the `<=` operator when comparing indexes in
+    `scalings` to `pivot`.
+  pivot: A number in [0, `#scalings`]. If `le` is true, only scalings in
+    [1, `pivot`] may be returned; otherwise, only scalars in [`pivot +
+    1`, `#scalings`] may be returned.
+  scalings: A sequence of scalings.
+  roc_mask: A bitfield representing the dimensions that could possibly
+    be in `roc_values`.
+
+Returns:
+  A sequence of those scalings in `scalings` which could possibly apply
+  to dimension values in this row or column.
+]]
+local function get_scalings_for_splitting(roc_values, le, pivot, scalings,
+                                          roc_mask)
+  local rv = {}
+  for i, scaling in ipairs(scalings) do
+    if ((i <= pivot) == le and
+        bitfield_equals(roc_values, scaling.values, roc_mask, scaling.mask))
+    then
+      rv[#rv + 1] = scaling
+    end
+  end
+  return rv
+end
+
+if TEST then
+  local scalings = {{values={0xB}, mask={0x1B}, scalar=0, strength=math.huge},
+                    {values={0x8}, mask={0x1B}, scalar=0, strength=math.huge},
+                    {values={0x1B}, mask={0x1B}, scalar=0, strength=math.huge}}
+  assert_eq(get_scalings_for_splitting({0xD}, true, 2, scalings, {0x2D}),
+            {scalings[1]})
+  assert_eq(get_scalings_for_splitting({0xD}, false, 2, scalings, {0x2D}),
+            {scalings[3]})
+end
+
+--[[
+Adds a modified copy of a row or column for each scaling in a sequence.
+
+The following assumes `row` is true. When it is false, everything is the
+same except rows and columns are switched.
+
+Each scaling's new row is a based on the original row. For each score in
+the row, the score is the original score scaled by the scaling if the
+scaling applies, or 0 if the scaling does not apply. A score in the
+original row is set to 0 if any scaling applies to that column.
+
+The point is to let `get_dimension_values` treat rows with identical
+dimension values distinctly if different scalings apply to them. It can
+choose dimension value/scaling pairs instead of just dimension values.
+
+The grid's row and column metadata objects' total scores are not kept
+synchronized with the splitting and must be fixed by the caller.
+
+Args:
+  grid! The grid to split.
+  is_row: Whether to split a row, as opposed to a column.
+  x: The index of the is_row or column to split.
+  scalings: A sequence of scalings to make new rows or columns for.
+]]
+local function split_roc(grid, is_row, x, scalings)
+  local this, that = 'cols', 'rows'
+  if is_row then
+    this, that = that, this
+  end
+  local old_value = grid[this][x].value
+  local mask = grid[that].mask
+  local zeroes = {}
+  for _, scaling in ipairs(scalings) do
+    local new = {}
+    for y, roc in ipairs(grid[that]) do
+      local score = (
+        bitfield_equals(dimension_value_to_bitfield(roc.value),
+                        scaling.values, mask, scaling.mask) and
+        grid.grid[is_row and x or y][is_row and y or x] * scaling.scalar or 0)
+      new[y] = score
+      if score ~= 0 then
+        zeroes[y] = true
       end
     end
-    repeat
-      local value = remove_random_value(rng, dimension.cache, dimension.nodes)
---      print_val(value)
-      for _, node_index in ipairs(value) do
-        utils.insert_sorted(dimension.nodes, node_index, nil, utils.compare)
+    if is_row then
+      grid.grid[#grid.grid + 1] = new
+    else
+      for i, row in ipairs(grid.grid) do
+        row[#row + 1] = new[i]
       end
-      -- TODO: If returning here, why have a repeat loop?
-      return value
-    until not next(dimension.cache)
+    end
+    grid[this][#grid[this] + 1] = {score=0, value=old_value}
+  end
+  for y = 1, #grid[that] do
+    if zeroes[y] then
+      grid.grid[is_row and x or y][is_row and y or x] = 0
+    end
   end
 end
 
 if TEST then
-  local rng = {drandom=function(self) return 0 end}
-  local dim_1 = {id=1, cache={{score=0.2}, {score=0.8, 1}}, nodes={},
-                 values_1={}, values_2={}, scalings={}}
-  local dim_2 = {id=2, cache={{score=0.3}, {score=0.7, 2}}, nodes={},
-                 values_1={}, values_2={}, scalings={}}
-  local dim_3 = {id=3, cache={}, nodes={}, d1=dim_1, d2=dim_2, values_1={},
-                 values_2={}, scalings={{val_1=true, node_1=1, val_2=true,
-                                             node_2=2, scalar=0.1}}}
-  assert_eq(get_next_dimension_value(rng, dim_3), {score=0.06})
-  assert_eq(get_next_dimension_value(rng, dim_3), {score=0.24, 1})
-  assert_eq(get_next_dimension_value(rng, dim_3), {score=0.2 * 0.7, 2})
-  assert_eq(get_next_dimension_value(rng, dim_3), {score=0.8 * 0.7 * 0.1, 1, 2})
-  assert_eq(get_next_dimension_value(rng, dim_3), nil)
-  assert_eq(get_next_dimension_value(rng, dim_3), nil)
+  local scalings = {{values={0x3}, mask={0x3}, scalar=0.5, strength=2},
+                    {values={0x16}, mask={0x16}, scalar=0.1, strength=10}}
+  local grid = {grid={{1, 10, 0.25}, {1, 1, 1}},
+                rows={values={1, 3}, mask={0x5},
+                      {score=6, value={1, 3}}, {score=3, value={}}},
+                cols={values={2, 5}, mask={0x12}, {score=2, value={}},
+                      {score=11, value={2}}, {score=1.25, value={2, 5}}}}
+  split_roc(grid, true, 1, scalings)
+  assert_eq(grid,
+            {grid={{1, 0, 0}, {1, 1, 1}, {0, 5, 0.125}, {0, 0, 0.025}},
+             rows={values={1, 3}, mask={0x5},
+                   {score=6, value={1, 3}}, {score=3, value={}},
+                   {score=0, value={1, 3}}, {score=0, value={1, 3}}},
+             cols={values={2, 5}, mask={0x12}, {score=2, value={}},
+                   {score=11, value={2}}, {score=1.25, value={2, 5}}}})
+  grid = {grid={{1, 1}, {10, 1}, {0.25, 1}},
+          rows={values={2, 5}, mask={0x12}, {score=2, value={}},
+                {score=11, value={2}}, {score=1.25, value={2, 5}}},
+          cols={values={1, 3}, mask={0x5},
+                {score=6, value={1, 3}}, {score=3, value={}}}}
+  split_roc(grid, false, 1, scalings)
+  assert_eq(grid,
+            {grid={{1, 1, 0, 0}, {0, 1, 5, 0}, {0, 1, 0.125, 0.025}},
+             rows={values={2, 5}, mask={0x12}, {score=2, value={}},
+                   {score=11, value={2}}, {score=1.25, value={2, 5}}},
+             cols={values={1, 3}, mask={0x5},
+                   {score=6, value={1, 3}}, {score=3, value={}},
+                   {score=0, value={1, 3}}, {score=0, value={1, 3}}}})
 end
 
---TODO
-local function wr(rng, sequence)
-  print'wr'
-  for i,e in ipairs(sequence) do
-    print(i,e.total)
+--[[
+Make a grid's metadata match the actual scores in the grid.
+
+Args:
+  grid! A grid.
+]]
+local function fix_grid_scores(grid)
+  for i = 1, #grid.rows do
+    grid.rows[i].score = 0
   end
-  print('total',sequence.total)
-  local target = rng:drandom() * sequence.total
+  for j = 1, #grid.cols do
+    grid.cols[j].score = 0
+  end
+  for i, row in ipairs(grid.grid) do
+    for j, score in ipairs(row) do
+      grid.rows[i].score = grid.rows[i].score + score
+      grid.cols[j].score = grid.cols[j].score + score
+    end
+  end
+end
+
+--[[
+Splits a grid's rows and columns.
+
+Args:
+  grid! A grid.
+  pivot: The number of scalings to use for splitting rows, as opposed to
+    splitting columns.
+  scalings: A sequence of scalings.
+]]
+local function split_grid(grid, pivot, scalings)
+  for x, rocs in ipairs({'rows', 'cols'}) do
+    local is_row = x == 1
+    for i = 1, #grid[rocs] do
+      local roc = grid[rocs][i]
+      local scalings_for_splitting = get_scalings_for_splitting(
+        dimension_value_to_bitfield(roc.value), is_row, pivot, scalings,
+        grid[rocs].mask)
+      split_roc(grid, is_row, i, scalings_for_splitting)
+    end
+  end
+  fix_grid_scores(grid)
+end
+
+--[[
+Randomly choose dimension values from a grid without replacement.
+
+Args:
+  rng! A random number generator.
+  grid! A grid.
+
+Returns:
+  A sequence of dimension values from the grid, or nil if there is
+  nothing left.
+]]
+local function pick_from_grid(rng, grid)
+  local rocs = grid.rows
+  if grid.n == 1 then
+    rocs = grid.cols
+  elseif grid.n then
+    rocs = concatenate(rocs, grid.cols)
+  end
+  local total = 0
+  for _, e in ipairs(rocs) do
+    total = total + e.score
+  end
+  local target = rng:drandom() * total
   local sum = 0
-  for i, e in ipairs(sequence) do
-    sum = sum + e.total
+  for x, e in ipairs(rocs) do
+    sum = sum + e.score
     if sum > target then
-      local rv = table.remove(sequence, i)
-      sequence.total = 0
-      for _, e in ipairs(sequence) do
-        sequence.total = sequence.total + e.total
+      local rv = {}
+      if x <= #grid.rows and grid.n ~= 1 then
+        for j = 1, #grid.cols do
+          if grid.grid[x][j] ~= 0 then
+            rv[#rv + 1] = utils.sort_vector(
+              concatenate(grid.rows[x].value, grid.cols[j].value))
+            rv[#rv].score = grid.grid[x][j]
+            grid.grid[x][j] = 0
+          end
+        end
+      else
+        if grid.n ~= 1 then
+          x = x - #grid.rows
+        end
+        for i = 1, #grid.rows do
+          if grid.grid[i][x] ~= 0 then
+            grid.grid[i][x] = 0
+            rv[#rv + 1] = utils.sort_vector(
+              concatenate(grid.rows[i].value, grid.cols[x].value))
+          end
+        end
       end
-      print('return',rv)
+      fix_grid_scores(grid)
+      grid.n = (grid.n or 0) + 1
       return rv
     end
   end
-  print'failure!'
+end
+
+local function get_dimension_values(rng, dimension)
+  if dimension.d1 then
+    local values_1 = get_dimension_values(rng, dimension.d1)
+    local values_2 = get_dimension_values(rng, dimension.d2)
+    local grid =
+      make_grid(dimension.d1.mask, dimension.d2.mask, values_1, values_2)
+    split_grid(grid, rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
+    while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
+      local v = pick_from_grid(rng, grid)
+      if v then
+        dimension.cache = concatenate(dimension.cache, v)
+      else
+        break
+      end
+    end
+    return dimension.cache
+  else
+    return dimension.cache
+  end
 end
 
 --[[
 Randomly generates a phonemic inventory.
 
 Args:
-  rng: A random number generator.
+  rng! A random number generator.
   phonology: A phonology.
   creature_index: The index of a creature in
     `df.global.world.raws.creatures.all`.
@@ -2034,9 +2355,9 @@ local function random_inventory(rng, phonology, creature_index)
   local target_size = 10 + rng:random(21)  -- TODO: better distribution
   local inventory = {}
   repeat
-    local phoneme = get_next_dimension_value(rng, dimension)
+    local phonemes = get_dimension_values(rng, dimension)
     if phoneme then
-      table.insert(inventory, phoneme)
+      inventory = concatenate(inventory, phoneme)
     else
       break
     end
@@ -2059,7 +2380,7 @@ local function random_parameters(phonology, seed)
   -- TODO: normal distribution of inventory sizes
   local size = 10 + rng:random(21)
   local parameters = {max_sonority=0, min_sonority=math.huge, inventory={},
-                      constraints=shuffle(phonology.constraints, rng)}
+                      constraints=shuffle(copyall(phonology.constraints), rng)}
   for i = 1, size do
     local phoneme, sonority = random_phoneme(phonology.nodes, rng)
     -- TODO: Don't allow duplicate phonemes.
@@ -3620,11 +3941,14 @@ local function load_phonologies()
                           add=add_symbol, remove=remove_symbol,
                           sonorous=sonorous, feature_class=feature_class,
                           feature=feature, prob=prob, articulators={}})
-            if current_parent ~= 0 then
+            if (current_parent ~= 0 and
+                current_phonology.nodes[current_parent].feature) then
               table.insert(current_phonology.scalings, {
-                  mask=bitfield_set({}, #current_phonology.nodes - 1, 1),
+                  mask=bitfield_set(
+                    bitfield_set({}, #current_phonology.nodes - 1, 1),
+                    current_parent - 1, 1),
                   values=bitfield_set({}, #current_phonology.nodes - 1, 1),
-                  scalar=0, strength=math.huge, tag=tag
+                  scalar=0, strength=math.huge
                 })
             end
             current_parent = #current_phonology.nodes
@@ -3799,7 +4123,7 @@ local function load_phonologies()
             end
             table.insert(current_phonology.scalings,
                          {mask=mask, values=values, scalar=scalar,
-                          strength=strength, tag=tag})
+                          strength=strength})
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
@@ -4785,13 +5109,11 @@ if #args >= 1 then
     end
     local dim = get_dimension(rng, phonologies[1], 466)
     print_dimension(phonologies[1].nodes, dim, '')
-    --[[
-    local inv = random_inventory(rng, phonologies[1], 466)
+    local inv = get_dimension_values(rng, dim)
     print('-----------------------')
     for _, val in ipairs(inv) do
       print_val(val)
     end
-    ]]
   else
     usage()
   end
