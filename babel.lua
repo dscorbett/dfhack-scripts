@@ -29,11 +29,11 @@ TODO:
 local TEST = true
 
 local REPORT_LINE_LENGTH = 73
-local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.9375
+local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.5
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
-local MINIMUM_DIMENSION_CACHE_SIZE = 64
+local MINIMUM_DIMENSION_CACHE_SIZE = 8
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -209,7 +209,7 @@ a pattern of specific feature values.
 Dimension:
 A producer of dimension values. A dimension may have two subdimensions
 from whose cross product its values are drawn.
-  id: An ID for debugging.
+  id: -- TODO: What exactly is this? It's not just for debugging now.
   cache: A sequence of dimension values.
   nodes: A sequence of the node indices covered by this dimension.
   mask: A bitfield corresponding to `nodes`.
@@ -672,13 +672,17 @@ local function get_lemma(phonology, word)
       end
       local score = base_score
       for i, node in pairs(phonology.nodes) do
-        if phoneme[i] ~= (symbol_features[i] or false) then
+        if not phoneme[i] ~= not symbol_features[i] then
           if node.add and phoneme[i] then
             symbol = symbol .. node.add
             score = score + 1
           elseif node.remove and not phoneme[i] then
             symbol = symbol .. node.remove
             score = score + 1
+          elseif phoneme[i] and node.feature then
+            symbol = symbol .. '[+' .. node.name .. ']'
+          elseif not phoneme[i] and node.feature then
+            symbol = symbol .. '[-' .. node.name .. ']'
           end
         end
       end
@@ -1411,19 +1415,19 @@ Args:
 ]]
 local function merge_links(links)
   utils.sort_vector(links, nil, function(a, b)
-      if a.d1.id > a.d2.id then
+      if a.d1.id[1] > a.d2.id[1] then
         a.d1, a.d2 = a.d2, a.d1
       end
-      if b.d1.id > b.d2.id then
+      if b.d1.id[1] > b.d2.id[1] then
         b.d1, b.d2 = b.d2, b.d1
       end
-      if a.d1.id < b.d1.id then
+      if a.d1.id[1] < b.d1.id[1] then
         return -1
-      elseif a.d1.id > b.d1.id then
+      elseif a.d1.id[1] > b.d1.id[1] then
         return 1
-      elseif a.d2.id < b.d2.id then
+      elseif a.d2.id[1] < b.d2.id[1] then
         return -1
-      elseif a.d2.id > b.d2.id then
+      elseif a.d2.id[1] > b.d2.id[1] then
         return 1
       else
         return 0
@@ -1446,7 +1450,7 @@ local function merge_links(links)
   utils.sort_vector(links, 'strength')
 end
 
-if TEST then
+if TEST and TODO then
   local dim_1 = {id=1}
   local dim_2 = {id=2}
   local dim_3 = {id=3}
@@ -1508,8 +1512,8 @@ Args:
 local function merge_dimensions(dimensions, links)
   if next(links) then
     local link = table.remove(links)
-    local id = math.min(link.d1.id, link.d2.id)
-    local dimension = {id=id, cache={}, d1=link.d1, d2=link.d2,
+    local dimension = {id={link.d1.id[1], link.d2.id[#link.d2.id]},
+                       cache={}, d1=link.d1, d2=link.d2,
                        mask=bitfield_or(link.d1.mask, link.d2.mask),
                        nodes=concatenate(link.d1.nodes, link.d2.nodes),
                        values_1={}, values_2={}, scalings=link.scalings}
@@ -1541,14 +1545,14 @@ local function merge_dimensions(dimensions, links)
     local d1 = table.remove(dimensions)
     local d2 = table.remove(dimensions)
     table.insert(dimensions, 1,
-                 {cache={}, d1=d1, d2=d2,
+                 {id={d1.id[1], d2.id[#d2.id]}, cache={}, d1=d1, d2=d2,
                   nodes=concatenate(d1.nodes, d2.nodes),
                   mask=bitfield_or(d1.mask, d2.mask),
                   values_1={}, values_2={}, scalings={}})
   end
 end
 
-if TEST then
+if TEST and TODO then
   local dim_1 = {id=1, mask={0x1}, nodes={1}}
   local dim_2 = {id=2, mask={0x2}, nodes={2}}
   local dim_3 = {id=3, mask={0x3}, nodes={3}}
@@ -1847,7 +1851,7 @@ local function get_dimension(rng, phonology, creature_index)
             dominates(inarticulable_node_index, i, nodes)) then
       if can_articulate(creature_index, node.articulators) then
         local dimension =
-          {id=i, nodes={i}, mask=bitfield_set({}, i - 1, 1),
+          {id={i}, nodes={i}, mask=bitfield_set({}, i - 1, 1),
            cache=node.feature and {{score=1 - node.prob}, {score=node.prob, i}}
            or {{score=1, i}}}
         dimensions[#dimensions + 1] = dimension
@@ -1864,161 +1868,13 @@ local function get_dimension(rng, phonology, creature_index)
   return dimensions[1]
 end
 
+--TODO
 local function dimension_value_to_bitfield(value)
   local value_bitfield = {}
   for _, n in ipairs(value) do
     bitfield_set(value_bitfield, n - 1, 1)
   end
   return value_bitfield
-end
-
---TODO
-local function get_scalings_scalar(value, scalings)
-  local rv = 1
-  local value_bitfield = dimension_value_to_bitfield(value)
-  for _, scaling in ipairs(scalings) do
-    if bitfield_equals(value_bitfield, scaling.values, value_bitfield) then
-      rv = rv * scaling.scalar
-    end
-  end
-  return rv
-end
-
---[[
-Gets the product of applicable scalings' scalars.
-
-Args:
-  value: A dimension value.
-  scalings: A sequence of scalings.
-
-Returns:
-  The product of the scalars of all the scalings in `scalings` which are
-  satisfied by this value.
-]]
-local function _get_scalings_scalar(value, scalings)
-  local rv = 1
-  for _, scaling in ipairs(scalings) do
-    local _, found_1 =
-      utils.binsearch(value, scaling.node_1)
-    local _, found_2 =
-      utils.binsearch(value, scaling.node_2)
-    if found_1 == scaling.val_1 and found_2 == scaling.val_2 then
-      rv = rv * scaling.scalar
-    end
-  end
-  return rv
-end
-
-if TEST and TODO then
-  local scalings = {{val_1=true, node_1=1, val_2=false, node_2=2, scalar=2,
-                     strength=4, prob=1},
-                    {val_1=true, node_1=1, val_2=true, node_2=3, scalar=3,
-                     strength=5, prob=1},
-                    {val_1=true, node_1=1, val_2=true, node_2=4, scalar=5,
-                     strength=7, prob=1}}
-  assert_eq(get_scalings_scalar({}, scalings), 1)
-  assert_eq(get_scalings_scalar({1, 3}, scalings), 6)
-  assert_eq(get_scalings_scalar({1, 3, 4}, scalings), 30)
-end
-
---[[
-Counts the nodes in a dimension value not in a list of node indices.
-
-Args:
-  value: A dimension value.
-  nodes: A sequence of node indices sorted in increasing order.
-
-Returns:
-  How many nodes in `value` are not in `nodes`.
-]]
-local function get_nodes_difference(value, nodes)
-  local difference = 0
-  for _, node in ipairs(value) do
-    if not utils.binsearch(nodes, node) then
-      difference = difference + 1
-    end
-  end
-  return difference
-end
-
-if TEST then
-  assert_eq(get_nodes_difference({1, 3}, {1, 2, 3}), 0)
-  assert_eq(get_nodes_difference({1, 3}, {1, 2}), 1)
-  assert_eq(get_nodes_difference({1, 3}, {2}), 2)
-end
-
---[[
-Gets the candidates with the fewest new nodes.
-
-Args:
-  candidates: A sequence of dimension values.
-  nodes: A sequence of nodes indices sorted in increasing order.
-
-Returns:
-  A sequence of indexed dimension values, where the indices are into
-  `candidates`.
-]]
-local function get_gradually_different_values(candidates, nodes)
-  local min_difference = math.huge
-  local rv = {}
-  for i, candidate in ipairs(candidates) do
-    local difference = math.max(1, get_nodes_difference(candidate, nodes))
-    if difference <= min_difference then
-      if difference ~= min_difference then
-        min_difference = difference
-        rv = {}
-      end
-      table.insert(rv, {index=i, candidate=candidate})
-    end
-  end
-  return rv
-end
-
-if TEST then
-  assert_eq(get_gradually_different_values({{}, {1}, {3, 4}, {2, 3}}, {2}),
-            {{index=1, candidate={}}, {index=2, candidate={1}},
-             {index=4, candidate={2, 3}}})
-  assert_eq(get_gradually_different_values({{1, 2}, {1, 2, 3}}, {}),
-            {{index=1, candidate={1, 2}}})
-end
-
---[[
-Removes a random dimension value from a sequence.
-
-The dimension value to be removed is chosen from all those with the
-fewest nodes not appearing in `nodes`. Among those, the probability of
-choosing a given one for removal is proportional to its score out of
-the total score of the whole subset.
-
-Args:
-  rng! A random number generator.
-  candidates! A sequence of dimension values.
-  nodes: A sequence of node indices sorted in increasing order.
-
-Returns:
-  The removed dimension value.
-]]
-local function remove_random_value(rng, candidates, nodes)
-  local indexed_values = get_gradually_different_values(candidates, nodes)
-  local total_score = 0
-  for _, indexed_value in ipairs(indexed_values) do
-    total_score = total_score + indexed_value.candidate.score
-  end
-  local target = rng:drandom() * total_score
-  local sum = 0
-  for _, indexed_value in ipairs(indexed_values) do
-    sum = sum + indexed_value.candidate.score
-    if sum > target then
-      return table.remove(candidates, indexed_value.index)
-    end
-  end
-end
-
-if TEST then
-  local rng = {drandom=function(self) return 0 end}
-  local candidates = {{score=1, 1, 2, 3}, {score=2, 1, 2}, {score=0, 1, 3}}
-  assert_eq(remove_random_value(rng, candidates, {1}), {score=2, 1, 2})
-  assert_eq(candidates, {{score=1, 1, 2, 3}, {score=0, 1, 3}})
 end
 
 local function print_val(val)
@@ -2315,13 +2171,41 @@ local function pick_from_grid(rng, grid)
   end
 end
 
+local function seq_join(sequence)
+  local s = ''
+  for i, e in ipairs(sequence) do
+    if i ~= 1 then
+      s = s .. ':'
+    end
+    s = s .. phonologies[1].nodes[e].name
+  end
+  return s
+end
+
+local function print_dimension(nodes, dimension, indent, nonrecursive)
+  if not dimension then
+    return
+  end
+  if indent == '' then
+    print()
+  end
+  print(indent .. (dimension.id and (dimension.id[1] .. ': ' .. seq_join(dimension.id)) or '---'))
+  if not nonrecursive then
+    indent = indent .. '.'
+    print_dimension(nodes, dimension.d1, indent)
+    print_dimension(nodes, dimension.d2, indent)
+  end
+end
+
+--TODO
 local function get_dimension_values(rng, dimension)
   if dimension.d1 then
     local values_1 = get_dimension_values(rng, dimension.d1)
     local values_2 = get_dimension_values(rng, dimension.d2)
     local grid =
       make_grid(dimension.d1.mask, dimension.d2.mask, values_1, values_2)
-    split_grid(grid, rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
+    split_grid(grid, rng:random(#dimension.scalings + 1),
+               shuffle(dimension.scalings, rng))
     while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
       local v = pick_from_grid(rng, grid)
       if v then
@@ -2330,10 +2214,12 @@ local function get_dimension_values(rng, dimension)
         break
       end
     end
-    return dimension.cache
-  else
-    return dimension.cache
   end
+  print_dimension(phonologies[1].nodes, dimension, '', true)
+  for _, val in ipairs(dimension.cache) do
+    print_val(val)
+  end
+  return dimension.cache
 end
 
 --[[
@@ -5098,22 +4984,15 @@ if #args >= 1 then
     phonologies = nil
     load_phonologies()
     local rng = dfhack.random.new(121122)  -- 40221: too much ROUND
-    local function print_dimension(nodes, dimension, indent)
-      if not dimension then
-        return
-      end
-      print(indent .. (dimension.id and dimension.id .. ': ' .. nodes[dimension.id].name or '---'))
-      indent = indent .. '.'
-      print_dimension(nodes, dimension.d1, indent)
-      print_dimension(nodes, dimension.d2, indent)
-    end
     local dim = get_dimension(rng, phonologies[1], 466)
     print_dimension(phonologies[1].nodes, dim, '')
     local inv = get_dimension_values(rng, dim)
+    --[[
     print('-----------------------')
     for _, val in ipairs(inv) do
       print_val(val)
     end
+    ]]
   else
     usage()
   end
