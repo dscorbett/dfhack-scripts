@@ -1896,6 +1896,8 @@ end
 --[[
 Creates a grid.
 
+The grid's row and column metadata objects' total scores are not set.
+
 Args:
   mask_1: A bitfield.
   mask_2: A bitfield.
@@ -1917,10 +1919,7 @@ local function make_grid(mask_1, mask_2, values_1, values_2)
     grid.rows[i] = {score=0, value=value_1}
     grid.grid[i] = {}
     for j, value_2 in ipairs(values_2) do
-      local score = value_1.score * value_2.score
-      grid.grid[i][j] = score
-      grid.rows[i].score = grid.rows[i].score + score
-      grid.cols[j].score = grid.cols[j].score + score
+      grid.grid[i][j] = value_1.score * value_2.score
     end
   end
   return grid
@@ -1932,9 +1931,9 @@ if TEST then
   local values_1 = {{1, score=2}}
   local values_2 = {{2, score=3}, {3, score=5}}
   assert_eq(make_grid(mask_1, mask_2, values_1, values_2),
-            {rows={mask=mask_1, values=values_1, {score=16, value=values_1[1]}},
+            {rows={mask=mask_1, values=values_1, {score=0, value=values_1[1]}},
              cols={mask=mask_2, values=values_2,
-                   {score=6, value=values_2[1]}, {score=10, value=values_2[2]}},
+                   {score=0, value=values_2[1]}, {score=0, value=values_2[2]}},
              grid={{6, 10}}})
 end
 
@@ -1957,6 +1956,7 @@ Returns:
   A sequence of those scalings in `scalings` which could possibly apply
   to dimension values in this row or column.
 ]]
+-- TODO: Rename this. It is not just for splitting.
 local function get_scalings_for_splitting(roc_values, le, pivot, scalings,
                                           roc_mask)
   local rv = {}
@@ -2072,12 +2072,65 @@ if TEST then
 end
 
 --[[
+Sets the scores of a grid to their initial values.
+
+The grid comes in with scores equal to the products of the appropriate
+rows and columns. This function multiplies each score by the scalar of
+every applicable scaling.
+
+Args:
+  grid! A grid.
+  scalings: The scalings that apply to this grid.
+
+Returns:
+  `grid`, with new scores.
+]]
+local function initialize_grid_scores(grid, scalings)
+  local col_scalings = {}
+  for j, col in ipairs(grid.cols) do
+    col_scalings[j] = get_scalings_for_splitting(
+      dimension_value_to_bitfield(col.value),
+      false, 0, scalings, grid.cols.mask)
+  end
+  for i, row in ipairs(grid.grid) do
+    for j, score in ipairs(row) do
+      local row_scalings = get_scalings_for_splitting(
+        dimension_value_to_bitfield(grid.rows[i].value),
+        false, 0, scalings, grid.rows.mask)
+      local scalings_intersection = {}
+      local start = 1
+      for _, scaling in ipairs(col_scalings[j]) do
+        for i = start, #row_scalings do
+          if scaling == row_scalings[i] then
+            scalings_intersection[#scalings_intersection + 1] = scaling
+            start = i
+            break
+          end
+        end
+        start = start + 1
+      end
+      for _, scaling in ipairs(scalings) do
+        row[j] = row[j] * scaling.scalar
+      end
+    end
+  end
+  return grid
+end
+
+if TEST then
+  -- TODO
+end
+
+--[[
 Make a grid's metadata match the actual scores in the grid.
 
 Args:
   grid! A grid.
+
+Returns:
+  `grid`.
 ]]
-local function fix_grid_scores(grid)
+local function fix_grid_score_totals(grid)
   for i = 1, #grid.rows do
     grid.rows[i].score = 0
   end
@@ -2090,6 +2143,7 @@ local function fix_grid_scores(grid)
       grid.cols[j].score = grid.cols[j].score + score
     end
   end
+  return grid
 end
 
 --[[
@@ -2100,6 +2154,9 @@ Args:
   pivot: The number of scalings to use for splitting rows, as opposed to
     splitting columns.
   scalings: A sequence of scalings.
+
+Returns:
+  `grid`.
 ]]
 local function split_grid(grid, pivot, scalings)
   for x, rocs in ipairs({'rows', 'cols'}) do
@@ -2112,7 +2169,7 @@ local function split_grid(grid, pivot, scalings)
       split_roc(grid, is_row, i, scalings_for_splitting)
     end
   end
-  fix_grid_scores(grid)
+  return fix_grid_score_totals(grid)
 end
 
 --[[
@@ -2164,7 +2221,7 @@ local function pick_from_grid(rng, grid)
           end
         end
       end
-      fix_grid_scores(grid)
+      fix_grid_score_totals(grid)
       grid.n = (grid.n or 0) + 1
       return rv
     end
@@ -2202,10 +2259,11 @@ local function get_dimension_values(rng, dimension)
   if dimension.d1 then
     local values_1 = get_dimension_values(rng, dimension.d1)
     local values_2 = get_dimension_values(rng, dimension.d2)
-    local grid =
-      make_grid(dimension.d1.mask, dimension.d2.mask, values_1, values_2)
-    split_grid(grid, rng:random(#dimension.scalings + 1),
-               shuffle(dimension.scalings, rng))
+    local grid = split_grid(
+      initialize_grid_scores(
+        make_grid(dimension.d1.mask, dimension.d2.mask, values_1, values_2),
+        dimension.scalings),
+      rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
     while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
       local v = pick_from_grid(rng, grid)
       if v then
