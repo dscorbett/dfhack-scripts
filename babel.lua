@@ -2110,7 +2110,13 @@ local function initialize_grid_scores(grid, scalings)
         start = start + 1
       end
       for _, scaling in ipairs(scalings) do
-        row[j] = row[j] * scaling.scalar
+        if bitfield_equals(
+          dimension_value_to_bitfield(
+            concatenate(grid.rows[i].value, grid.cols[j].value)),
+          scaling.values, scaling.mask)
+        then
+          row[j] = row[j] * scaling.scalar
+        end
       end
     end
   end
@@ -2246,7 +2252,7 @@ local function print_dimension(nodes, dimension, indent, nonrecursive)
   if indent == '' then
     print()
   end
-  print(indent .. (dimension.id and (dimension.id[1] .. ': ' .. seq_join(dimension.id)) or '---'))
+  print(indent .. (dimension.id and (dimension.id[1] .. ':' .. (dimension.id[2] or '-') .. '\t' .. seq_join(dimension.id)) or '---'))
   if not nonrecursive then
     indent = indent .. '.'
     print_dimension(nodes, dimension.d1, indent)
