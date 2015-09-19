@@ -1489,6 +1489,47 @@ if TEST then
 end
 
 --[[
+Determines whether two bitfields are equal.
+
+Args:
+  a: A bitfield.
+  b: A bitfield.
+  ...: Any number of bitfields.
+
+Returns:
+  Whether `a` and `b` are equal, when both masked by the union of all
+  the masks in `...`.
+]]
+local function bitfield_equals(a, b, ...)
+  local m = math.max(#a, #b)
+  local masks_inside_out = {}
+  for _, mask in ipairs({...}) do
+    m = math.min(#mask)
+    for i = 1, m do
+      if not masks_inside_out[i] then
+        masks_inside_out[i] = {}
+      end
+      masks_inside_out[i][#masks_inside_out[i] + 1] = mask[i]
+    end
+  end
+  for i = 1, m do
+    if bit32.btest(bit32.bxor(a[i] or 0, b[i] or 0),
+                   table.unpack(masks_inside_out[i] or {})) then
+      return false
+    end
+  end
+  return true
+end
+
+if TEST then
+  assert_eq(bitfield_equals({0x8C}, {0x8C}), true)
+  assert_eq(bitfield_equals({0x8C}, {0x0, 0x8C}), false)
+  assert_eq(bitfield_equals({0x5}, {0x3}, {0x9}), true)
+  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}), false)
+  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}, {0xA0}), true)
+end
+
+--[[
 Merges two dimensions, preferring those which are strongly linked.
 
 Merging dimensions means creating a new dimension with them as its `d1`
@@ -1516,7 +1557,12 @@ local function merge_dimensions(dimensions, links)
                        cache={}, d1=link.d1, d2=link.d2,
                        mask=bitfield_or(link.d1.mask, link.d2.mask),
                        nodes=concatenate(link.d1.nodes, link.d2.nodes),
-                       values_1={}, values_2={}, scalings=link.scalings}
+                       values_1={}, values_2={}, scalings={}}
+    for _, scaling in ipairs(link.scalings) do
+      if bitfield_equals(dimension.mask, scaling.mask, scaling.mask) then
+        dimension.scalings[#dimension.scalings + 1] = scaling
+      end
+    end
     local i = 1
     while i <= #links do
       local l = links[i]
@@ -1723,47 +1769,6 @@ if TEST then
 end
 
 --[[
-Determines whether two bitfields are equal.
-
-Args:
-  a: A bitfield.
-  b: A bitfield.
-  ...: Any number of bitfields.
-
-Returns:
-  Whether `a` and `b` are equal, when both masked by the union of all
-  the masks in `...`.
-]]
-local function bitfield_equals(a, b, ...)
-  local m = math.max(#a, #b)
-  local masks_inside_out = {}
-  for _, mask in ipairs({...}) do
-    m = math.min(#mask)
-    for i = 1, m do
-      if not masks_inside_out[i] then
-        masks_inside_out[i] = {}
-      end
-      masks_inside_out[i][#masks_inside_out[i] + 1] = mask[i]
-    end
-  end
-  for i = 1, m do
-    if bit32.btest(bit32.bxor(a[i] or 0, b[i] or 0),
-                   table.unpack(masks_inside_out[i] or {})) then
-      return false
-    end
-  end
-  return true
-end
-
-if TEST then
-  assert_eq(bitfield_equals({0x8C}, {0x8C}), true)
-  assert_eq(bitfield_equals({0x8C}, {0x0, 0x8C}), false)
-  assert_eq(bitfield_equals({0x5}, {0x3}, {0x9}), true)
-  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}), false)
-  assert_eq(bitfield_equals({0x6}, {0xA7}, {0x7}, {0xA0}), true)
-end
-
---[[
 Converts a set of scalings to a set of links.
 
 Args:
@@ -1862,6 +1867,11 @@ local function get_dimension(rng, phonology, creature_index)
     end
   end
   local links = make_links(phonology.scalings, node_to_dimension, #nodes)
+  for _, link in ipairs(links) do
+    print(link.strength)
+    print('  ' .. link.d1.id[1] .. '\t' .. nodes[link.d1.id[1]].name)
+    print('  ' .. link.d2.id[1] .. '\t' .. nodes[link.d2.id[1]].name)
+  end
   while #dimensions > 1 do
     merge_dimensions(dimensions, links)
   end
