@@ -183,6 +183,9 @@ Metadata about rows or columns in a grid.
 Plus a sequence of the following, one per row or column:
   score: The total score of the row or column.
   value: The dimension value associated with the row or column.
+  family: A sequence of the indices of all the rows or columns split
+    from the same original row or column as this one, or nil if this
+    row or column has not been split.
 
 Grid:
 A grid of dimension values and metadata for the rows and columns.
@@ -2019,7 +2022,8 @@ local function split_roc(grid, is_row, x, scalings)
   if is_row then
     this, that = that, this
   end
-  local old_value = grid[this][x].value
+  local old_roc = grid[this][x]
+  old_roc.family = {x}
   local mask = grid[that].mask
   local zeroes = {}
   for _, scaling in ipairs(scalings) do
@@ -2041,7 +2045,9 @@ local function split_roc(grid, is_row, x, scalings)
         row[#row + 1] = new[i]
       end
     end
-    grid[this][#grid[this] + 1] = {score=0, value=old_value}
+    grid[this][#grid[this] + 1] =
+      {score=0, value=old_roc.value, family=old_roc.family}
+    old_roc.family[#old_roc.family + 1] = #grid[this]
   end
   for y = 1, #grid[that] do
     if zeroes[y] then
@@ -2059,11 +2065,13 @@ if TEST then
                 cols={values={2, 5}, mask={0x12}, {score=2, value={}},
                       {score=11, value={2}}, {score=1.25, value={2, 5}}}}
   split_roc(grid, true, 1, scalings)
+  local f = {1, 3, 4}
   assert_eq(grid,
             {grid={{1, 0, 0}, {1, 1, 1}, {0, 5, 0.125}, {0, 0, 0.025}},
              rows={values={1, 3}, mask={0x5},
-                   {score=6, value={1, 3}}, {score=3, value={}},
-                   {score=0, value={1, 3}}, {score=0, value={1, 3}}},
+                   {score=6, value={1, 3}, family=f}, {score=3, value={}},
+                   {score=0, value={1, 3}, family=f},
+                   {score=0, value={1, 3}, family=f}},
              cols={values={2, 5}, mask={0x12}, {score=2, value={}},
                    {score=11, value={2}}, {score=1.25, value={2, 5}}}})
   grid = {grid={{1, 1}, {10, 1}, {0.25, 1}},
@@ -2077,8 +2085,9 @@ if TEST then
              rows={values={2, 5}, mask={0x12}, {score=2, value={}},
                    {score=11, value={2}}, {score=1.25, value={2, 5}}},
              cols={values={1, 3}, mask={0x5},
-                   {score=6, value={1, 3}}, {score=3, value={}},
-                   {score=0, value={1, 3}}, {score=0, value={1, 3}}}})
+                   {score=6, value={1, 3}, family=f}, {score=3, value={}},
+                   {score=0, value={1, 3}, family=f},
+                   {score=0, value={1, 3}, family=f}}})
 end
 
 --[[
@@ -2189,6 +2198,23 @@ local function split_grid(grid, pivot, scalings)
 end
 
 --[[
+Zero every cell in a grid sharing a family with a given row or column.
+
+Args:
+  grid! A grid.
+  i: A row index.
+  j: A column index.
+]]
+local function clear_roc_family(grid, i, j)
+  for _, i0 in ipairs(grid.rows[i].family) do
+    grid.grid[i0][j] = 0
+  end
+  for _, j0 in ipairs(grid.cols[j].family) do
+    grid.grid[i][j0] = 0
+  end
+end
+
+--[[
 Randomly choose dimension values from a grid without replacement.
 
 Args:
@@ -2207,13 +2233,13 @@ local function pick_from_grid(rng, grid)
     rocs = concatenate(rocs, grid.cols)
   end
   local total = 0
-  for _, e in ipairs(rocs) do
-    total = total + e.score
+  for _, roc in ipairs(rocs) do
+    total = total + roc.score
   end
   local target = rng:drandom() * total
   local sum = 0
-  for x, e in ipairs(rocs) do
-    sum = sum + e.score
+  for x, roc in ipairs(rocs) do
+    sum = sum + roc.score
     if sum > target then
       local rv = {}
       if x <= #grid.rows and grid.n ~= 1 then
@@ -2222,7 +2248,7 @@ local function pick_from_grid(rng, grid)
             rv[#rv + 1] = utils.sort_vector(
               concatenate(grid.rows[x].value, grid.cols[j].value))
             rv[#rv].score = grid.grid[x][j]
-            grid.grid[x][j] = 0
+            clear_roc_family(grid, x, j)
           end
         end
       else
@@ -2231,9 +2257,10 @@ local function pick_from_grid(rng, grid)
         end
         for i = 1, #grid.rows do
           if grid.grid[i][x] ~= 0 then
-            grid.grid[i][x] = 0
             rv[#rv + 1] = utils.sort_vector(
               concatenate(grid.rows[i].value, grid.cols[x].value))
+            rv[#rv].score = grid.grid[i][x]
+            clear_roc_family(grid, i, x)
           end
         end
       end
@@ -4046,6 +4073,7 @@ local function load_phonologies()
             end
             current_parent = current_phonology.nodes[current_parent].parent
           elseif subtags[1] == 'SCALE' then
+            -- TODO: Make scalings with only one dimension value work.
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
             end
