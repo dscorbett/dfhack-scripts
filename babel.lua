@@ -33,7 +33,7 @@ local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.5
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
-local MINIMUM_DIMENSION_CACHE_SIZE = 8
+local MINIMUM_DIMENSION_CACHE_SIZE = 16
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -78,6 +78,7 @@ A persistent entry with the keys:
 Phonology:
   constraints: A sequence of constraints.
   scalings: A sequence of scalings.
+  dispersions: A sequence of dispersions.
   nodes: A sequence of nodes.
   symbols: A sequence of symbols.
   articulators: A sequence of articulators.
@@ -202,17 +203,32 @@ a pattern of specific feature values.
     on the value of node `b + 1` in the appropriate sequence of nodes.
   values: A bitfield. If and only if bit `b` is set here and in `mask`,
     this scaling applies only when the feature is present.
-  scalar: How much to scale the score of a phoneme by for which this
-    scaling applies. It is non-negative.
+  scalar: How much to scale the score when this scaling applies. It is
+    non-negative.
   strength: How strong the scaling factor is as a function of scalar.
     A scalar of 0 gets the maximum strength, then the strength decreases
     monotonically for scalars from 0 to 1, with a minimum strength at 1,
     then increases monotonically for scalars greater than 1.
 
+Dispersion:
+A scaling factor to apply to the score of a dimension value if another
+dimension value is picked.
+  mask: A bitfield. If and only if bit `b` is set, this dispersion
+    depends on the value of `b + 1` in the appropriate sequence of
+    nodes.
+  values_1: A bitfield. If and only if bit `b` is set here and in
+    `mask`, this dispersion applies only when the feature is present.
+  values_2: The same as `values_1`, but for the other dimension value.
+  scalar: How much to scale the score when this dispersion applies. It
+    is non-negative.
+
 Dimension:
 A producer of dimension values. A dimension may have two subdimensions
 from whose cross product its values are drawn.
-  id: -- TODO: What exactly is this? It's not just for debugging now.
+  id: A sequence of one or two node indices. If there is only one, this
+    dimension corresponds to only one node. If there are two, they are
+    the indices of the two nodes in `nodes` which are most separated
+    from each other in the dimension tree.
   cache: A sequence of dimension values.
   nodes: A sequence of the node indices covered by this dimension.
   mask: A bitfield corresponding to `nodes`.
@@ -227,6 +243,7 @@ from whose cross product its values are drawn.
     scaling's `node_1` and `node_2` are present in `d1.nodes` and
     `d2.nodes`, respectively or vice versa. If `d1` is nil, so is
     `scalings`.
+  dispersions: Like `scalings`, but for dispersions.
 
 Link:
 A relationship between two dimensions, and how close the relationship
@@ -235,6 +252,8 @@ is. The details of the relationship are not specified here.
   d2: A dimension.
   scalings: A sequence of scalings which apply between the two
     dimensions. See `scalings` in dimension.
+  dispersions: A sequence of dispersions which apply between the two
+    dimensions. See `dispersions` in dimension.
   strength: How strong the link is. See `strength` in scaling.
 
 Boundary:
@@ -1387,26 +1406,6 @@ local function random_phoneme(nodes, rng)
 end
 
 --[[
-Randomly selects a subset of a sequence of scalings.
-
-Args:
-  rng! A random number generator.
-  scalings: A sequence of scalings.
-
-Returns:
-  A subset of `scalings`.
-]]
-local function random_scalings(rng, scalings)
-  local rv = {}
-  for _, scaling in ipairs(scalings) do
-    if rng:drandom() < scaling.prob then
-      table.insert(rv, scaling)
-    end
-  end
-  return rv
-end
-
---[[
 Merges links that are between the same two dimensions.
 
 If two links have the same dimensions, their `scalings` sequences are
@@ -1453,16 +1452,17 @@ local function merge_links(links)
   utils.sort_vector(links, 'strength')
 end
 
-if TEST and TODO then
-  local dim_1 = {id=1}
-  local dim_2 = {id=2}
-  local dim_3 = {id=3}
-  local links = {{d1=dim_1, d2=dim_2, scalings={}, strength=1},
-                 {d1=dim_1, d2=dim_3, scalings={}, strength=1},
-                 {d1=dim_2, d2=dim_1, scalings={}, strength=2}}
+if TEST then
+  local dim_1 = {id={1}}
+  local dim_2 = {id={2}}
+  local dim_3 = {id={3}}
+  local links = {{d1=dim_1, d2=dim_2, dispersions={}, scalings={}, strength=1},
+                 {d1=dim_1, d2=dim_3, dispersions={}, scalings={}, strength=1},
+                 {d1=dim_2, d2=dim_1, dispersions={}, scalings={}, strength=2}}
   merge_links(links)
-  assert_eq(links, {{d1=dim_1, d2=dim_3, scalings={}, strength=1},
-                    {d1=dim_1, d2=dim_2, scalings={}, strength=3}})
+  assert_eq(links,
+            {{d1=dim_1, d2=dim_3, dispersions={}, scalings={}, strength=1},
+             {d1=dim_1, d2=dim_2, dispersions={}, scalings={}, strength=3}})
 end
 
 --[[
@@ -1560,10 +1560,12 @@ local function merge_dimensions(dimensions, links)
                        cache={}, d1=link.d1, d2=link.d2,
                        mask=bitfield_or(link.d1.mask, link.d2.mask),
                        nodes=concatenate(link.d1.nodes, link.d2.nodes),
-                       values_1={}, values_2={}, scalings={}}
-    for _, scaling in ipairs(link.scalings) do
-      if bitfield_equals(dimension.mask, scaling.mask, scaling.mask) then
-        dimension.scalings[#dimension.scalings + 1] = scaling
+                       values_1={}, values_2={}, scalings={}, dispersions={}}
+    for _, sods in ipairs({'scalings', 'dispersions'}) do
+      for _, sod in ipairs(link[sods]) do
+        if bitfield_equals(dimension.mask, sod.mask, sod.mask) then
+          dimension[sods][#dimension[sods] + 1] = sod
+        end
       end
     end
     local i = 1
@@ -1597,27 +1599,32 @@ local function merge_dimensions(dimensions, links)
                  {id={d1.id[1], d2.id[#d2.id]}, cache={}, d1=d1, d2=d2,
                   nodes=concatenate(d1.nodes, d2.nodes),
                   mask=bitfield_or(d1.mask, d2.mask),
-                  values_1={}, values_2={}, scalings={}})
+                  values_1={}, values_2={}, scalings={}, dispersions={}})
   end
 end
 
-if TEST and TODO then
-  local dim_1 = {id=1, mask={0x1}, nodes={1}}
-  local dim_2 = {id=2, mask={0x2}, nodes={2}}
-  local dim_3 = {id=3, mask={0x3}, nodes={3}}
-  local dim_5 = {id=5, mask={0x5}, nodes={5}}
+if TEST then
+  local dim_1 = {id={1}, mask={0x1}, nodes={1}}
+  local dim_2 = {id={2}, mask={0x2}, nodes={2}}
+  local dim_3 = {id={3}, mask={0x3}, nodes={3}}
+  local dim_5 = {id={5}, mask={0x5}, nodes={5}}
   local dimensions = {dim_3, dim_2, dim_5}
-  local links = {{d1=dim_1, d2=dim_2, scalings={12}, strength=1},
-                 {d1=dim_2, d2=dim_3, scalings={23}, strength=1}}
-  -- TODO: 23 is not a scaling
+  local s12 = {mask={0x3}}
+  local s23 = {mask={0x6}}
+  local links =
+    {{d1=dim_1, d2=dim_2, scalings={s12}, dispersions={}, strength=1},
+     {d1=dim_2, d2=dim_3, scalings={s23}, dispersions={}, strength=1}}
   merge_dimensions(dimensions, links)
-  local dim_23 = {id=2, cache={}, nodes={2, 3}, mask={0x3}, d1=dim_2, d2=dim_3,
-                  values_1={}, values_2={}, scalings={23}}
+  local dim_23 =
+    {id={2, 3}, cache={}, nodes={2, 3}, mask={0x3}, d1=dim_2, d2=dim_3,
+     values_1={}, values_2={}, scalings={}, dispersions={}}
   assert_eq({dim_5, dim_23}, dimensions)
-  assert_eq({{d1=dim_1, d2=dim_23, scalings={12}, strength=1}}, links)
+  assert_eq({{d1=dim_1, d2=dim_23, scalings={s12}, dispersions={}, strength=1}},
+            links)
   merge_dimensions(dimensions, {})
-  assert_eq({{cache={}, nodes={2, 3, 5}, mask={0x7}, d1=dim_23, d2=dim_5,
-              values_1={}, values_2={}, scalings={}}}, dimensions)
+  assert_eq({{id={2, 5}, cache={}, nodes={2, 3, 5}, mask={0x7}, d1=dim_23,
+              d2=dim_5, values_1={}, values_2={}, scalings={}, dispersions={}}},
+            dimensions)
 end
 
 --[[
@@ -1776,35 +1783,38 @@ Converts a set of scalings to a set of links.
 
 Args:
   scalings: A sequence of scalings.
+  dispersions: A sequence of dispersions.
   node_to_dimension: A map of node indices to dimensions.
   node_count: The number of nodes in the phonology.
 
 Returns:
   A sequence of links sorted in increasing order by strength.
 ]]
-local function make_links(scalings, node_to_dimension, node_count)
+local function make_links(scalings, dispersions, node_to_dimension, node_count)
   local links = {}
   local links_map = {}
-  for _, scaling in ipairs(scalings) do
-    for n1 = 1, node_count - 1 do
-      local d1 = node_to_dimension[n1]
-      if d1 and bitfield_get(scaling.mask, n1 - 1) == 1 then
-        for n2 = n1 + 1, node_count do
-          local d2 = node_to_dimension[n2]
-          if d2 and bitfield_get(scaling.mask, n2 - 1) == 1 then
-            local link =
-              {d1=d1, d2=d2, scalings={scaling}, strength=scaling.strength}
-            if not links_map[d1] then
-              links_map[d1] = {[d2]=link}
-            elseif not links_map[d1][d2] then
-              links_map[d1][d2] = link
-            else
-              link = links_map[d1][d2]
-              link.scalings[#link.scalings + 1] = scaling
-              link.strength = link.strength + scaling.strength
-              link = nil
+  for sods, seq in pairs({scalings=scalings, dispersions=dispersions}) do
+    for _, sod in ipairs(seq) do
+      for n1 = 1, node_count - 1 do
+        local d1 = node_to_dimension[n1]
+        if d1 and bitfield_get(sod.mask, n1 - 1) == 1 then
+          for n2 = n1 + 1, node_count do
+            local d2 = node_to_dimension[n2]
+            if d2 and bitfield_get(sod.mask, n2 - 1) == 1 then
+              local link = {d1=d1, d2=d2, scalings={}, dispersions={},
+                            [sods]={sod}, strength=sod.strength or 0}
+              if not links_map[d1] then
+                links_map[d1] = {[d2]=link}
+              elseif not links_map[d1][d2] then
+                links_map[d1][d2] = link
+              else
+                link = links_map[d1][d2]
+                link[sods][#link[sods] + 1] = sod
+                link.strength = link.strength + (sod.strength or 0)
+                link = nil
+              end
+              links[#links + 1] = link
             end
-            links[#links + 1] = link
           end
         end
       end
@@ -1818,17 +1828,26 @@ if TEST then
   for i = 1, 5 do
     node_to_dimension[i] = {id=i}
   end
-  assert_eq(make_links({}, node_to_dimension, 5), {})
+  assert_eq(make_links({}, {}, node_to_dimension, 5), {})
   local s123_3 = {mask={0x7}, values={}, scalar=0.25, strength=3}
   local s23_7 = {mask={0x6}, values={}, scalar=0.125, strength=7}
   local s23_9 = {mask={0x6}, values={}, scalar=0.1, strength=9}
   local s34_4 = {mask={0xC}, values={}, scalar=0.2, strength=4}
-  assert_eq(make_links({s123_3, s23_7, s23_9, s34_4}, node_to_dimension, 5),
-            {{d1={id=1}, d2={id=2}, scalings={s123_3}, strength=3},
-             {d1={id=1}, d2={id=3}, scalings={s123_3}, strength=3},
-             {d1={id=3}, d2={id=4}, scalings={s34_4}, strength=4},
-             {d1={id=2}, d2={id=3}, scalings={s123_3, s23_7, s23_9},
-              strength=19}})
+  local d123 = {mask={0x7}, values_1={}, values_2={}, scalar=0.25}
+  local d24 = {mask={0xA}, values_1={}, values_2={}, scalar=0.2}
+  local d34 = {mask={0xC}, values_1={}, values_2={}, scalar=0.2}
+  assert_eq(make_links({s123_3, s23_7, s23_9, s34_4}, {d123, d24, d34},
+                       node_to_dimension, 5),
+            {{d1={id=2}, d2={id=4}, dispersions={d24}, scalings={},
+              strength=0},
+             {d1={id=1}, d2={id=3}, dispersions={d123}, scalings={s123_3},
+              strength=3},
+             {d1={id=1}, d2={id=2}, dispersions={d123}, scalings={s123_3},
+              strength=3},
+             {d1={id=3}, d2={id=4}, dispersions={d34}, scalings={s34_4},
+              strength=4},
+             {d1={id=2}, d2={id=3}, dispersions={d123},
+              scalings={s123_3, s23_7, s23_9}, strength=19}})
 end
 
 --[[
@@ -1869,7 +1888,8 @@ local function get_dimension(rng, phonology, creature_index)
       end
     end
   end
-  local links = make_links(phonology.scalings, node_to_dimension, #nodes)
+  local links = make_links(phonology.scalings, phonology.dispersions,
+                           node_to_dimension, #nodes)
   for _, link in ipairs(links) do
     print(link.strength)
     print('  ' .. link.d1.id[1] .. '\t' .. nodes[link.d1.id[1]].name)
@@ -1881,7 +1901,15 @@ local function get_dimension(rng, phonology, creature_index)
   return dimensions[1]
 end
 
---TODO
+--[[
+Converts a dimension value to a bitfield.
+
+Args:
+  value: A dimension value.
+
+Returns:
+  A bitfield.
+]]
 local function dimension_value_to_bitfield(value)
   local value_bitfield = {}
   for _, n in ipairs(value) do
@@ -1969,9 +1997,7 @@ Returns:
   A sequence of those scalings in `scalings` which could possibly apply
   to dimension values in this row or column.
 ]]
--- TODO: Rename this. It is not just for splitting.
-local function get_scalings_for_splitting(roc_values, le, pivot, scalings,
-                                          roc_mask)
+local function get_satisfied_scalings(roc_values, le, pivot, scalings, roc_mask)
   local rv = {}
   for i, scaling in ipairs(scalings) do
     if ((i <= pivot) == le and
@@ -1987,9 +2013,9 @@ if TEST then
   local scalings = {{values={0xB}, mask={0x1B}, scalar=0, strength=math.huge},
                     {values={0x8}, mask={0x1B}, scalar=0, strength=math.huge},
                     {values={0x1B}, mask={0x1B}, scalar=0, strength=math.huge}}
-  assert_eq(get_scalings_for_splitting({0xD}, true, 2, scalings, {0x2D}),
+  assert_eq(get_satisfied_scalings({0xD}, true, 2, scalings, {0x2D}),
             {scalings[1]})
-  assert_eq(get_scalings_for_splitting({0xD}, false, 2, scalings, {0x2D}),
+  assert_eq(get_satisfied_scalings({0xD}, false, 2, scalings, {0x2D}),
             {scalings[3]})
 end
 
@@ -2107,15 +2133,15 @@ Returns:
 local function initialize_grid_scores(grid, scalings)
   local col_scalings = {}
   for j, col in ipairs(grid.cols) do
-    col_scalings[j] = get_scalings_for_splitting(
-      dimension_value_to_bitfield(col.value),
-      false, 0, scalings, grid.cols.mask)
+    col_scalings[j] = get_satisfied_scalings(
+      dimension_value_to_bitfield(col.value), false, 0, scalings,
+      grid.cols.mask)
   end
   for i, row in ipairs(grid.grid) do
     for j, score in ipairs(row) do
-      local row_scalings = get_scalings_for_splitting(
-        dimension_value_to_bitfield(grid.rows[i].value),
-        false, 0, scalings, grid.rows.mask)
+      local row_scalings = get_satisfied_scalings(
+        dimension_value_to_bitfield(grid.rows[i].value), false, 0, scalings,
+        grid.rows.mask)
       local scalings_intersection = {}
       local start = 1
       for _, scaling in ipairs(col_scalings[j]) do
@@ -2143,11 +2169,22 @@ local function initialize_grid_scores(grid, scalings)
 end
 
 if TEST then
-  -- TODO
+  local grid = {grid={{1, 2, 3}, {4, 5, 6}},
+                rows={values={1}, mask={0x1},
+                      {score=0, value={}}, {score=0, value={1}}},
+                cols={values={2, 3}, mask={0x6}, {score=0, value={}},
+                      {score=0, value={2}}, {score=0, value={2, 3}}}}
+  assert_eq(initialize_grid_scores(grid, {{mask={0x3}, values={0x2}, scalar=0,
+                                           strength=math.huge}}),
+            {grid={{1, 0, 0}, {4, 5, 6}},
+             rows={values={1}, mask={0x1},
+                   {score=0, value={}}, {score=0, value={1}}},
+             cols={values={2, 3}, mask={0x6}, {score=0, value={}},
+                   {score=0, value={2}}, {score=0, value={2, 3}}}})
 end
 
 --[[
-Make a grid's metadata match the actual scores in the grid.
+Makes a grid's metadata match the actual scores in the grid.
 
 Args:
   grid! A grid.
@@ -2188,7 +2225,7 @@ local function split_grid(grid, pivot, scalings)
     local is_row = x == 1
     for i = 1, #grid[rocs] do
       local roc = grid[rocs][i]
-      local scalings_for_splitting = get_scalings_for_splitting(
+      local scalings_for_splitting = get_satisfied_scalings(
         dimension_value_to_bitfield(roc.value), is_row, pivot, scalings,
         grid[rocs].mask)
       split_roc(grid, is_row, i, scalings_for_splitting)
@@ -2198,7 +2235,7 @@ local function split_grid(grid, pivot, scalings)
 end
 
 --[[
-Zero every cell in a grid sharing a family with a given row or column.
+Zeroes every cell in a grid sharing a family with a given row or column.
 
 Args:
   grid! A grid.
@@ -2215,17 +2252,73 @@ local function clear_roc_family(grid, i, j)
 end
 
 --[[
-Randomly choose dimension values from a grid without replacement.
+Updates a grid's scores based on its dispersions.
+
+After a dimension value has been picked from a grid, other dimension
+values in that grid may change their scores accordingly. This is called
+dispersion.
+
+Args:
+  grid! A grid.
+  dispersions: A sequence of dispersions.
+  i: The index of the picked row.
+  j: The index of the picked column.
+]]
+local function apply_dispersions(grid, dispersions, i, j)
+  local picked_value = dimension_value_to_bitfield(
+    concatenate(grid.rows[i].value, grid.cols[j].value))
+  for _, dispersion in ipairs(dispersions) do
+    local v
+    if bitfield_equals(dispersion.values_1, picked_value) then
+      v = 'values_2'
+    elseif bitfield_equals(dispersion.values_2, picked_value) then
+      v = 'values_1'
+    end
+    if v then
+      for i2, row in ipairs(grid.grid) do
+        for j2, score in ipairs(row) do
+          if ((i ~= i2 or j ~= j2) and
+              bitfield_equals(
+                dispersion[v],
+                dimension_value_to_bitfield(concatenate(
+                  grid.rows[i2].value, grid.cols[j2].value)),
+                dispersion.mask)) then
+            grid.grid[i2][j2] = score * dispersion.scalar
+          end
+        end
+      end
+    end
+  end
+end
+
+if TEST then
+  local grid = {grid={{0, 1}, {1, 1}},
+                rows={values={1}, mask={0x1},
+                      {score=2, value={1}}, {score=2, value={}}},
+                cols={values={2}, mask={0x2},
+                      {score=2, value={2}}, {score=2, value={}}}}
+  apply_dispersions(
+    grid, {{scalar=0.5, mask={0x3}, values_1={0x3}, values_2={0x0}}}, 1, 1)
+  assert_eq(grid.grid, {{0, 1}, {1, 0.5}})
+end
+
+--[[
+Randomly chooses dimension values from a grid without replacement.
+
+If a dispersion applies to the chosen value, the other value in the
+dispersion is scaled accordingly.
 
 Args:
   rng! A random number generator.
   grid! A grid.
+  dispersions: A sequence of the dispersions that might apply when a
+    dimension value is chosen in this grid.
 
 Returns:
   A sequence of dimension values from the grid, or nil if there is
   nothing left.
 ]]
-local function pick_from_grid(rng, grid)
+local function pick_from_grid(rng, grid, dispersions)
   local rocs = grid.rows
   if grid.n == 1 then
     rocs = grid.cols
@@ -2249,6 +2342,7 @@ local function pick_from_grid(rng, grid)
               concatenate(grid.rows[x].value, grid.cols[j].value))
             rv[#rv].score = grid.grid[x][j]
             clear_roc_family(grid, x, j)
+            apply_dispersions(grid, dispersions, x, j)
           end
         end
       else
@@ -2261,6 +2355,7 @@ local function pick_from_grid(rng, grid)
               concatenate(grid.rows[i].value, grid.cols[x].value))
             rv[#rv].score = grid.grid[i][x]
             clear_roc_family(grid, i, x)
+            apply_dispersions(grid, dispersions, i, x)
           end
         end
       end
@@ -2297,7 +2392,13 @@ local function print_dimension(nodes, dimension, indent, nonrecursive)
   end
 end
 
---TODO
+--[[
+Randomly chooses dimension values from a dimension without replacement.
+
+Args:
+  rng! A random number generator.
+  dimension: A dimension.
+]]
 local function get_dimension_values(rng, dimension)
   if dimension.d1 then
     local values_1 = get_dimension_values(rng, dimension.d1)
@@ -2308,7 +2409,7 @@ local function get_dimension_values(rng, dimension)
         dimension.scalings),
       rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
     while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
-      local v = pick_from_grid(rng, grid)
+      local v = pick_from_grid(rng, grid, dimension.dispersions)
       if v then
         dimension.cache = concatenate(dimension.cache, v)
       else
@@ -3817,6 +3918,27 @@ if TEST then
 end
 
 --[[
+Parses a string as a dimension value bit.
+
+'-' is 0. '+' is 1. Anything else is an error.
+
+Args:
+  subtag: A string to parse.
+  tag: The tag, for the error message.
+
+Returns:
+  0 or 1.
+]]
+local function get_valid_value(subtag, tag)
+  if subtag == '-' then
+    return  0
+  elseif subtag == '+' then
+    return 1
+  end
+  qerror('Value for must be + or -: ' .. tag)
+end
+
+--[[
 Loads all phonology raw files into `phonologies`.
 
 The raw files must match 'phonology_*.txt'.
@@ -3861,8 +3983,8 @@ local function load_phonologies()
               qerror('Duplicate phonology: ' .. subtags[2])
             end
             table.insert(phonologies,
-                         {name=subtags[2], nodes={}, scalings={},
-                          symbols={}, affixes={}, articulators={},
+                         {name=subtags[2], nodes={}, scalings={}, symbols={},
+                          dispersions={}, affixes={}, articulators={},
                           constraints={{type='Max'}, {type='Dep'}}})
             current_phonology = phonologies[#phonologies]
           elseif subtags[1] == 'NODE' then
@@ -4073,11 +4195,9 @@ local function load_phonologies()
             end
             current_parent = current_phonology.nodes[current_parent].parent
           elseif subtags[1] == 'SCALE' then
-            -- TODO: Make scalings with only one dimension value work.
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
-            end
-            if #subtags < 4 or #subtags % 2 ~= 0 then
+            elseif #subtags < 6 or #subtags % 2 ~= 0 then
               qerror('Wrong number of subtags: ' .. tag)
             end
             local scalar = tonumber(subtags[2])
@@ -4089,15 +4209,9 @@ local function load_phonologies()
             local values = {}
             local i = 3
             while i < #subtags do
-              local value = 1
-              if subtags[i] == '-' then
-                value = 0
-              elseif subtags[i] ~= '+' then
-                qerror(
-                  'Value for ' .. subtags[i + 1] .. ' must be + or -: ' .. tag)
-              end
-              local node = utils.linear_index(current_phonology.nodes,
-                                              subtags[i + 1], 'name')
+              local value = get_valid_value(subtags[i], tag)
+              local node = utils.linear_index(
+                current_phonology.nodes, subtags[i + 1], 'name')
               if not node then
                 qerror('No such node: ' .. subtags[i + 1])
               elseif not current_phonology.nodes[node].feature then
@@ -4112,6 +4226,42 @@ local function load_phonologies()
             table.insert(current_phonology.scalings,
                          {mask=mask, values=values, scalar=scalar,
                           strength=strength})
+          elseif subtags[1] == 'DISPERSE' then
+            if not current_phonology then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags < 5 or #subtags % 3 ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local scalar = tonumber(subtags[2])
+            if not scalar or scalar < 0 then
+              qerror('Scalar must be a non-negative number: ' .. subtags[2])
+            end
+            local mask = {}
+            local values_1 = {}
+            local values_2 = {}
+            local i = 3
+            while i < #subtags do
+              local value_1 = get_valid_value(subtags[i], tag)
+              local value_2 = get_valid_value(subtags[i + 1], tag)
+              local node = utils.linear_index(
+                current_phonology.nodes, subtags[i + 2], 'name')
+              if not node then
+                qerror('No such node: ' .. subtags[i + 2])
+              elseif not current_phonology.nodes[node].feature then
+                qerror('Node must not be a class node: ' .. subtags[i + 2])
+              elseif bitfield_get(mask, node - 1) == 1 then
+                qerror('Same node twice in one dispersion: ' .. tag)
+              end
+              bitfield_set(mask, node - 1, 1)
+              bitfield_set(values_1, node - 1, value_1)
+              bitfield_set(values_2, node - 1, value_2)
+              i = i + 3
+            end
+            if bitfield_equals(values_1, values_2) then
+              qerror('Cannot disperse something from itself: ' .. tag)
+            end
+            current_phonology.dispersions[#current_phonology.dispersions + 1] =
+              {mask=mask, values_1=values_1, values_2=values_2, scalar=scalar}
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
