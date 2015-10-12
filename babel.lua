@@ -4,10 +4,12 @@ local utils = require('utils')
 
 --[[
 TODO:
+* Use df2console for portable printing.
 * Split this giant file up into smaller pieces.
 * Find names for anon and unk fields.
 * Put words in GEN_DIVINE.
 * Update any new names in GEN_DIVINE to point to the moved GEN_DIVINE.
+* Get more dimension values if none have positive scores in the cross-product.
 * Protect against infinite loops due to sonority dead ends in random_word.
 * Change the adventurer's forced goodbye response to "I don't understand you".
 * Sign languages
@@ -580,17 +582,18 @@ Elements present in both input sequences are collapsed into one.
 Args:
   s1: A sequence.
   s2: A sequence.
+  cmpfun: A comparator function, or `utils.compare` by default.
 
 Returns:
   A merged sorted sequence.
 ]]
-local function merge_sorted_sequences(s1, s2)
+local function merge_sorted_sequences(s1, s2, cmpfun)
   local rv = {}
   for _, e in ipairs(s1) do
     table.insert(rv, e)
   end
   for _, e in ipairs(s2) do
-    utils.insert_sorted(rv, e)
+    utils.insert_sorted(rv, e, nil, cmpfun)
   end
   return rv
 end
@@ -598,6 +601,11 @@ end
 if TEST then
   assert_eq(merge_sorted_sequences({1, 2, 5}, {-1, 3, 4, 5, 100}),
             {-1, 1, 2, 3, 4, 5, 100})
+  assert_eq(
+    merge_sorted_sequences(
+      {5, 2, 1}, {100, 5, 4, 3, -1},
+      function(a, b) return utils.compare(b, a) end),
+    {100, 5, 4, 3, 2, 1, -1})
 end
 
 --[[
@@ -1562,8 +1570,11 @@ local function merge_dimensions(dimensions, links)
                        nodes=concatenate(link.d1.nodes, link.d2.nodes),
                        values_1={}, values_2={}, scalings={}, dispersions={}}
     for _, sods in ipairs({'scalings', 'dispersions'}) do
+      local sods_seen = {}
       for _, sod in ipairs(link[sods]) do
-        if bitfield_equals(dimension.mask, sod.mask, sod.mask) then
+        if (not sods_seen[sod] and
+            bitfield_equals(dimension.mask, sod.mask, sod.mask)) then
+          sods_seen[sod] = true
           dimension[sods][#dimension[sods] + 1] = sod
         end
       end
@@ -1916,6 +1927,35 @@ local function dimension_value_to_bitfield(value)
     bitfield_set(value_bitfield, n - 1, 1)
   end
   return value_bitfield
+end
+
+--[[
+Compares dimension values.
+
+Args:
+  a: A dimension value.
+  b: A dimension value.
+
+Returns:
+  -1 if a < b, 1 if a > b, and 0 otherwise. The comparison relation is a
+  partial order but is otherwise unspecified.
+]]
+local function compare_dimension_values(a, b)
+  a = dimension_value_to_bitfield(a)
+  b = dimension_value_to_bitfield(b)
+  if #a < #b then
+    return -1
+  elseif #b < #a then
+    return 1
+  end
+  for i = 1, #a do
+    if a[i] < b[i] then
+      return -1
+    elseif b[i] < a[i] then
+      return 1
+    end
+  end
+  return 0
 end
 
 local function print_val(val)
@@ -2409,9 +2449,12 @@ local function get_dimension_values(rng, dimension)
         dimension.scalings),
       rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
     while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
-      local v = pick_from_grid(rng, grid, dimension.dispersions)
-      if v then
-        dimension.cache = concatenate(dimension.cache, v)
+      local values = pick_from_grid(rng, grid, dimension.dispersions)
+      if values then
+        dimension.cache = merge_sorted_sequences(
+          dimension.cache,
+          utils.sort_vector(values, nil, compare_dimension_values),
+          compare_dimension_values)
       else
         break
       end
@@ -5239,12 +5282,10 @@ if #args >= 1 then
     local dim = get_dimension(rng, phonologies[1], 466)
     print_dimension(phonologies[1].nodes, dim, '')
     local inv = get_dimension_values(rng, dim)
-    --[[
     print('-----------------------')
-    for _, val in ipairs(inv) do
+    for _, val in ipairs(utils.sort_vector(inv, nil, function(a, b) return utils.compare(a.score, b.score) end)) do
       print_val(val)
     end
-    ]]
   else
     usage()
   end
