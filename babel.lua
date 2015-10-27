@@ -32,7 +32,6 @@ local TEST = true
 
 local REPORT_LINE_LENGTH = 73
 local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.5
-local SONORITY_DIFFERENCE_FACTOR = 0.5
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
@@ -1869,7 +1868,14 @@ if TEST then
 end
 
 --[[
-TODO
+Adds scalings and dispersions to a dimension and its descendants.
+
+Args:
+  dimension! A dimension.
+  phonology: A phonology to get scalings and dispersions from.
+
+Returns:
+  `dimension`.
 ]]
 local function add_scalings_and_dispersions(dimension, phonology)
   if dimension.d1 then
@@ -2301,17 +2307,7 @@ local function split_grid(grid, pivot, scalings)
       local scalings_for_splitting = get_satisfied_scalings(
         dimension_value_to_bitfield(roc.value), is_row, pivot, scalings,
         grid[rocs].mask)
-      --[[
-      local scalings_seen = {}
-      local deduplicated_scalings = {}
-      for _, scaling in ipairs(scalings_for_splitting) do
-        if not scalings_seen[scaling] then
-          scalings_seen[scaling] = true
-          deduplicated_scalings[#deduplicated_scalings + 1] = scaling
-        end
-      end
-      ]] local deduplicated_scalings = scalings_for_splitting
-      split_roc(grid, is_row, i, deduplicated_scalings)
+      split_roc(grid, is_row, i, scalings_for_splitting)
     end
   end
   return fix_grid_score_totals(grid)
@@ -2387,60 +2383,6 @@ if TEST then
 end
 
 --[[
-Gets a dimension value's sonority.
-
-Args:
-  dimension_value: A dimension value.
-
-Returns:
-  The dimension value's sonority.
-]]
-local function get_sonority(dimension_value)
-  -- TODO: Don't assume. Use a parameter.
-  local phonology = phonologies[1]
-  local sonority = 0
-  for _, i in ipairs(dimension_value) do
-    if phonology.nodes[i].sonorous then
-      sonority = sonority + 1
-    end
-  end
-  return sonority
-end
-
-if TEST then
-  -- TODO
-end
-
---[[
-TODO
-
-Args:
-  grid! A grid.
-  i: The index of the picked row.
-  j: The index of the picked column.
-]]
-local function apply_sonority_dispersions(grid, i, j)
-  if true then return end
-  -- TODO: Calculate sonority for each roc independently to be less redundant.
-  local sonority =
-    get_sonority(concatenate(grid.rows[i].value, grid.cols[j].value))
-  for i2, row in ipairs(grid.grid) do
-    for j2, score in ipairs(row) do
-      if i ~= i2 or j ~= j2 then
-        local sonority2 = get_sonority(grid.rows[i2].value, grid.cols[j2].value)
-        local sonority_difference = math.abs(sonority - sonority2)
-        grid.grid[i2][j2] =
-          score + score * sonority_difference * sonority_difference * SONORITY_DIFFERENCE_FACTOR
-      end
-    end
-  end
-end
-
-if TEST then
-  -- TODO
-end
-
---[[
 Randomly chooses dimension values from a grid without replacement.
 
 If a dispersion applies to the chosen value, the other value in the
@@ -2481,7 +2423,6 @@ local function pick_from_grid(rng, grid, dispersions)
             rv[#rv].score = grid.grid[x][j]
             clear_roc_family(grid, x, j)
             apply_dispersions(grid, dispersions, x, j)
-            apply_sonority_dispersions(grid, x, j)
           end
         end
       else
@@ -2495,7 +2436,6 @@ local function pick_from_grid(rng, grid, dispersions)
             rv[#rv].score = grid.grid[i][x]
             clear_roc_family(grid, i, x)
             apply_dispersions(grid, dispersions, i, x)
-            apply_sonority_dispersions(grid, i, x)
           end
         end
       end
@@ -4480,44 +4420,6 @@ local function load_phonologies()
             end
             current_phonology.dispersions[#current_phonology.dispersions + 1] =
               {mask=mask, values_1=values_1, values_2=values_2, scalar=scalar}
-          elseif subtags[1] == 'PREREQ' then
-            if not current_phonology then
-              qerror('Orphaned tag: ' .. tag)
-            elseif #subtags < 5 or #subtags % 3 ~= 2 then
-              qerror('Wrong number of subtags: ' .. tag)
-            end
-            local score = tonumber(subtags[2])
-            if not score or score < 0 then
-              qerror('Score must be a non-negative number: ' .. subtags[2])
-            end
-            local mask = {}
-            local values_1 = {}
-            local values_2 = {}
-            local i = 3
-            while i < #subtags do
-              local value_1 = get_valid_value(subtags[i], tag)
-              local value_2 = get_valid_value(subtags[i + 1], tag)
-              local node = utils.linear_index(
-                current_phonology.nodes, subtags[i + 2], 'name')
-              if not node then
-                qerror('No such node: ' .. subtags[i + 2])
-              elseif not current_phonology.nodes[node].feature then
-                qerror('Node must not be a class node: ' .. subtags[i + 2])
-              elseif bitfield_get(mask, node - 1) == 1 then
-                qerror('Same node twice in one prerequirement: ' .. tag)
-              end
-              bitfield_set(mask, node - 1, 1)
-              bitfield_set(values_1, node - 1, value_1)
-              bitfield_set(values_2, node - 1, value_2)
-              i = i + 3
-            end
-            if bitfield_equals(values_1, values_2) then
-              qerror('Cannot prerequire oneself: ' .. tag)
-            end
-            current_phonology.prereqs[#current_phonology.prereqs + 1] =
-              {mask=mask, values_1=values_1, values_2=values_2, score=score}
-            current_phonology.scalings[#current_phonology.scalings + 1] =
-              {mask=mask, values=values_2, scalar=0, strength=math.huge}
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
