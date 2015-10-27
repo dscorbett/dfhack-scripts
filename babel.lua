@@ -32,10 +32,11 @@ local TEST = true
 
 local REPORT_LINE_LENGTH = 73
 local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.5
+local SONORITY_DIFFERENCE_FACTOR = 0.5
 local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
-local MINIMUM_DIMENSION_CACHE_SIZE = 16
+local MINIMUM_DIMENSION_CACHE_SIZE = 32
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -78,10 +79,13 @@ A persistent entry with the keys:
     [4]: A random number generator seed for generating the language.
 
 Phonology:
+  name: A name, for internal use.
   constraints: A sequence of constraints.
   scalings: A sequence of scalings.
   dispersions: A sequence of dispersions.
   nodes: A sequence of nodes.
+  dimension: An optional dimension tree. If it is nil, a dimension tree
+    will be automatically generated.
   symbols: A sequence of symbols.
   articulators: A sequence of articulators.
 
@@ -246,6 +250,9 @@ from whose cross product its values are drawn.
     `d2.nodes`, respectively or vice versa. If `d1` is nil, so is
     `scalings`.
   dispersions: Like `scalings`, but for dispersions.
+  peripheral: Whether to use a different algorithm to choose dimension
+    values based on picking from the periphery of the dimension's grid
+    and ignoring the interior.
 
 Link:
 A relationship between two dimensions, and how close the relationship
@@ -1862,6 +1869,30 @@ if TEST then
 end
 
 --[[
+TODO
+]]
+local function add_scalings_and_dispersions(dimension, phonology)
+  if dimension.d1 then
+    for _, sods in ipairs({'scalings', 'dispersions'}) do
+      for _, sod in ipairs(phonology[sods]) do
+        if (bitfield_equals(dimension.mask, sod.mask, sod.mask) and
+            not bitfield_equals(dimension.d1.mask, sod.mask, sod.mask) and
+            not bitfield_equals(dimension.d2.mask, sod.mask, sod.mask)) then
+          dimension[sods][#dimension[sods] + 1] = sod
+        end
+      end
+    end
+    add_scalings_and_dispersions(dimension.d1, phonology)
+    add_scalings_and_dispersions(dimension.d2, phonology)
+  end
+  return dimension
+end
+
+if TEST then
+  -- TODO
+end
+
+--[[
 Randomly generates a dimension for a phonology given a target creature.
 
 Args:
@@ -1875,15 +1906,17 @@ Returns:
   children of a node in the tree are in `d1` and `d2`.
 ]]
 local function get_dimension(rng, phonology, creature_index)
-  local nodes = phonology.nodes
-  local dimensions = {}
-  local node_to_dimension = {}
-  local inarticulable_node_index = nil
   if not can_articulate(creature_index, phonology.articulators) then
     -- TODO: Handle this problem by choosing another phonology.
     qerror(df.global.world.raws.creatures.all[creature_index].creature_id ..
            ' cannot use its assigned phonology.')
+  elseif phonology.dimension then
+    return add_scalings_and_dispersions(phonology.dimension, phonology)
   end
+  local nodes = phonology.nodes
+  local dimensions = {}
+  local node_to_dimension = {}
+  local inarticulable_node_index = nil
   for i, node in ipairs(nodes) do
     if not (inarticulable_node_index and
             dominates(inarticulable_node_index, i, nodes)) then
@@ -2268,7 +2301,17 @@ local function split_grid(grid, pivot, scalings)
       local scalings_for_splitting = get_satisfied_scalings(
         dimension_value_to_bitfield(roc.value), is_row, pivot, scalings,
         grid[rocs].mask)
-      split_roc(grid, is_row, i, scalings_for_splitting)
+      --[[
+      local scalings_seen = {}
+      local deduplicated_scalings = {}
+      for _, scaling in ipairs(scalings_for_splitting) do
+        if not scalings_seen[scaling] then
+          scalings_seen[scaling] = true
+          deduplicated_scalings[#deduplicated_scalings + 1] = scaling
+        end
+      end
+      ]] local deduplicated_scalings = scalings_for_splitting
+      split_roc(grid, is_row, i, deduplicated_scalings)
     end
   end
   return fix_grid_score_totals(grid)
@@ -2305,6 +2348,7 @@ Args:
   j: The index of the picked column.
 ]]
 local function apply_dispersions(grid, dispersions, i, j)
+  -- TODO: Once a value is chosen, revert it to its predispersion score.
   local picked_value = dimension_value_to_bitfield(
     concatenate(grid.rows[i].value, grid.cols[j].value))
   for _, dispersion in ipairs(dispersions) do
@@ -2340,6 +2384,60 @@ if TEST then
   apply_dispersions(
     grid, {{scalar=0.5, mask={0x3}, values_1={0x3}, values_2={0x0}}}, 1, 1)
   assert_eq(grid.grid, {{0, 1}, {1, 0.5}})
+end
+
+--[[
+Gets a dimension value's sonority.
+
+Args:
+  dimension_value: A dimension value.
+
+Returns:
+  The dimension value's sonority.
+]]
+local function get_sonority(dimension_value)
+  -- TODO: Don't assume. Use a parameter.
+  local phonology = phonologies[1]
+  local sonority = 0
+  for _, i in ipairs(dimension_value) do
+    if phonology.nodes[i].sonorous then
+      sonority = sonority + 1
+    end
+  end
+  return sonority
+end
+
+if TEST then
+  -- TODO
+end
+
+--[[
+TODO
+
+Args:
+  grid! A grid.
+  i: The index of the picked row.
+  j: The index of the picked column.
+]]
+local function apply_sonority_dispersions(grid, i, j)
+  if true then return end
+  -- TODO: Calculate sonority for each roc independently to be less redundant.
+  local sonority =
+    get_sonority(concatenate(grid.rows[i].value, grid.cols[j].value))
+  for i2, row in ipairs(grid.grid) do
+    for j2, score in ipairs(row) do
+      if i ~= i2 or j ~= j2 then
+        local sonority2 = get_sonority(grid.rows[i2].value, grid.cols[j2].value)
+        local sonority_difference = math.abs(sonority - sonority2)
+        grid.grid[i2][j2] =
+          score + score * sonority_difference * sonority_difference * SONORITY_DIFFERENCE_FACTOR
+      end
+    end
+  end
+end
+
+if TEST then
+  -- TODO
 end
 
 --[[
@@ -2383,6 +2481,7 @@ local function pick_from_grid(rng, grid, dispersions)
             rv[#rv].score = grid.grid[x][j]
             clear_roc_family(grid, x, j)
             apply_dispersions(grid, dispersions, x, j)
+            apply_sonority_dispersions(grid, x, j)
           end
         end
       else
@@ -2396,6 +2495,7 @@ local function pick_from_grid(rng, grid, dispersions)
             rv[#rv].score = grid.grid[i][x]
             clear_roc_family(grid, i, x)
             apply_dispersions(grid, dispersions, i, x)
+            apply_sonority_dispersions(grid, i, x)
           end
         end
       end
@@ -2448,15 +2548,29 @@ local function get_dimension_values(rng, dimension)
         make_grid(dimension.d1.mask, dimension.d2.mask, values_1, values_2),
         dimension.scalings),
       rng:random(#dimension.scalings + 1), shuffle(dimension.scalings, rng))
-    while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
-      local values = pick_from_grid(rng, grid, dimension.dispersions)
-      if values then
-        dimension.cache = merge_sorted_sequences(
-          dimension.cache,
-          utils.sort_vector(values, nil, compare_dimension_values),
-          compare_dimension_values)
-      else
-        break
+    if dimension.peripheral then
+      while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
+        local value = table.remove(values_1, 1)
+        if value then
+          dimension.cache[#dimension.cache + 1] = value
+          values_1, values_2 = values_2, values_1
+        elseif next(values_2) then
+          values_1 = values_2
+        else
+          break
+        end
+      end
+    else
+      while #dimension.cache < MINIMUM_DIMENSION_CACHE_SIZE do
+        local values = pick_from_grid(rng, grid, dimension.dispersions)
+        if values then
+          dimension.cache = merge_sorted_sequences(
+            dimension.cache,
+            utils.sort_vector(values, nil, compare_dimension_values),
+            compare_dimension_values)
+        else
+          break
+        end
       end
     end
   end
@@ -4002,6 +4116,8 @@ local function load_phonologies()
       -- TODO: '\n'-terminated tokens trim trailing whitespace.
       local current_phonology = nil
       local current_parent = 0
+      local current_dimension
+      local nodes_in_dimension_tree = {}
       for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
         local subtags = {}
         for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
@@ -4021,9 +4137,10 @@ local function load_phonologies()
           elseif subtags[1] == 'PHONOLOGY' then
             if #subtags ~= 2 then
               qerror('Wrong number of subtags: ' .. tag)
-            end
-            if utils.linear_index(phonologies, subtags[2], 'name') then
+            elseif utils.linear_index(phonologies, subtags[2], 'name') then
               qerror('Duplicate phonology: ' .. subtags[2])
+            elseif current_dimension then
+              qerror('Unfinished dimension tree before ' .. subtags[2])
             end
             table.insert(phonologies,
                          {name=subtags[2], nodes={}, scalings={}, symbols={},
@@ -4033,9 +4150,10 @@ local function load_phonologies()
           elseif subtags[1] == 'NODE' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
-            end
-            if #subtags < 2 then
+            elseif #subtags < 2 then
               qerror('Wrong number of subtags: ' .. tag)
+            elseif current_phonology.dimension then
+              qerror('Node after the dimension tree: ' .. tag)
             end
             local sonorous = false
             local feature_class = current_parent == 0 and FEATURE_CLASS_NEUTRAL
@@ -4222,8 +4340,7 @@ local function load_phonologies()
           elseif subtags[1] == 'END' then
             if not current_phonology or current_parent == 0 then
               qerror('Orphaned tag: ' .. tag)
-            end
-            if #subtags ~= 1 then
+            elseif #subtags ~= 1 then
               qerror('Wrong number of subtags: ' .. tag)
             end
             local children = {}
@@ -4237,8 +4354,65 @@ local function load_phonologies()
               end
             end
             current_parent = current_phonology.nodes[current_parent].parent
-          elseif subtags[1] == 'SCALE' then
+          elseif subtags[1] == 'DIMENSION' then
             if not current_phonology then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags > 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            elseif not current_dimension and #nodes_in_dimension_tree ~= 0 then
+              qerror('Multiple root dimensions')
+            elseif subtags[2] and subtags[2] ~= 'PERIPHERAL' then
+              qerror('Invalid subtoken: ' .. subtags[2])
+            end
+            current_dimension =
+              {parent=current_dimension, scalings={}, peripheral=subtags[2]}
+          elseif subtags[1] == 'DIMENSION_NODE' then
+            if not current_phonology then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            elseif current_dimension.d2 then
+              qerror('A dimension can only have two subdimensions: ' .. tag)
+            end
+            local n, node =
+              utils.linear_index(current_phonology.nodes, subtags[2], 'name')
+            if not n then
+              qerror('No such node: ' .. subtags[2])
+            end
+            nodes_in_dimension_tree[n] = true
+            current_dimension[current_dimension.d1 and 'd2' or 'd1'] =
+              {id={n}, nodes={n}, mask=bitfield_set({}, n - 1, 1),
+               cache=node.feature and
+               {{score=1 - node.prob}, {score=node.prob, n}} or {{score=1, n}}}
+          elseif subtags[1] == 'END_DIMENSION' then
+            if not current_phonology or not current_dimension then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            elseif not current_dimension.d2 then
+              qerror('Each dimension must have two subdimensions.')
+            end
+            local d = current_dimension
+            d.id = {d.d1.id[1], d.d2.id[#d.d2.id]}
+            d.cache = {}
+            d.mask = bitfield_or(d.d1.mask, d.d2.mask)
+            d.nodes = concatenate(d.d1.nodes, d.d2.nodes)
+            d.values_1 = {}
+            d.values_2 = {}
+            d.dispersions = {}
+            current_dimension, current_dimension.parent = d.parent
+            if current_dimension then
+              current_dimension[current_dimension.d1 and 'd2' or 'd1'] = d
+            elseif #nodes_in_dimension_tree == #current_phonology.nodes then
+              current_phonology.dimension = d
+              nodes_in_dimension_tree = {}
+            else
+              qerror('Not all nodes are in the dimension tree.')
+            end
+          elseif subtags[1] == 'SCALE' or subtags[1] == 'DIMENSION_SCALE' then
+            local in_dimension = subtags[1] == 'DIMENSION_SCALE'
+            if (not current_phonology or
+                (in_dimension and not current_dimension)) then
               qerror('Orphaned tag: ' .. tag)
             elseif #subtags < 6 or #subtags % 2 ~= 0 then
               qerror('Wrong number of subtags: ' .. tag)
@@ -4266,8 +4440,9 @@ local function load_phonologies()
               bitfield_set(values, node - 1, value)
               i = i + 2
             end
-            table.insert(current_phonology.scalings,
-                         {mask=mask, values=values, scalar=scalar,
+            table.insert((in_dimension and current_dimension or
+                          current_phonology).scalings,
+                         {mask=mask, values=values, scalar=scalar, tag=tag,
                           strength=strength})
           elseif subtags[1] == 'DISPERSE' then
             if not current_phonology then
@@ -4305,6 +4480,44 @@ local function load_phonologies()
             end
             current_phonology.dispersions[#current_phonology.dispersions + 1] =
               {mask=mask, values_1=values_1, values_2=values_2, scalar=scalar}
+          elseif subtags[1] == 'PREREQ' then
+            if not current_phonology then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags < 5 or #subtags % 3 ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local score = tonumber(subtags[2])
+            if not score or score < 0 then
+              qerror('Score must be a non-negative number: ' .. subtags[2])
+            end
+            local mask = {}
+            local values_1 = {}
+            local values_2 = {}
+            local i = 3
+            while i < #subtags do
+              local value_1 = get_valid_value(subtags[i], tag)
+              local value_2 = get_valid_value(subtags[i + 1], tag)
+              local node = utils.linear_index(
+                current_phonology.nodes, subtags[i + 2], 'name')
+              if not node then
+                qerror('No such node: ' .. subtags[i + 2])
+              elseif not current_phonology.nodes[node].feature then
+                qerror('Node must not be a class node: ' .. subtags[i + 2])
+              elseif bitfield_get(mask, node - 1) == 1 then
+                qerror('Same node twice in one prerequirement: ' .. tag)
+              end
+              bitfield_set(mask, node - 1, 1)
+              bitfield_set(values_1, node - 1, value_1)
+              bitfield_set(values_2, node - 1, value_2)
+              i = i + 3
+            end
+            if bitfield_equals(values_1, values_2) then
+              qerror('Cannot prerequire oneself: ' .. tag)
+            end
+            current_phonology.prereqs[#current_phonology.prereqs + 1] =
+              {mask=mask, values_1=values_1, values_2=values_2, score=score}
+            current_phonology.scalings[#current_phonology.scalings + 1] =
+              {mask=mask, values=values_2, scalar=0, strength=math.huge}
           elseif subtags[1] == 'SYMBOL' then
             if not current_phonology then
               qerror('Orphaned tag: ' .. tag)
@@ -5278,7 +5491,7 @@ if #args >= 1 then
   elseif args[1] == 'test' then
     phonologies = nil
     load_phonologies()
-    local rng = dfhack.random.new(121122)  -- 40221: too much ROUND
+    local rng = dfhack.random.new(625)
     local dim = get_dimension(rng, phonologies[1], 466)
     print_dimension(phonologies[1].nodes, dim, '')
     local inv = get_dimension_values(rng, dim)
