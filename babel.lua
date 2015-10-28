@@ -127,7 +127,8 @@ Node:
     have this node to denote a phoneme that does have it but is
     otherwise identical.
   remove: The opposite of `add`.
-  sonorous: Whether this node adds sonority to a phoneme that has it.
+  sonority: How much sonority this node adds to a phoneme. The number is
+    only meaningful in relation to other nodes' sonorities.
   feature_class: TODO: This should be used or removed.
   feature: Whether this node is a feature node, as opposed to a class
     node.
@@ -633,9 +634,9 @@ local function dominates(index_1, index_2, nodes)
 end
 
 if TEST then
-  local nodes = {{name='1', parent=0, sonorous=false},
-                 {name='2', parent=0, sonorous=false},
-                 {name='3', parent=2, sonorous=false}}
+  local nodes = {{name='1', parent=0, sonority=0},
+                 {name='2', parent=0, sonority=0},
+                 {name='3', parent=2, sonority=0}}
   assert_eq(dominates(0, 0, nodes), true)
   assert_eq(dominates(0, 1, nodes), true)
   assert_eq(dominates(0, 2, nodes), true)
@@ -2490,14 +2491,12 @@ Args:
   phonology: A phonology.
 
 Returns:
-  The number of sonorous features in the dimension value.
+  The sum of the sonorities of the features in the dimension value.
 ]]
 local function get_sonority(dimension_value, phonology)
   local sonority = 0
   for _, i in ipairs(dimension_value) do
-    if phonology.nodes[i].sonorous then
-      sonority = sonority + 1
-    end
+    sonority = sonority + phonology.nodes[i].sonority
   end
   return sonority
 end
@@ -4083,7 +4082,7 @@ local function load_phonologies()
             elseif current_phonology.dimension then
               qerror('Node after the dimension tree: ' .. tag)
             end
-            local sonorous = false
+            local sonority = 0
             local feature_class = current_parent == 0 and FEATURE_CLASS_NEUTRAL
               or current_phonology.nodes[current_parent].feature_class
             local feature = true
@@ -4094,8 +4093,16 @@ local function load_phonologies()
             local remove_symbol = nil
             local i = 3
             while i <= #subtags do
-              if subtags[i] == 'SONOROUS' then
-                sonorous = true
+              if subtags[i] == 'SONORITY' then
+                if i == #subtags then
+                  qerror('No sonority specified for node ' .. subtags[2])
+                end
+                i = i + 1
+                sonority = tonumber(subtags[i])
+                if not sonority or sonority < 0 then
+                  qerror('Sonority must be a nonnegative number: ' ..
+                         subtags[i])
+                end
               elseif subtags[i] == 'VOWEL' then
                 feature_class = FEATURE_CLASS_VOWEL
               elseif subtags[i] == 'CONSONANT' then
@@ -4115,7 +4122,7 @@ local function load_phonologies()
                 i = i + 1
                 prob = tonumber(subtags[i])
                 if not prob or prob < 0 or 1 < prob then
-                  qerror('Probability must be between 0 and 1: ' .. prob)
+                  qerror('Probability must be between 0 and 1: ' .. subtags[i])
                 end
               elseif subtags[i] == 'ADD' then
                 if i == #subtags then
@@ -4137,7 +4144,7 @@ local function load_phonologies()
             table.insert(current_phonology.nodes,
                          {name=subtags[2], parent=current_parent,
                           add=add_symbol, remove=remove_symbol,
-                          sonorous=sonorous, feature_class=feature_class,
+                          sonority=sonority, feature_class=feature_class,
                           feature=feature, prob=prob, articulators={}})
             if (current_parent ~= 0 and
                 current_phonology.nodes[current_parent].feature) then
@@ -5380,9 +5387,9 @@ if #args >= 1 then
     phonologies = nil
     load_phonologies()
     local language = {ints={[3]=1}}
-    local parameters = random_parameters(phonologies[1], 6, df.global.world.raws.creatures.all[466])
+    local parameters = random_parameters(phonologies[1], 0x77315, df.global.world.raws.creatures.all[466])
     for _, ps in ipairs(parameters.inventory) do
-      --print(get_lemma(phonologies[1], {ps[1]}))
+      --print(ps[2], get_lemma(phonologies[1], {ps[1]}))
     end
     for i = 1, 30 do
       local u_form, s_form = random_word(language, parameters)
