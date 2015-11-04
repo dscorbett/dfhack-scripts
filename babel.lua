@@ -1,4 +1,4 @@
--- Adds languages.
+-- Add random languages to the game
 
 local utils = require('utils')
 
@@ -265,7 +265,7 @@ A string representing a boundary.
 
 Word:
 A sequence of phonemes.
--- TODO: for now, anyway
+-- TODO: Syntax has a different definition.
 
 SFI:
 A syntactic feature instance.
@@ -280,7 +280,7 @@ Language parameter table:
   min_sonority: The minimum sonority of all phonemes in `inventory`.
   max_sonority: The maximum sonority of all phonemes in `inventory`.
   constraints: TODO
-  strategies: A map from features to movement strategy or nil.
+  strategies: A map from features to movement strategies or nil.
   overt_trace: Whether the language keeps traces in the phonological
     form.
   swap: Whether the language is head-final.
@@ -292,11 +292,11 @@ What sort of movement to do when checking a certain feature.
     maximal projection of the moving constituent along with it.
 
 Constituent:
-A node in a syntactic tree.
+A node in a syntax tree.
   n1: A child constituent.
   n2: A child constituent, which is nil if `n1` is.
   features: A map of features to feature values.
-  morphemes: A sequence of morphemes.
+  morphemes: A sequence of morphemes. Unspecified if `ref` is not nil.
   is_phrase: Whether this constituent is a phrase, i.e. a maximal
     projection.
   depth: The depth of the constituent from the root, where the root has
@@ -305,14 +305,16 @@ A node in a syntactic tree.
   ref: The key of another constituent in the lexicon that this
     constituent is to be replaced with.
   maximal: The maximal projection of this constituent, or nil if none.
-  moved_to: The constituent to which this constituent was moved.
-  text: A string.
+  moved_to: The constituent to which this constituent was moved, or nil
+    if none.
+  text: A string to use verbatim in the output.
   TODO:
   var: A key to look up in a context table. At most one of `n1`, `word`,
     `text`, and `var` can be non-nil.
 
 Morpheme:
   id: A unique ID for this morpheme within its language.
+  text: A string to print for debugging.
   features: A map of features to feature values.
   affix: Whether this is a bound morpheme.
   after: Whether this morpheme goes after (as opposed to before) another
@@ -2621,6 +2623,75 @@ local function random_word(language, parameters)
 end
 
 --[[
+Constructs a constituent from a constituent key.
+
+Args:
+  x: A constituent key or a sequence of features.
+
+Returns:
+  If `x` is a constituent key, a constituent using that key as a `ref`
+  and with no features. Otherwise, a function that given a constituent
+  key returns a constituent with that key as a `ref` and `x` as the
+  features.
+]]
+local function r(x)
+  return type(x) == 'string' and {ref=x, features={}} or function(s)
+    return {ref=s, features=x}
+  end
+end
+
+--[[
+Constructs a morpheme.
+
+Args:
+  m: A string or a table.
+
+Returns:
+  If `m` is a string, a morpheme with `id` and `text` set to `m`.
+  Otherwise, a morpheme with `id` set to `m[1]`, `text` set to `m[2]`,
+  and all other morpheme keys set to their values in `m`. Either way,
+  unspecified required keys (like `fusion`) are initialized to
+  reasonable defaults.
+]]
+local function m(m)
+  return type(m) ~= 'table' and
+    {id=m, text=m, fusion={}, features={}} or
+    {id=m[1], text=m[2], features=m.features or {}, affix=m.affix,
+     after=m.after, initial=m.initial, fusion=m.fusion or {}, dummy=m.dummy}
+end
+
+--[[
+Constructs a constituent.
+
+Args:
+  c: A table.
+
+Returns:
+  A constituent using values from `c`, with reasonable defaults when
+  required but not specified. `[1]` becomes `n1`; `[2]`, `n2`; `f`,
+  `features`; `m`, `morphemes`; and `moved_to`, `moved_to`.
+]]
+local function x(c)
+  return {n1=c[1], n2=c[2], features=c.f or {}, morphemes=c.m or {},
+          moved_to=c.moved_to}
+end
+
+--[[
+Constructs a phrase.
+
+Args:
+  c: A table.
+
+Returns:
+  Whatever `x` would return, but marked as a phrase.
+]]
+local function xp(c)
+  c = x(c)
+  c.is_phrase = true
+  return c
+end
+
+--[[
 Creates a comparator function for SFIs.
 
 The comparator function sorts SFIs by increasing depth; then movement
@@ -2783,8 +2854,18 @@ local function agree(sfi_1, sfi_2)
   if sfi_1.head.features[sfi_1.feature] then
     goal, probe = probe, goal
   end
-  goal.head.features[goal.feature] =
-    probe.head.features[probe.feature]
+  local f = goal.feature
+  local v = probe.head.features[probe.feature]
+  local function set_feature(constituent)
+    constituent.features[f] = v
+    if constituent.n1 then
+      set_feature(constituent.n1)
+      if constituent.n2 then
+        set_feature(constituent.n2)
+      end
+    end
+  end
+  set_feature(goal.head)
 end
 
 if TEST then
@@ -2799,6 +2880,34 @@ if TEST then
   agree(sfi_2, sfi_1)
   assert_eq(sfi_1.head, {features={f=1}})
   assert_eq(sfi_2.head, {features={f=1}})
+
+  -- TODO: Test with a non-head (`head` is now a misnomer).
+end
+
+--[[
+Copies a morpheme deeply.
+
+Args:
+  morpheme: A morpheme.
+
+Returns:
+  A deep copy of the morpheme.
+]]
+local function copy_morpheme(morpheme)
+  return {id=morpheme.id, text=morpheme.text,
+          dummy=morpheme.dummy and copy_morpheme(morpheme.dummy),
+          affix=morpheme.affix, after=morpheme.after, initial=morpheme.initial,
+          features=copyall(morpheme.features), fusion=copyall(morpheme.fusion)}
+end
+
+if TEST then
+  local dummy = {id='z', features={n=9}, fusion={}}
+  local morpheme = {id='X', text='x', affix='true', after=1, initial=-1,
+                    features={f=1, g=2}, fusion={y=dummy}, dummy=dummy}
+  local new_morpheme = copy_morpheme(morpheme)
+  assert_eq(new_morpheme, morpheme)
+  morpheme.features.f = 3
+  assert_eq(new_morpheme.features.f, 1)
 end
 
 --[[
@@ -2811,14 +2920,22 @@ Returns:
   A deep copy of the constituent.
 ]]
 local function copy_constituent(constituent)
+  local morphemes = {}
+  if constituent.morphemes then
+    for i, morpheme in ipairs(constituent.morphemes) do
+      morphemes[i] = copy_morpheme(morpheme)
+    end
+  end
   return {n1=constituent.n1 and copy_constituent(constituent.n1),
           n2=constituent.n2 and copy_constituent(constituent.n2),
           features=copyall(constituent.features),
-          morphemes=constituent.morphemes, is_phrase=constituent.is_phrase}
+          morphemes=morphemes, is_phrase=constituent.is_phrase,
+          depth=constituent.depth, ref=constituent.ref,
+          maximal=constituent.maximal, moved_to=constituent.moved_to}
 end
 
 if TEST then
-  local constituent = {n1={features={f=1, g=2}, morphemes={'x', 'y'}},
+  local constituent = {n1={features={f=1, g=2}, morphemes={m'x', m'y'}},
                        features={f=1, g=2}, morphemes={}, is_phrase=true}
   assert_eq(copy_constituent(constituent), constituent)
 end
@@ -2842,7 +2959,7 @@ Returns:
 local function should_dislocate(dislocated, static)
   local found_unvalued_feature = false
   for f, v in pairs(dislocated) do
-    if not v ~= not static[f] then
+    if not v and static[f] then
       return true
     else
       found_unvalued_feature = true
@@ -2853,7 +2970,7 @@ end
 
 if TEST then
   assert_eq(should_dislocate({}, {}), true)
-  assert_eq(should_dislocate({f=true}, {}), true)
+  assert_eq(should_dislocate({f=true}, {}), false)
   assert_eq(should_dislocate({f=false}, {}), false)
   assert_eq(should_dislocate({f=false}, {f=true}), true)
   assert_eq(should_dislocate({f=false}, {g=true}), false)
@@ -3020,6 +3137,9 @@ if TEST then
             {{id=2, features={}}, {id=3, features={}},
              {id=1, features={f=false}, affix=true}, {id=4, features={}}})
   assert_eq(dislocate({{id=1, features={f=1}, affix=true}}, xs, false),
+            {{id=1, features={f=1}, affix=true}, {id=2, features={}},
+             {id=3, features={}}, {id=4, features={}}})
+  assert_eq(dislocate({{id=1, features={f=1}, affix=true}}, xs, true),
             {{id=2, features={}}, {id=3, features={}},
              {id=1, features={f=1}, affix=true}, {id=4, features={}}})
   assert_eq(dislocate({{id=1, features={f=false}, affix=true}},
@@ -3055,9 +3175,9 @@ end
 --[[
 Merges constituents.
 
-The target becomes a copy of the consituent, maintaining its old data
-when not conflicting with the source's. The new constituent's morphemes
-are a concatenation of both input constituents'. The source is given a
+The target becomes a copy of the source, maintaining its old data when
+not conflicting with the source's. The new constituent's morphemes are a
+concatenation of both input constituents'. The source is given a
 `moved_to` value of the target.
 
 Args:
@@ -3068,7 +3188,7 @@ local function merge_constituents(target, source)
   target.n1 = source.n1 and copy_constituent(source.n1)
   target.n2 = source.n2 and copy_constituent(source.n2)
   target.is_phrase = source.is_phrase
-  target.morphemes = dislocate(target.morphemes, source.morphemes, false)
+  target.morphemes = dislocate(target.morphemes, source.morphemes)
   for feature, value in pairs(source.features) do
     target.features[feature] = value
   end
@@ -3113,16 +3233,13 @@ local function agree_and_maybe_merge(parameters, sfi_1, sfi_2)
   if sfi_1 then
     local strategy = parameters.strategies[sfi_1.feature]
     local merge_target, merge_source = sfi_1.head, sfi_2.head
-    if (strategy and
-        strategy.lower == (merge_target.depth < merge_source.depth)) then
-      if (strategy.lower and
-          merge_target.complement ~= merge_source.maximal) then
-          strategy = nil
-      else
-        merge_target, merge_source = merge_source, merge_target
-      end
+    if strategy and strategy.lower == (merge_target.depth < merge_source.depth)
+    then
+      merge_target, merge_source = merge_source, merge_target
     end
-    if strategy and strategy.pied_piping then
+    if strategy and strategy.lower then
+      strategy = nil
+    elseif strategy and strategy.pied_piping then
       merge_source = merge_source.maximal or merge_source
     end
     if strategy and (merge_target.n1 or
@@ -3166,18 +3283,16 @@ if TEST then
            head={depth=2, features={l=false}, morphemes={{id=2}}}}
   agree_and_maybe_merge(parameters, sfi_1, sfi_2)
   assert_eq(sfi_1, {feature='l', depth=1,
-                    head={depth=1, features={l=1}, moved_to=sfi_2.head,
-                          morphemes={{id=1}}}})
-  assert_eq(sfi_2, {feature='l', depth=2, head={depth=2, features={l=1},
-                                                morphemes={{id=2}, {id=1}}}})
+                    head={depth=1, features={l=1}, morphemes={{id=1}}}})
+  assert_eq(sfi_2, {feature='l', depth=2,
+                    head={depth=2, features={l=1}, morphemes={{id=2}}}})
   sfi_1 = {feature='l', depth=1,
-           head={depth=1, features={l=1}, morphemes={{id=1}}, complement={}}}
+           head={depth=1, features={l=1}, morphemes={{id=1}}}}
   sfi_2 = {feature='l', depth=2,
            head={depth=2, features={l=false}, morphemes={{id=2}}, maximal={}}}
   agree_and_maybe_merge(parameters, sfi_1, sfi_2)
   assert_eq(sfi_1, {feature='l', depth=1,
-                    head={depth=1, features={l=1}, morphemes={{id=1}},
-                          complement={}}})
+                    head={depth=1, features={l=1}, morphemes={{id=1}}}})
   assert_eq(sfi_2, {feature='l', depth=2,
                     head={depth=2, features={l=1}, morphemes={{id=2}},
                           maximal={}}})
@@ -3196,10 +3311,104 @@ if TEST then
 end
 
 --[[
-Do syntax, not including linearization or anything after.
+Determines whether a constituent should lower to another.
+
+Lowering should happen if and only if the constituents share a feature
+value for a feature which causes lowering in this language.
+
+Args:
+  f1: The feature map of one constituent.
+  f2: The feature map of the other constituent.
+  parameters: A language parameter table.
+
+Returns: Whether the constituents of which `f1` and `f2` are the feature
+  maps should participate in lowering with each other.
+]]
+local function should_lower(f1, f2, parameters)
+  for f, v in pairs(f1) do
+    if v == f2[f] then
+      local strategy = parameters.strategies[f]
+      if strategy and strategy.lower then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+--[=[
+Lowers subconstituents as appropriate.
+
+Given the structure [AP a [BP b [CP c]]] where all the heads share a
+feature value for a lowering feature, a moves to b, and then b moves to
+c. This is not realistic, but such a structure is unlikely, so this is
+acceptable.
+
+Args:
+  constituent! A constituent.
+  parameters: A language parameter table.
+
+Returns:
+  `constituent`.
+]=]
+local function do_lowering(constituent, parameters)
+  local mother
+  local nh
+  local nc
+  local function do_lowering(constituent)
+    if constituent.moved_to and not parameters.overt_trace then
+    elseif not constituent.n1 then
+      if mother then-- and mother[nc] == constituent.maximal then
+        if should_lower(constituent.features, mother[nh].features, parameters)
+        then
+          merge_constituents(constituent, mother[nh])
+        end
+        mother = nil
+      end
+    elseif (constituent.n1 and constituent.n2 and
+            ((not constituent.n1.n1) or (not constituent.n2.n1)) and
+            (constituent.n1.is_phrase or constituent.n2.is_phrase)) then
+      local lnh, lnc = 'n1', 'n2'
+      if constituent[lnh].is_phrase then
+        lnh, lnc = lnc, lnh
+      end
+      if mother then
+        do_lowering(constituent[lnh])
+      end
+      mother = constituent
+      nh, nc = lnh, lnc
+      do_lowering(constituent[lnc])
+    else
+      if constituent.n1 then
+        do_lowering(constituent.n1)
+      end
+      if constituent.n2 then
+        do_lowering(constituent.n2)
+      end
+    end
+    return constituent
+  end
+  return do_lowering(constituent)
+end
+
+if TEST then
+  local a = x{f={f=1}}
+  local b = x{f={f=1}}
+  local c = x{f={f=1}}
+  local l = do_lowering(xp{a, xp{b, xp{c}}}, {strategies={f={lower=true}}})
+  assert_eq(l, xp{
+                 x{f={f=1}, moved_to=l.n2.n1},
+                 xp{
+                   x{f={f=1}, moved_to=l.n2.n2.n1},
+                   xp{
+                     x{f={f=1}}}}})
+end
+
+--[[
+Does syntax, not including lowering or anything after.
 
 Syntax involves expanding references to items in the lexicon, checking
-syntactic features, and merging constituents by raising or lowering.
+syntactic features, and merging constituents by raising.
 
 Args:
   constituent! A constituent.
@@ -3211,54 +3420,47 @@ Returns:
 ]]
 local function do_syntax(constituent, lexicon, parameters)
   local do_syntax
-  local heads_without_phrases = {}
-  local function extend_sfis(constituent, n, depth, sfis)
+  local function extend_sfis(constituent, n, depth, sfis, maximal)
     local sfis_n = {}
-    constituent[n] = do_syntax(constituent[n], depth + 1, sfis_n)
+    constituent[n] = do_syntax(constituent[n], depth + 1, sfis_n, maximal)
     for _, sfi in ipairs(sfis_n) do
       sfis[#sfis + 1] = sfi
     end
-    if constituent.is_phrase then
-      for i, head in ipairs(heads_without_phrases) do
-        head.maximal = constituent
-        heads_without_phrases[i] = nil
-      end
-    end
     return sfis_n
   end
-  do_syntax = function(constituent, depth, sfis)
+  do_syntax = function(constituent, depth, sfis, maximal)
     constituent.depth = depth
+    if constituent.is_phrase then
+      maximal = constituent
+    end
     if constituent.n1 then
-      local sfis_1 = extend_sfis(constituent, 'n1', depth, sfis)
+      local sfis_1 = extend_sfis(constituent, 'n1', depth, sfis, maximal)
       if constituent.n2 then
-        if not constituent.n1.n1 then
-          constituent.n1.complement = constituent.n2
-        end
-        local sfis_2 = extend_sfis(constituent, 'n2', depth, sfis)
+        local sfis_2 = extend_sfis(constituent, 'n2', depth, sfis, maximal)
         utils.sort_vector(sfis, nil, compare_sfis(parameters))
         agree_and_maybe_merge(parameters, get_best_sfis(sfis_1, sfis_2))
+      end
+      -- TODO: don't duplicate code! (from later in this same function)
+      for feature, value in pairs(constituent.features) do
+        sfis[#sfis + 1] = {depth=depth, head=constituent, feature=feature}
       end
     else
       local replacement = lexicon[constituent.ref]
       if replacement then
-        replacement = utils.clone(replacement, true)
+        replacement = copy_constituent(replacement)
         if constituent.features then
           for feature, value in pairs(constituent.features) do
             replacement.features[feature] = value
           end
         end
-        return do_syntax(replacement, depth, sfis)
+        return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
         qerror('No morpheme with ID ' .. constituent.ref)
       else
-        if constituent.is_phrase then
-          constituent.maximal = constituent
-        else
-          heads_without_phrases[#heads_without_phrases + 1] = constituent
-        end
+        constituent.maximal = maximal
         for _, morpheme in ipairs(constituent.morphemes) do
           for feature, value in pairs(morpheme.features) do
-            -- TODO: Which takes precendence, constituent's or morpheme's?
+            -- TODO: Which takes precedence, constituent's or morpheme's?
             constituent.features[feature] = value
           end
         end
@@ -3292,7 +3494,14 @@ local function linearize(constituent, parameters)
   if (not constituent or
       (constituent.moved_to and not parameters.overt_trace)) then
     return {}
-  elseif not constituent.n1 then
+  end
+  constituent = copy_constituent(constituent)
+  for i, morpheme in ipairs(constituent.morphemes) do
+    for feature, value in pairs(constituent.features) do
+      morpheme.features[feature] = value
+    end
+  end
+  if not constituent.n1 then
     return {constituent.morphemes}
   end
   local n1, n2 = 'n1', 'n2'
@@ -3300,30 +3509,30 @@ local function linearize(constituent, parameters)
     n1, n2 = n2, n1
   end
   return dislocate(linearize(constituent[n1], parameters),
-                   linearize(constituent[n2], parameters), false)
+                   linearize(constituent[n2], parameters))
 end
 
 if TEST then
-  local n1 = {features={f=1, g=2}, morphemes={{id=1}, {id=2}}}
-  local constituent = {n1=n1,
-                       n2={n1={morphemes={{id=3}}},
-                           n2={features={g=2}, morphemes={{id=2}}, moved_to=n1},
-                       features={}, morphemes={}}}
+  local n1 = x{f={f=1, g=2}, m={m(1), m(2)}}
+  local constituent = x{n1,
+                        x{x{m={m(3)}},
+                          x{f={g=2}, m={m(2)}, moved_to=n1}}}
   assert_eq(linearize(constituent, {}),
-            {constituent.n1.morphemes, constituent.n2.n1.morphemes})
+            {{m{1, 1, features={f=1, g=2}}, m{2, 2, features={f=1, g=2}}},
+             {m{3, 3}}})
   assert_eq(linearize(constituent, {overt_trace=true}),
-            {constituent.n1.morphemes, constituent.n2.n1.morphemes,
-             constituent.n2.n2.morphemes})
+            {{m{1, 1, features={f=1, g=2}}, m{2, 2, features={f=1, g=2}}},
+             {m{3, 3}}, {m{2, 2, features={g=2}}}})
   assert_eq(linearize(constituent, {swap=true}),
-            {constituent.n2.n1.morphemes, constituent.n1.morphemes})
+            {{m{3, 3}},
+             {m{1, 1, features={f=1, g=2}}, m{2, 2, features={f=1, g=2}}}})
   assert_eq(linearize(constituent, {overt_trace=true, swap=true}),
-            {constituent.n2.n2.morphemes, constituent.n2.n1.morphemes,
-             constituent.n1.morphemes})
-  assert_eq(linearize({n1={morphemes={{id='que', affix=true, initial=true,
-                                       after=true, features={}}}},
-                       n2={morphemes={{id='populus', features={}}}}}, {}),
-            {{{id='populus', features={}},
-              {id='que', affix=true, initial=true, after=true, features={}}}})
+            {{m{2, 2, features={g=2}}}, {m{3, 3}},
+             {m{1, 1, features={f=1, g=2}}, m{2, 2, features={f=1, g=2}}}})
+  assert_eq(linearize(x{x{m={m{'que', affix=true, initial=true, after=true}}},
+                        x{m={m{'populus'}}}}, {}),
+            {{m{'populus'},
+              m{'que', affix=true, initial=true, after=true}}})
 end
 
 --[[
@@ -3460,8 +3669,9 @@ Returns:
 ]]
 local function make_utterance(constituent, lexicon, parameters)
   local words = {}
-  for _, word in ipairs(linearize(do_syntax(constituent, lexicon, parameters),
-                                  parameters)) do
+  for _, word in ipairs(linearize(do_lowering(
+    do_syntax(constituent, lexicon, parameters), parameters), parameters))
+  do
     local new_word = word
     repeat
       word = make_word(new_word)
@@ -3486,7 +3696,16 @@ local function spell_morpheme(morpheme)
     return morpheme.text
   else
     -- TODO
-    return '[' .. tostring(morpheme.id or '?') .. ']'
+    local s = '[' .. tostring(morpheme.id or '?')
+    for f, v in pairs(morpheme.features) do
+      s = s .. ',' .. tostring(f)
+      if v == false then
+        s = s .. '*'
+      elseif v ~= true then
+        s = s .. '=' .. tostring(v)
+      end
+    end
+    return s .. ']'
   end
 end
 
@@ -3504,7 +3723,10 @@ Returns:
 local function spell_utterance(utterance)
   local s = ''
   for _, word in ipairs(utterance) do
-    for _, morpheme in ipairs(word) do
+    for i, morpheme in ipairs(word) do
+      if i ~= 1 then
+        s = s .. '-'
+      end
       s = s .. spell_morpheme(morpheme)
     end
     if next(word) then
@@ -3520,44 +3742,50 @@ if TEST then
       {features={}, morphemes={{text='a', fusion={}, features={}},
                                {text='b', fusion={}, features={}}}},
       {}, {strategies={}})),
-    'ab ')
+    'a-b ')
   assert_eq(
     spell_utterance(make_utterance(
-      {features={},
-       n1={features={}, morphemes={{text='a', fusion={}, features={}}}},
-       n2={features={}, morphemes={{text='b', fusion={}, features={}}}}},
+      x{x{m={m{[2]='a'}}},
+        x{m={m{[2]='b'}}}},
       {}, {strategies={}})),
     'a b ')
   assert_eq(
     spell_utterance(make_utterance(
-      {features={},
-       n1={features={}, morphemes={{text='a', fusion={}, features={}}}},
-       n2={features={}, morphemes={{text='b', fusion={}, features={}}}}},
+       x{x{m={m{[2]='a'}}},
+         x{m={m{[2]='b'}}}},
       {}, {strategies={}, swap=true})),
     'b a ')
   assert_eq(
     spell_utterance(make_utterance(
-      {n1={ref='X'}, features={},
-       n2={features={}, morphemes={{text='b', fusion={}, features={}}}}},
-      {X={ref='Y'},
-       Y={features={}, morphemes={{text='z', fusion={}, features={}}}}},
+      x{r'X', x{m={m{[2]='b'}}}},
+      {X=r'Y', Y=x{m={m{[2]='z'}}}},
       {strategies={}})),
     'z b ')
-  local n1 = {features={f=1, g=2},
-              morphemes={{text='1', fusion={}, features={}},
-                         {text='2', fusion={}, features={}}}}
+  local n1 = x{f={f=1, g=2}, m={m{[2]='1'}, m{[2]='2'}}}
   local constituent =
-    {n1=n1, features={},
-     n2={features={},
-         n1={features={}, morphemes={{text='3', fusion={}, features={}}}},
-         n2={features={g=2}, morphemes={{text='4', fusion={}, features={}}},
-             moved_to=n1},
-     features={}, morphemes={}}}
+    x{n1,
+      x{x{m={m{[2]='3'}}},
+        x{f={g=2}, m={m{[2]='4'}}, moved_to=n1}}}
   assert_eq(spell_utterance(make_utterance(constituent, {}, {strategies={}})),
-            '12 3 ')
+            '1-2 3 ')
   assert_eq(spell_utterance(make_utterance(constituent, {},
                                            {strategies={}, overt_trace=true})),
-            '12 3 4 ')
+            '1-2 3 4 ')
+  local q_sent =
+    x{
+      x{f={Case='Nom'}},
+      x{
+        r'foo',
+        xp{
+          f={Case=false},
+          x{r'bar', r'baz'}
+        }
+      }
+    }
+  local q_lex = {foo=x{m={m{'foo'}}}, bar=x{m={m{'bar'}}}, baz=x{m={m{'baz'}}}}
+  local q_params = {strategies={}}
+  assert_eq(spell_utterance(make_utterance(q_sent, q_lex, q_params)),
+            '[foo] [bar,Case=Nom] [baz,Case=Nom] ')
   local en_past = {features={}}
   local en_not =
     {features={}, morphemes={{id='not', text='not', fusion={}, features={}}}}
@@ -3582,45 +3810,43 @@ if TEST then
   local en_parameters =
     {strategies={v={lower=true}, wh={pied_piping=true}, q={}, d={}}}
   local early_en_parameters = {strategies={v={}}}
-  assert_eq(spell_utterance(make_utterance({is_phrase=true,
-                                            n1={ref='PAST'},
-                                            n2={is_phrase=true,
-                                                n1={n1={ref='walk'}}}},
+  assert_eq(spell_utterance(make_utterance(xp{r'PAST', xp{x{r'walk'}}},
                                            en_lexicon, en_parameters)),
-            'walked ')
-  local en_did_not_walk =
-    {is_phrase=true, n1={ref='PAST'}, n2={n1={ref='not'}, is_phrase=true,
-                                          n2={is_phrase=true,
-                                              n1={ref='walk'}}}}
+            'walk-ed ')
+  local en_did_not_walk = xp{r'PAST', xp{r'not', xp{r'walk'}}}
   assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
                                            en_parameters)),
             'did not walk ')
   assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
                                            early_en_parameters)),
-            'walked not ')
+            'walk-ed not ')
   local en_what_thing_did_you_do =
-    {n1={features={wh=false}, morphemes={}}, features={},
-     n2={n1={features={q=true}, morphemes={}},
-         n2={n1={ref='PAST'}, features={},
-             n2={n1={ref='you'}, features={},
-                 n2={n1={ref='do'}, features={},
-                     n2={is_phrase=true, features={},
-                         n1={ref='what'},
-                         n2={ref='thing'}}}}}}}
+    xp{x{f={wh=false}},
+       x{x{f={q=true}},
+         x{r'PAST',
+           x{r'you',
+             x{r'do',
+               xp{r'what',
+                  r'thing'}}}}}}
   assert_eq(spell_utterance(make_utterance(en_what_thing_did_you_do,
                                            en_lexicon, en_parameters)),
             'what thing did you do ')
   local en_you_did_thing =
-    {n1={features={}, morphemes={}}, features={}, is_phrase=true,
-     n2={n1={features={}, morphemes={}}, features={},
-         n2={n1={features={d=false}, morphemes={}}, features={}, is_phrase=true,
-             n2={n1={ref='PAST'}, features={},
-                 n2={features={}, is_phrase=true,
-                     n1={ref='you', features={d=true}},
-                     n2={n1={ref='do'}, features={},
-                         n2={is_phrase=true, features={},
-                             n1={features={}, morphemes={}},
-                             n2={ref='thing'}}}}}}}}
+    xp{
+      x{},
+      x{
+        x{},
+        xp{
+          x{f={d=false}},
+          x{
+            r'PAST',
+            xp{
+              xp{r{d=true}'you'},
+              x{
+                r'do',
+                xp{
+                   x{},
+                   r'thing'}}}}}}}
   assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lexicon,
                                            en_parameters)),
             'you did thing ')
@@ -4995,7 +5221,7 @@ Returns:
 local function get_report_language(report)
 --  print('report language: report.id=' .. report.id)
   local speaker = df.unit.find(report.unk_v40_3)
-  -- TODO: Take listener's language knowledge into account.
+  -- TODO: Take hearer's language knowledge into account.
   if unit then
     local languages = get_unit_languages(speaker)
     if #languages ~= 0 then
@@ -5129,7 +5355,6 @@ function total_handlers.process_new.events(event, i)
   end
 end
 
-
 function total_handlers.get.historical_figures()
   return df.global.world.history.figures
 end
@@ -5212,32 +5437,35 @@ local function get_participants(report, conversation)
   local speaker_id = report.unk_v40_3
   local participants = conversation.anon_1
   local speaker = df.unit.find(speaker_id)
-  -- TODO: listener doesn't always exist.
+  -- TODO: hearer doesn't always exist.
   -- TODO: Solution: cache all <activity_event_conversationst>s' participants.
-  local listener = #participants ~= 0 and df.unit.find(
+  local hearer = #participants ~= 0 and df.unit.find(
     participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
-  return speaker, listener
+  return speaker, hearer
 end
 
+--[[
+TODO
+]]
 local function get_turn_preamble(report, conversation, adventurer)
   -- TODO: Invalid for goodbyes: the data has been deleted by then.
-  local speaker, listener = get_participants(report, conversation)
+  local speaker, hearer = get_participants(report, conversation)
   local force_goodbye = false
-  if speaker == adventurer or listener == adventurer then
+  if speaker == adventurer or hearer == adventurer then
     -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
     -- TODO: df.global.ui_advmode.conversation.choices instead?
     -- TODO: Cf. anon_15.
     conversation.anon_2 = 7
-    if listener == adventurer then
+    if hearer == adventurer then
       force_goodbye = true
     end
   end
   -- TODO: What if the adventurer knows the participants' names?
   local text = speaker == adventurer and 'You' or
     df.profession.attrs[speaker.profession].caption
-  if speaker ~= adventurer and listener ~= adventurer then
+  if speaker ~= adventurer and hearer ~= adventurer then
     text = text .. ' (to ' ..
-      (listener and df.profession.attrs[listener.profession].caption or '???')
+      (hearer and df.profession.attrs[hearer.profession].caption or '???')
       .. ')'
   end
   return text .. ': ', force_goodbye
@@ -5387,7 +5615,7 @@ if #args >= 1 then
     phonologies = nil
     load_phonologies()
     local language = {ints={[3]=1}}
-    local parameters = random_parameters(phonologies[1], 0x77315, df.global.world.raws.creatures.all[466])
+    local parameters = random_parameters(phonologies[1], 0x8a181, df.global.world.raws.creatures.all[466])
     for _, ps in ipairs(parameters.inventory) do
       --print(ps[2], get_lemma(phonologies[1], {ps[1]}))
     end
