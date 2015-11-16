@@ -315,6 +315,7 @@ A node in a syntax tree.
 Morpheme:
   id: A unique ID for this morpheme within its language.
   text: A string to print for debugging.
+  pword: A sequence of phonemes.
   features: A map of features to feature values.
   affix: Whether this is a bound morpheme.
   after: Whether this morpheme goes after (as opposed to before) another
@@ -455,9 +456,9 @@ local function shuffle(t, rng)
 end
 
 local function escape(str)
-  return str:gsub('[\x00\n\r\x1a%%:%]]', function(c)
-      return '%' .. string.format('%02X', string.byte(c))
-    end)
+  return (str:gsub('[\x00\n\r\x1a%%:%]]', function(c)
+    return '%' .. string.format('%02X', string.byte(c))
+  end))
 end
 
 if TEST then
@@ -465,37 +466,91 @@ if TEST then
 end
 
 local function unescape(str)
-  return str:gsub('%%[%da-fA-F][%da-fA-F]', function(c)
-      return string.char(tonumber(c:sub(2), 16))
-    end)
+  return (str:gsub('%%[%da-fA-F][%da-fA-F]', function(c)
+    return string.char(tonumber(c:sub(2), 16))
+  end))
 end
 
 if TEST then
   assert_eq(unescape('(%5D%3A%0a|%25%1A)'), '(]:\n|%\x1a)')
 end
 
+local function serialize_string(str)
+  return "'" .. (str:gsub("[\x00\n\r\\']", function(c)
+    if c == '\x00' then
+      return '\n'
+    elseif c == '\n' then
+      return '\\n'
+    elseif c == '\r' then
+      return '\\r'
+    elseif c == '\\' or c == "'" then
+      return '\\' .. c
+    end
+  end)):gsub('\n([0-9])', '\x00%1'):gsub('\n', '\\0') .. "'"
+end
+
+if TEST then
+  assert_eq(serialize_string('r\t\r\n\\\'"\x00\x000'),
+            '\'r\t\\r\\n\\\\\\\'"\\0\x000\'')
+end
+
+--[[
+TODO
+
+If `o` is a table, it must be a sequence, or have `serialize` and `value`, or not have `[1]`.
+]]
+local function serialize(o)
+  local t = type(o)
+  if t == 'number' then
+    return tostring(o)
+  elseif t == 'string' then
+    return serialize_string(o)
+  elseif t == 'table' then
+    if o.serialize then
+      return o.serialize(o.v)
+    end
+    local s = '{'
+    if o[1] then
+      for k, v in ipairs(o) do
+        s = s .. serialize(v) .. ','
+      end
+    else
+      for k, v in pairs(o) do
+        s = s .. '[' .. serialize(k) .. ']=' .. serialize(v) .. ','
+      end
+    end
+    return s .. '}'
+  end
+end
+
 --[[
 Serializes a word.
 
 Args:
-  features_per_phoneme: The number of features per phoneme.
+  nodes: A sequence of the nodes used in `word`'s language.
   word: A word.
 
 Returns:
   An opaque string serialization of the word, which can be deserialized
-    with `deserialize`.
+    with `deserialize_word`.
 ]]
-local function serialize(features_per_phoneme, word)
+local function serialize_word(nodes, word)
   local str = ''
-  for _, phoneme in pairs(word) do
+  local features_per_phoneme = #nodes
+  for _, phoneme in ipairs(word) do
     local byte = 0
-    for i = 1, features_per_phoneme do
-      if phoneme[i] then
-        byte = byte + 2 ^ ((8 - i) % 8)
+    local bi = 1
+    for ni = 1, features_per_phoneme do
+      if nodes[ni].feature then
+        if phoneme[ni] then
+          byte = byte + 2 ^ ((8 - bi) % 8)
+        end
+        bi = bi + 1
       end
-      if i == features_per_phoneme or i % 8 == 0 then
+      if ni == features_per_phoneme or bi == 9 then
         str = str .. string.format('%c', byte)
         byte = 0
+        bi = 1
       end
     end
   end
@@ -503,80 +558,139 @@ local function serialize(features_per_phoneme, word)
 end
 
 if TEST then
-  assert_eq(serialize(8, {}), '')
-  assert_eq(serialize(8, {{}}), '\x00')
-  assert_eq(serialize(8, {{[1]=true}}), '\x80')
-  assert_eq(serialize(8, {{[2]=true}}), '\x40')
-  assert_eq(serialize(8, {{[3]=true}}), '\x20')
-  assert_eq(serialize(8, {{[4]=true}}), '\x10')
-  assert_eq(serialize(8, {{[5]=true}}), '\x08')
-  assert_eq(serialize(8, {{[6]=true}}), '\x04')
-  assert_eq(serialize(8, {{[7]=true}}), '\x02')
-  assert_eq(serialize(8, {{[8]=true}}), '\x01')
-  assert_eq(serialize(9, {{[9]=true}}), '\x00\x80')
-  assert_eq(serialize(24, {{[12]=true}}), '\x00\x10\x00')
-  assert_eq(serialize(8, {{false, true, true, true, true, true}}), '\x7c')
-  assert_eq(serialize(8, {{true}, {true}}), '\x80\x80')
+  local fn = {feature=true}
+  local cn = {feature=false}
+  local nodes = {fn, fn, fn, fn, fn, fn, fn, fn}
+  assert_eq(serialize_word(nodes, {}), '')
+  assert_eq(serialize_word(nodes, {{}}), '\x00')
+  assert_eq(serialize_word(nodes, {{[1]=true}}), '\x80')
+  assert_eq(serialize_word(nodes, {{[2]=true}}), '\x40')
+  assert_eq(serialize_word(nodes, {{[3]=true}}), '\x20')
+  assert_eq(serialize_word(nodes, {{[4]=true}}), '\x10')
+  assert_eq(serialize_word(nodes, {{[5]=true}}), '\x08')
+  assert_eq(serialize_word(nodes, {{[6]=true}}), '\x04')
+  assert_eq(serialize_word(nodes, {{[7]=true}}), '\x02')
+  assert_eq(serialize_word(nodes, {{[8]=true}}), '\x01')
+  assert_eq(serialize_word(concatenate(nodes, {fn}), {{[9]=true}}), '\x00\x80')
+  assert_eq(serialize_word(concatenate(nodes, {cn, fn}),
+                           {{[9]=true, [10]=true}}),
+            '\x00\x80')
+  assert_eq(serialize_word(concatenate(nodes, concatenate(nodes, nodes)),
+                           {{[12]=true}}),
+            '\x00\x10\x00')
+  assert_eq(serialize_word(nodes, {{false, true, true, true, true, true}}),
+            '\x7c')
+  assert_eq(serialize_word(nodes, {{true}, {true}}), '\x80\x80')
+end
+
+local function serialize_morpheme(nodes, morpheme)
+  local fusion = {}
+  for k, v in pairs(morpheme.fusion) do
+    fusion[k] = v.id
+  end
+  return serialize{
+    morpheme.affix and 1 or 0, morpheme.after and 1 or 0,
+    morpheme.initial and 1 or 0, dummy and dummy.id or 0,
+    morpheme.pword and serialize_word(nodes, morpheme.pword) or 0,
+    morpheme.features, fusion
+  }
+end
+
+local function serialize_morphemes(nodes, morphemes)
+  local s = '{'
+  for _, morpheme in ipairs(morphemes) do
+    s = s .. serialize_morpheme(nodes, morpheme) .. ','
+  end
+  return s ..'}'
+end
+
+local function serialize_constituent(nodes, constituent)
+  local sc = dfhack.curry(serialize_constituent, nodes)
+  return serialize{
+    constituent.is_phrase and 1 or 0, constituent.text or 0,
+    constituent.ref or 0, constituent.features,
+    {serialize=dfhack.curry(serialize_morphemes, nodes),
+     v=constituent.morphemes},
+    constituent.n1 and {serialize=sc, v=constituent.n1} or 0,
+    constituent.n2 and {serialize=sc, v=constituent.n2} or 0
+  }
 end
 
 --[[
 Deserializes a word.
 
 Args:
-  bytes_per_phoneme: The number of bytes per serialized phoneme.
+  nodes: A sequence of the nodes used in the target language.
   str: A serialized word.
 
 Returns:
   A word.
 ]]
-local function deserialize(bytes_per_phoneme, str)
+local function deserialize_word(nodes, str)
   local word = {}
   local phoneme = {}
+  local ni = 1
   for i = 1, #str do
     local code = str:byte(i)
-    for b = 8, 1, -1 do
-      table.insert(phoneme, (code % (2 ^ b)) >= (2 ^ (b - 1)))
+    local b = 8
+    while b >= 1 do
+      if not nodes[ni] then
+        b = 0
+      elseif nodes[ni].feature then
+        table.insert(phoneme, (code % (2 ^ b)) >= (2 ^ (b - 1)))
+        b = b - 1
+      else
+        table.insert(phoneme, true)
+      end
+      ni = ni + 1
     end
-    if i % bytes_per_phoneme == 0 then
+    if ni >= #nodes then
       table.insert(word, phoneme)
       phoneme = {}
+      ni = 1
     end
   end
   return word
 end
 
 if TEST then
-  assert_eq(deserialize(1, ''), {})
-  assert_eq(deserialize(1, '\x00'),
+  local fn = {feature=true}
+  local cn = {feature=false}
+  local n1 = {fn, fn, fn, fn, fn, fn, fn, fn}
+  local n2 = concatenate(n1, n1)
+  local n3 = concatenate(n1, n2)
+  assert_eq(deserialize_word(n1, '\x00'),
             {{false, false, false, false, false, false, false, false}})
-  assert_eq(deserialize(1, '\x80'),
+  assert_eq(deserialize_word(n1, '\x80'),
             {{true, false, false, false, false, false, false, false}})
-  assert_eq(deserialize(1, '\x40'),
+  assert_eq(deserialize_word(n1, '\x40'),
             {{false, true, false, false, false, false, false, false}})
-  assert_eq(deserialize(1, '\x20'),
+  assert_eq(deserialize_word(n1, '\x20'),
             {{false, false, true, false, false, false, false, false}})
-  assert_eq(deserialize(1, '\x10'),
+  assert_eq(deserialize_word(n1, '\x10'),
             {{false, false, false, true, false, false, false, false}})
-  assert_eq(deserialize(1, '\x08'),
+  assert_eq(deserialize_word(n1, '\x08'),
             {{false, false, false, false, true, false, false, false}})
-  assert_eq(deserialize(1, '\x04'),
+  assert_eq(deserialize_word(n1, '\x04'),
             {{false, false, false, false, false, true, false, false}})
-  assert_eq(deserialize(1, '\x02'),
+  assert_eq(deserialize_word(n1, '\x02'),
             {{false, false, false, false, false, false, true, false}})
-  assert_eq(deserialize(1, '\x01'),
+  assert_eq(deserialize_word(n1, '\x01'),
             {{false, false, false, false, false, false, false, true}})
-  assert_eq(deserialize(2, '\x00\x80'),
+  assert_eq(deserialize_word(n2, '\x00\x80'),
             {{false, false, false, false, false, false, false, false, true,
               false, false, false, false, false, false, false}})
-  assert_eq(deserialize(3, '\x00\x10\x00'),
+  assert_eq(deserialize_word(n3, '\x00\x10\x00'),
             {{false, false, false, false, false, false, false, false, false,
               false, false, true, false, false, false, false, false, false,
               false, false, false, false, false, false}})
-  assert_eq(deserialize(1, '\x7c'),
+  assert_eq(deserialize_word(n1, '\x7c'),
             {{false, true, true, true, true, true, false, false}})
-  assert_eq(deserialize(1, '\x80\x80'),
+  assert_eq(deserialize_word(n1, '\x80\x80'),
             {{true, false, false, false, false, false, false, false},
              {true, false, false, false, false, false, false, false}})
+  assert_eq(deserialize_word(concatenate({cn}, n1), '\x80'),
+            {{true, true, false, false, false, false, false, false, false}})
 end
 
 --[[
@@ -983,8 +1097,8 @@ local function translate(language, topic, topic1, topic2, topic3, english)
   -- TODO: Capitalize the result.
   local phonology = phonologies[language.ints[3]]
   return get_lemma(phonology, optimize(
-    parameter_sets[language.ints[2]], deserialize(
-      math.ceil(#phonology.nodes / 8), unescape(
+    parameter_sets[language.ints[2]], deserialize_word(
+      phonology.nodes, unescape(
         languages.translations[language.ints[1]].words[word_index].value))))
 end
 
@@ -2531,6 +2645,76 @@ if TEST then
 end
 
 --[[
+Constructs a constituent from a constituent key.
+
+Args:
+  x: A constituent key or a sequence of features.
+
+Returns:
+  If `x` is a constituent key, a constituent using that key as a `ref`
+  and with no features. Otherwise, a function that given a constituent
+  key returns a constituent with that key as a `ref` and `x` as the
+  features.
+]]
+local function r(x)
+  return type(x) == 'string' and {ref=x, features={}} or function(s)
+    return {ref=s, features=x}
+  end
+end
+
+--[[
+Constructs a morpheme.
+
+Args:
+  m: A string or a table.
+
+Returns:
+  If `m` is a string, a morpheme with `id` and `text` set to `m`.
+  Otherwise, a morpheme with `id` set to `m[1]`, `text` set to `m[2]`,
+  and all other morpheme keys set to their values in `m`. Either way,
+  unspecified required keys (like `fusion`) are initialized to
+  reasonable defaults.
+]]
+local function m(m)
+  return type(m) ~= 'table' and
+    {id=m, text=m, pword={}, fusion={}, features={}} or
+    {id=m[1], text=m[2], pword=m.pword or {}, features=m.features or {},
+     affix=m.affix, after=m.after, initial=m.initial, fusion=m.fusion or {},
+     dummy=m.dummy}
+end
+
+--[[
+Constructs a constituent.
+
+Args:
+  c: A table.
+
+Returns:
+  A constituent using values from `c`, with reasonable defaults when
+  required but not specified. `[1]` becomes `n1`; `[2]`, `n2`; `f`,
+  `features`; `m`, `morphemes`; and `moved_to`, `moved_to`.
+]]
+local function x(c)
+  return {n1=c[1], n2=c[2], features=c.f or {}, morphemes=c.m or {},
+          moved_to=c.moved_to}
+end
+
+--[[
+Constructs a phrase.
+
+Args:
+  c: A table.
+
+Returns:
+  Whatever `x` would return, but marked as a phrase.
+]]
+local function xp(c)
+  c = x(c)
+  c.is_phrase = true
+  return c
+end
+
+--[[
 Randomly generates a language parameter table.
 
 Args:
@@ -2619,76 +2803,9 @@ local function random_word(language, parameters)
       table.insert(word, phoneme)
     end
   end
-  return serialize(#phonology.nodes, word), get_lemma(phonology, word)
-end
-
---[[
-Constructs a constituent from a constituent key.
-
-Args:
-  x: A constituent key or a sequence of features.
-
-Returns:
-  If `x` is a constituent key, a constituent using that key as a `ref`
-  and with no features. Otherwise, a function that given a constituent
-  key returns a constituent with that key as a `ref` and `x` as the
-  features.
-]]
-local function r(x)
-  return type(x) == 'string' and {ref=x, features={}} or function(s)
-    return {ref=s, features=x}
-  end
-end
-
---[[
-Constructs a morpheme.
-
-Args:
-  m: A string or a table.
-
-Returns:
-  If `m` is a string, a morpheme with `id` and `text` set to `m`.
-  Otherwise, a morpheme with `id` set to `m[1]`, `text` set to `m[2]`,
-  and all other morpheme keys set to their values in `m`. Either way,
-  unspecified required keys (like `fusion`) are initialized to
-  reasonable defaults.
-]]
-local function m(m)
-  return type(m) ~= 'table' and
-    {id=m, text=m, fusion={}, features={}} or
-    {id=m[1], text=m[2], features=m.features or {}, affix=m.affix,
-     after=m.after, initial=m.initial, fusion=m.fusion or {}, dummy=m.dummy}
-end
-
---[[
-Constructs a constituent.
-
-Args:
-  c: A table.
-
-Returns:
-  A constituent using values from `c`, with reasonable defaults when
-  required but not specified. `[1]` becomes `n1`; `[2]`, `n2`; `f`,
-  `features`; `m`, `morphemes`; and `moved_to`, `moved_to`.
-]]
-local function x(c)
-  return {n1=c[1], n2=c[2], features=c.f or {}, morphemes=c.m or {},
-          moved_to=c.moved_to}
-end
-
---[[
-Constructs a phrase.
-
-Args:
-  c: A table.
-
-Returns:
-  Whatever `x` would return, but marked as a phrase.
-]]
-local function xp(c)
-  c = x(c)
-  c.is_phrase = true
-  return c
+  local constituent = xp{m={m{pword=word}}}
+  return serialize_constituent(phonology.nodes, constituent),
+    get_lemma(phonology, word)
 end
 
 --[[
@@ -2894,16 +3011,18 @@ Returns:
   A deep copy of the morpheme.
 ]]
 local function copy_morpheme(morpheme)
-  return {id=morpheme.id, text=morpheme.text,
+  return {id=morpheme.id, text=morpheme.text, pword=copyall(morpheme.pword),
           dummy=morpheme.dummy and copy_morpheme(morpheme.dummy),
           affix=morpheme.affix, after=morpheme.after, initial=morpheme.initial,
           features=copyall(morpheme.features), fusion=copyall(morpheme.fusion)}
 end
 
 if TEST then
-  local dummy = {id='z', features={n=9}, fusion={}}
-  local morpheme = {id='X', text='x', affix='true', after=1, initial=-1,
-                    features={f=1, g=2}, fusion={y=dummy}, dummy=dummy}
+  local dummy = {id='z', pword={}, features={n=9}, fusion={}}
+  local morpheme = {
+    id='X', text='x', pword={}, affix='true', after=1, initial=-1,
+    features={f=1, g=2}, fusion={y=dummy}, dummy=dummy
+  }
   local new_morpheme = copy_morpheme(morpheme)
   assert_eq(new_morpheme, morpheme)
   morpheme.features.f = 3
@@ -3412,7 +3531,7 @@ syntactic features, and merging constituents by raising.
 
 Args:
   constituent! A constituent.
-  lexicon: A lexicon.
+  lexicon: A lexicon. -- TODO: What is a lexicon?
   parameters: A language parameter table.
 
 Returns:
@@ -3739,8 +3858,8 @@ end
 if TEST then
   assert_eq(
     spell_utterance(make_utterance(
-      {features={}, morphemes={{text='a', fusion={}, features={}},
-                               {text='b', fusion={}, features={}}}},
+      {features={}, morphemes={{text='a', pword={}, fusion={}, features={}},
+                               {text='b', pword={}, fusion={}, features={}}}},
       {}, {strategies={}})),
     'a-b ')
   assert_eq(
@@ -3787,24 +3906,26 @@ if TEST then
   assert_eq(spell_utterance(make_utterance(q_sent, q_lex, q_params)),
             '[foo] [bar,Case=Nom] [baz,Case=Nom] ')
   local en_past = {features={}}
-  local en_not =
-    {features={}, morphemes={{id='not', text='not', fusion={}, features={}}}}
-  local en_walk = {features={}, morphemes={{id='walk', text='walk', fusion={},
-                                            features={v=true}}}}
+  local en_not = {
+    features={}, morphemes={{
+      id='not', text='not', pword={}, fusion={}, features={}
+    }}
+  }
+  local en_walk =
+    {features={}, morphemes={m{'walk', 'walk', features={v=true}}}}
   local en_do =
-    {morphemes={{id='do', text='do', features={v=true},
-                 fusion={PAST={id='do.PAST', text='did', fusion={},
+    {morphemes={{id='do', text='do', pword={}, features={v=true},
+                 fusion={PAST={id='do.PAST', text='did', pword={}, fusion={},
                                features={v=true}}}}},
      features={}}
-  en_past.morphemes =
-    {{id='PAST', text='ed', fusion={}, features={v=false, q=false}, affix=true,
-      after=true, dummy=en_do.morphemes[1]}}
-  local en_you =
-    {morphemes={{id='you', text='you', features={}, fusion={}}}, features={}}
-  local en_what = {features={}, morphemes={{id='what', text='what',
+  en_past.morphemes = {{
+    id='PAST', text='ed', pword={}, fusion={}, features={v=false, q=false},
+    affix=true, after=true, dummy=en_do.morphemes[1]
+  }}
+  local en_you = {morphemes={m'you'}, features={}}
+  local en_what = {features={}, morphemes={{id='what', text='what', pword={},
                                             features={wh=true}, fusion={}}}}
-  local en_thing = {features={}, morphemes={{id='thing', text='thing',
-                                             features={}, fusion={}}}}
+  local en_thing = {features={}, morphemes={m'thing'}}
   local en_lexicon = {PAST=en_past, ['not']=en_not, walk=en_walk, you=en_you,
                       what=en_what, thing=en_thing, ['do']=en_do}
   local en_parameters =
@@ -4945,7 +5066,7 @@ local function overwrite_language_files()
     end
   end
   for i, translation in pairs(df.global.world.raws.language.translations) do
-    if translation.flags == 0 then
+    if translation.flags == 0 then  -- not generated
       write_translation_file(dir, i, translation)
     end
   end
@@ -5095,7 +5216,6 @@ local function create_language(civ)
   if not civ then
     return
   end
-  local figures = df.global.world.history.figures
   local translations = df.global.world.raws.language.translations
   -- Create a persistent entry to represent the language.
   -- TODO: Choose a phonology based on physical ability to produce the phones.
@@ -5614,6 +5734,7 @@ if #args >= 1 then
   elseif args[1] == 'test' then
     phonologies = nil
     load_phonologies()
+    local morpheme = m{2, features={n=1}}
     local language = {ints={[3]=1}}
     local parameters = random_parameters(phonologies[1], 0x8a181, df.global.world.raws.creatures.all[466])
     for _, ps in ipairs(parameters.inventory) do
@@ -5621,7 +5742,8 @@ if #args >= 1 then
     end
     for i = 1, 30 do
       local u_form, s_form = random_word(language, parameters)
-      print(s_form)
+      load('return ' .. u_form)()
+      print(s_form, escape(u_form))
     end
   else
     usage()
