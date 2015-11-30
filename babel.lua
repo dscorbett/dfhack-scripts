@@ -35,6 +35,8 @@ local MINIMUM_FLUENCY = -32768
 local MAXIMUM_FLUENCY = 32767
 local UTTERANCES_PER_XP = 16
 local MINIMUM_DIMENSION_CACHE_SIZE = 32
+local WORD_SEPARATOR = ' '
+local MORPHEME_SEPARATOR = nil
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -57,7 +59,7 @@ local total_handlers = {
 local next_report_index = 0
 
 local phonologies = nil
-local parameter_sets = {}
+local lects = nil
 local fluency_data = nil
 
 if enabled == nil then
@@ -67,14 +69,22 @@ end
 --[[
 Data definitions:
 
-Language:
-A persistent entry with the keys:
-  value: The name of the language.
-  ints:
-    [1]: The number of this language among all languages.
-    [2]: The ID of the associated civilization.
-    [3]: The index of the language's phonology in `phonologies`.
-    [4]: A random number generator seed for generating the language.
+Lect:
+A language or dialect.
+  seed: A random number generator seed for generating the lect's
+    language parameter table.
+  parameters: A language parameter table generated with `seed`, or nil
+    if it hasn't been generated yet.
+  lemmas: A translation containing the lemmas of this lect.
+  community: The civilization that speaks this lect.
+  phonology: The phonology this lect uses.
+  morphemes: A lexicon, i.e. a map of morphemes IDs to morphemes
+    containing all the morphemes used in this lect, including those only
+    used in other morphemes.
+  constituents: A map of constituent IDs to constituents containing
+    only the top-level constituents of this lect.
+All the IDs, features, and feature values of all morphemes and
+constituents in a lect must contain no characters invalid in raw tags.
 
 Phonology:
   name: A name, for internal use.
@@ -263,9 +273,11 @@ Boundary:
 A string representing a boundary.
 -- TODO: Enumerate them.
 
-Word:
+Pword:
 A sequence of phonemes.
--- TODO: Syntax has a different definition.
+
+Mword:
+A sequence of morphemes.
 
 SFI:
 A syntactic feature instance.
@@ -409,34 +421,6 @@ if TEST then
 end
 
 --[[
-Determines whether an element is in a list.
-
-Args:
-  element: An element.
-  list: A table with integer keys from `start` to `#list`.
-  start: The first index.
-
-Returns:
-  Whether the element is the list.
-]]
-local function in_list(element, list, start)
-  for i = start, #list do
-    if element == list[i] then
-      return true
-    end
-  end
-  return false
-end
-
-if TEST then
-  assert_eq(in_list(1, {1, 2}, 1), true)
-  assert_eq(in_list(0, {[0]=0, 1, 2}, 1), false)
-  assert_eq(in_list(0, {[0]=0, 1, 2}, 0), true)
-  assert_eq(in_list(2, {1, 2}, 1), true)
-  assert_eq(in_list(2, {[0]=0, 1, 2}, 0), true)
-end
-
---[[
 Shuffles a sequence randomly.
 
 Args:
@@ -475,69 +459,21 @@ if TEST then
   assert_eq(unescape('(%5D%3A%0a|%25%1A)'), '(]:\n|%\x1a)')
 end
 
-local function serialize_string(str)
-  return "'" .. (str:gsub("[\x00\n\r\\']", function(c)
-    if c == '\x00' then
-      return '\n'
-    elseif c == '\n' then
-      return '\\n'
-    elseif c == '\r' then
-      return '\\r'
-    elseif c == '\\' or c == "'" then
-      return '\\' .. c
-    end
-  end)):gsub('\n([0-9])', '\x00%1'):gsub('\n', '\\0') .. "'"
-end
-
-if TEST then
-  assert_eq(serialize_string('r\t\r\n\\\'"\x00\x000'),
-            '\'r\t\\r\\n\\\\\\\'"\\0\x000\'')
-end
-
 --[[
-TODO
-
-If `o` is a table, it must be a sequence, or have `serialize` and `value`, or not have `[1]`.
-]]
-local function serialize(o)
-  local t = type(o)
-  if t == 'number' then
-    return tostring(o)
-  elseif t == 'string' then
-    return serialize_string(o)
-  elseif t == 'table' then
-    if o.serialize then
-      return o.serialize(o.v)
-    end
-    local s = '{'
-    if o[1] then
-      for k, v in ipairs(o) do
-        s = s .. serialize(v) .. ','
-      end
-    else
-      for k, v in pairs(o) do
-        s = s .. '[' .. serialize(k) .. ']=' .. serialize(v) .. ','
-      end
-    end
-    return s .. '}'
-  end
-end
-
---[[
-Serializes a word.
+Serializes a pword.
 
 Args:
-  nodes: A sequence of the nodes used in `word`'s language.
-  word: A word.
+  nodes: A sequence of the nodes used in `pword`'s lect.
+  pword: A pword.
 
 Returns:
-  An opaque string serialization of the word, which can be deserialized
-    with `deserialize_word`.
+  An opaque string serialization of the pword, which can be deserialized
+    with `deserialize_pword`.
 ]]
-local function serialize_word(nodes, word)
+local function serialize_pword(nodes, pword)
   local str = ''
   local features_per_phoneme = #nodes
-  for _, phoneme in ipairs(word) do
+  for _, phoneme in ipairs(pword) do
     local byte = 0
     local bi = 1
     for ni = 1, features_per_phoneme do
@@ -561,73 +497,40 @@ if TEST then
   local fn = {feature=true}
   local cn = {feature=false}
   local nodes = {fn, fn, fn, fn, fn, fn, fn, fn}
-  assert_eq(serialize_word(nodes, {}), '')
-  assert_eq(serialize_word(nodes, {{}}), '\x00')
-  assert_eq(serialize_word(nodes, {{[1]=true}}), '\x80')
-  assert_eq(serialize_word(nodes, {{[2]=true}}), '\x40')
-  assert_eq(serialize_word(nodes, {{[3]=true}}), '\x20')
-  assert_eq(serialize_word(nodes, {{[4]=true}}), '\x10')
-  assert_eq(serialize_word(nodes, {{[5]=true}}), '\x08')
-  assert_eq(serialize_word(nodes, {{[6]=true}}), '\x04')
-  assert_eq(serialize_word(nodes, {{[7]=true}}), '\x02')
-  assert_eq(serialize_word(nodes, {{[8]=true}}), '\x01')
-  assert_eq(serialize_word(concatenate(nodes, {fn}), {{[9]=true}}), '\x00\x80')
-  assert_eq(serialize_word(concatenate(nodes, {cn, fn}),
-                           {{[9]=true, [10]=true}}),
+  assert_eq(serialize_pword(nodes, {}), '')
+  assert_eq(serialize_pword(nodes, {{}}), '\x00')
+  assert_eq(serialize_pword(nodes, {{[1]=true}}), '\x80')
+  assert_eq(serialize_pword(nodes, {{[2]=true}}), '\x40')
+  assert_eq(serialize_pword(nodes, {{[3]=true}}), '\x20')
+  assert_eq(serialize_pword(nodes, {{[4]=true}}), '\x10')
+  assert_eq(serialize_pword(nodes, {{[5]=true}}), '\x08')
+  assert_eq(serialize_pword(nodes, {{[6]=true}}), '\x04')
+  assert_eq(serialize_pword(nodes, {{[7]=true}}), '\x02')
+  assert_eq(serialize_pword(nodes, {{[8]=true}}), '\x01')
+  assert_eq(serialize_pword(concatenate(nodes, {fn}), {{[9]=true}}), '\x00\x80')
+  assert_eq(serialize_pword(concatenate(nodes, {cn, fn}),
+                            {{[9]=true, [10]=true}}),
             '\x00\x80')
-  assert_eq(serialize_word(concatenate(nodes, concatenate(nodes, nodes)),
-                           {{[12]=true}}),
+  assert_eq(serialize_pword(concatenate(nodes, concatenate(nodes, nodes)),
+                            {{[12]=true}}),
             '\x00\x10\x00')
-  assert_eq(serialize_word(nodes, {{false, true, true, true, true, true}}),
+  assert_eq(serialize_pword(nodes, {{false, true, true, true, true, true}}),
             '\x7c')
-  assert_eq(serialize_word(nodes, {{true}, {true}}), '\x80\x80')
-end
-
-local function serialize_morpheme(nodes, morpheme)
-  local fusion = {}
-  for k, v in pairs(morpheme.fusion) do
-    fusion[k] = v.id
-  end
-  return serialize{
-    morpheme.affix and 1 or 0, morpheme.after and 1 or 0,
-    morpheme.initial and 1 or 0, dummy and dummy.id or 0,
-    morpheme.pword and serialize_word(nodes, morpheme.pword) or 0,
-    morpheme.features, fusion
-  }
-end
-
-local function serialize_morphemes(nodes, morphemes)
-  local s = '{'
-  for _, morpheme in ipairs(morphemes) do
-    s = s .. serialize_morpheme(nodes, morpheme) .. ','
-  end
-  return s ..'}'
-end
-
-local function serialize_constituent(nodes, constituent)
-  local sc = dfhack.curry(serialize_constituent, nodes)
-  return serialize{
-    constituent.is_phrase and 1 or 0, constituent.text or 0,
-    constituent.ref or 0, constituent.features,
-    {serialize=dfhack.curry(serialize_morphemes, nodes),
-     v=constituent.morphemes},
-    constituent.n1 and {serialize=sc, v=constituent.n1} or 0,
-    constituent.n2 and {serialize=sc, v=constituent.n2} or 0
-  }
+  assert_eq(serialize_pword(nodes, {{true}, {true}}), '\x80\x80')
 end
 
 --[[
-Deserializes a word.
+Deserializes a pword.
 
 Args:
-  nodes: A sequence of the nodes used in the target language.
-  str: A serialized word.
+  nodes: A sequence of the nodes used in the target lect.
+  str: A serialized pword.
 
 Returns:
-  A word.
+  A pword.
 ]]
-local function deserialize_word(nodes, str)
-  local word = {}
+local function deserialize_pword(nodes, str)
+  local pword = {}
   local phoneme = {}
   local ni = 1
   for i = 1, #str do
@@ -645,12 +548,12 @@ local function deserialize_word(nodes, str)
       ni = ni + 1
     end
     if ni >= #nodes then
-      table.insert(word, phoneme)
+      pword[#pword + 1] = phoneme
       phoneme = {}
       ni = 1
     end
   end
-  return word
+  return pword
 end
 
 if TEST then
@@ -659,37 +562,37 @@ if TEST then
   local n1 = {fn, fn, fn, fn, fn, fn, fn, fn}
   local n2 = concatenate(n1, n1)
   local n3 = concatenate(n1, n2)
-  assert_eq(deserialize_word(n1, '\x00'),
+  assert_eq(deserialize_pword(n1, '\x00'),
             {{false, false, false, false, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x80'),
+  assert_eq(deserialize_pword(n1, '\x80'),
             {{true, false, false, false, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x40'),
+  assert_eq(deserialize_pword(n1, '\x40'),
             {{false, true, false, false, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x20'),
+  assert_eq(deserialize_pword(n1, '\x20'),
             {{false, false, true, false, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x10'),
+  assert_eq(deserialize_pword(n1, '\x10'),
             {{false, false, false, true, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x08'),
+  assert_eq(deserialize_pword(n1, '\x08'),
             {{false, false, false, false, true, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x04'),
+  assert_eq(deserialize_pword(n1, '\x04'),
             {{false, false, false, false, false, true, false, false}})
-  assert_eq(deserialize_word(n1, '\x02'),
+  assert_eq(deserialize_pword(n1, '\x02'),
             {{false, false, false, false, false, false, true, false}})
-  assert_eq(deserialize_word(n1, '\x01'),
+  assert_eq(deserialize_pword(n1, '\x01'),
             {{false, false, false, false, false, false, false, true}})
-  assert_eq(deserialize_word(n2, '\x00\x80'),
+  assert_eq(deserialize_pword(n2, '\x00\x80'),
             {{false, false, false, false, false, false, false, false, true,
               false, false, false, false, false, false, false}})
-  assert_eq(deserialize_word(n3, '\x00\x10\x00'),
+  assert_eq(deserialize_pword(n3, '\x00\x10\x00'),
             {{false, false, false, false, false, false, false, false, false,
               false, false, true, false, false, false, false, false, false,
               false, false, false, false, false, false}})
-  assert_eq(deserialize_word(n1, '\x7c'),
+  assert_eq(deserialize_pword(n1, '\x7c'),
             {{false, true, true, true, true, true, false, false}})
-  assert_eq(deserialize_word(n1, '\x80\x80'),
+  assert_eq(deserialize_pword(n1, '\x80\x80'),
             {{true, false, false, false, false, false, false, false},
              {true, false, false, false, false, false, false, false}})
-  assert_eq(deserialize_word(concatenate({cn}, n1), '\x80'),
+  assert_eq(deserialize_pword(concatenate({cn}, n1), '\x80'),
             {{true, true, false, false, false, false, false, false, false}})
 end
 
@@ -787,25 +690,18 @@ local function optimize(parameters, input, is_loan)
 end
 
 --[[
-Gets the lemma of a word.
-
-This is only useful in names. A Dwarf Fortress name has a list of
-indices into a translation. To print the name, it concatenates the
-strings at those indices. Therefore, there must be a human-readable form
-of each word. This is why there are two translations for each new
-language: one for first names (where the strings are immutable) and one
-for reports (where anything is possible).
+Gets the lemma of a pword.
 
 Args:
   phonology: A phonology.
-  word: A word.
+  pword: A pword.
 
 Returns:
   The lemma.
 ]]
-local function get_lemma(phonology, word)
+local function get_lemma(phonology, pword)
   local str = ''
-  for _, phoneme in pairs(word) do
+  for _, phoneme in ipairs(pword) do
     local best_symbol = ''
     local best_score = -1
     local best_base_score = -1
@@ -873,238 +769,6 @@ if TEST and TODO then
 
   table.remove(phonology.symbols, 1)
   assert_eq(get_lemma(phonology, {{false, false, false}}), 'abc-a-b-c')
-end
-
---[[
-Translates an utterance into a language.
-
-Args:
-  language: The language to translate into
-  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
-    or `true` to force a goodbye.
-  topic1: An integer whose exact interpretation depends on `topic`.
-  topic2: An integer.
-  topic3: An integer.
-  english: The English text of the utterance.
-
-Returns:
-  The translated utterance.
-]]
-local function translate(language, topic, topic1, topic2, topic3, english)
-  print('translate ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
-  local word
-  if topic == true then
-    word = 'FORCE_GOODBYE'
-  elseif topic == df.talk_choice_type.Greet then
-    word = 'GREETINGS'
-  --[[
-  elseif topic == df.talk_choice_type.Nevermind then
-  elseif topic == df.talk_choice_type.Trade then
-  elseif topic == df.talk_choice_type.AskJoin then
-  elseif topic == df.talk_choice_type.AskSurroundings then
-  ]]
-  elseif topic == df.talk_choice_type.SayGoodbye then
-    word = 'GOODBYE'
-  --[[
-  elseif topic == df.talk_choice_type.AskStructure then
-  elseif topic == df.talk_choice_type.AskFamily then
-  elseif topic == df.talk_choice_type.AskProfession then
-  elseif topic == df.talk_choice_type.AskPermissionSleep then
-  elseif topic == df.talk_choice_type.AccuseNightCreature then
-  elseif topic == df.talk_choice_type.AskTroubles then
-  elseif topic == df.talk_choice_type.BringUpEvent then
-  elseif topic == df.talk_choice_type.SpreadRumor then
-  elseif topic == df.talk_choice_type.ReplyGreeting then
-  elseif topic == df.talk_choice_type.RefuseConversation then
-  elseif topic == df.talk_choice_type.ReplyImpersonate then
-  elseif topic == df.talk_choice_type.BringUpIncident then
-  elseif topic == df.talk_choice_type.TellNothingChanged then
-  elseif topic == df.talk_choice_type.Goodbye2 then
-  elseif topic == df.talk_choice_type.ReturnTopic then
-  elseif topic == df.talk_choice_type.ChangeSubject then
-  elseif topic == df.talk_choice_type.AskTargetAction then
-  elseif topic == df.talk_choice_type.RequestSuggestAction then
-  elseif topic == df.talk_choice_type.AskJoinInsurrection then
-  elseif topic == df.talk_choice_type.AskJoinRescue then
-  ]]
-  elseif topic == df.talk_choice_type.StateOpinion then
-    if topic1 == 0 then
-      word = 'VIOLENT'
-    elseif topic1 == 2 then
-      word = 'INEVITABLE'
-    elseif topic1 == 4 then
-      word = 'TERRIFYING'
-    elseif topic1 == 8 then
-      word = 'DONT_CARE'
-    else
-      -- TODO: more opinions
-      word = 'OPINION'
-    end
-  -- elseif topic == 28 then
-  -- elseif topic == 29 then
-  --[[
-  elseif topic == df.talk_choice_type.AllowPermissionSleep then
-  elseif topic == df.talk_choice_type.DenyPermissionSleep then
-  -- elseif topic == 32 then
-  elseif topic == df.talk_choice_type.AskJoinAdventure then
-  elseif topic == df.talk_choice_type.AskGuideLocation then
-  elseif topic == df.talk_choice_type.RespondJoin then
-  elseif topic == df.talk_choice_type.RespondJoin2 then
-  elseif topic == df.talk_choice_type.OfferCondolences then
-  elseif topic == df.talk_choice_type.StateNotAcquainted then
-  elseif topic == df.talk_choice_type.SuggestTravel then
-  elseif topic == df.talk_choice_type.SuggestTalk then
-  elseif topic == df.talk_choice_type.RequestSelfRescue then
-  elseif topic == df.talk_choice_type.AskWhatHappened then
-  elseif topic == df.talk_choice_type.AskBeRescued then
-  elseif topic == df.talk_choice_type.SayNotRemember then
-  -- elseif topic == 45 then
-  elseif topic == df.talk_choice_type.SayNoFamily then
-  elseif topic == df.talk_choice_type.StateUnitLocation then
-  elseif topic == df.talk_choice_type.ReferToElder then
-  elseif topic == df.talk_choice_type.AskComeCloser then
-  elseif topic == df.talk_choice_type.DoBusiness then
-  elseif topic == df.talk_choice_type.AskComeStoreLater then
-  elseif topic == df.talk_choice_type.AskComeMarketLater then
-  elseif topic == df.talk_choice_type.TellTryShopkeeper then
-  elseif topic == df.talk_choice_type.DescribeSurroundings then
-  elseif topic == df.talk_choice_type.AskWaitUntilHome then
-  elseif topic == df.talk_choice_type.DescribeFamily then
-  elseif topic == df.talk_choice_type.StateAge then
-  elseif topic == df.talk_choice_type.DescribeProfession then
-  elseif topic == df.talk_choice_type.AnnounceNightCreature then
-  elseif topic == df.talk_choice_type.StateIncredulity then
-  elseif topic == df.talk_choice_type.BypassGreeting then
-  elseif topic == df.talk_choice_type.AskCeaseHostilities then
-  elseif topic == df.talk_choice_type.DemandYield then
-  elseif topic == df.talk_choice_type.HawkWares then
-  elseif topic == df.talk_choice_type.YieldTerror then
-  elseif topic == df.talk_choice_type.Yield then
-  elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
-  elseif topic == df.talk_choice_type.ExpressGreatEmotion then
-  elseif topic == df.talk_choice_type.ExpressEmotion then
-  elseif topic == df.talk_choice_type.ExpressMinorEmotion then
-  elseif topic == df.talk_choice_type.ExpressLackEmotion then
-  elseif topic == df.talk_choice_type.OutburstFleeConflict then
-  elseif topic == df.talk_choice_type.StateFleeConflict then
-  elseif topic == df.talk_choice_type.MentionJourney then
-  elseif topic == df.talk_choice_type.SummarizeTroubles then
-  elseif topic == df.talk_choice_type.AskAboutIncident then
-  elseif topic == df.talk_choice_type.AskDirectionsPerson then
-  elseif topic == df.talk_choice_type.AskDirectionsPlace then
-  elseif topic == df.talk_choice_type.AskWhereabouts then
-  elseif topic == df.talk_choice_type.RequestGuide then
-  elseif topic == df.talk_choice_type.RequestGuide2 then
-  elseif topic == df.talk_choice_type.ProvideDirections then
-  elseif topic == df.talk_choice_type.ProvideWhereabouts then
-  elseif topic == df.talk_choice_type.TellTargetSelf then
-  elseif topic == df.talk_choice_type.TellTargetDead then
-  elseif topic == df.talk_choice_type.RecommendGuide then
-  elseif topic == df.talk_choice_type.ProfessIgnorance then
-  elseif topic == df.talk_choice_type.TellAboutPlace then
-  elseif topic == df.talk_choice_type.AskFavorMenu then
-  elseif topic == df.talk_choice_type.AskWait then
-  elseif topic == df.talk_choice_type.AskFollow then
-  elseif topic == df.talk_choice_type.ApologizeBusy then
-  elseif topic == df.talk_choice_type.ComplyOrder then
-  elseif topic == df.talk_choice_type.AgreeFollow then
-  elseif topic == df.talk_choice_type.ExchangeItems then
-  elseif topic == df.talk_choice_type.AskComeCloser2 then
-  elseif topic == df.talk_choice_type.InitiateBarter then
-  elseif topic == df.talk_choice_type.AgreeCeaseHostile then
-  elseif topic == df.talk_choice_type.RefuseCeaseHostile then
-  elseif topic == df.talk_choice_type.RefuseCeaseHostile2 then
-  elseif topic == df.talk_choice_type.RefuseYield then
-  elseif topic == df.talk_choice_type.RefuseYield2 then
-  elseif topic == df.talk_choice_type.Brag then
-  elseif topic == df.talk_choice_type.DescribeRelation then
-  -- elseif topic == 105 then
-  elseif topic == df.talk_choice_type.AnnounceLairHunt then
-  elseif topic == df.talk_choice_type.RequestDuty then
-  elseif topic == df.talk_choice_type.AskJoinService then
-  elseif topic == df.talk_choice_type.AcceptService then
-  elseif topic == df.talk_choice_type.TellRemainVigilant then
-  elseif topic == df.talk_choice_type.GiveServiceOrder then
-  elseif topic == df.talk_choice_type.WelcomeSelfHome then
-  -- elseif topic == 113 then
-  elseif topic == df.talk_choice_type.AskTravelReason then
-  elseif topic == df.talk_choice_type.TellTravelReason then
-  elseif topic == df.talk_choice_type.AskLocalRuler then
-  elseif topic == df.talk_choice_type.ComplainAgreement then
-  elseif topic == df.talk_choice_type.CancelAgreement then
-  elseif topic == df.talk_choice_type.SummarizeConflict then
-  elseif topic == df.talk_choice_type.SummarizeViews then
-  elseif topic == df.talk_choice_type.AskClaimStrength then
-  elseif topic == df.talk_choice_type.AskArmyPosition then
-  elseif topic == df.talk_choice_type.AskOtherClaims then
-  elseif topic == df.talk_choice_type.AskDeserters then
-  elseif topic == df.talk_choice_type.AskSiteNeighbors then
-  elseif topic == df.talk_choice_type.DescribeSiteNeighbors then
-  elseif topic == df.talk_choice_type.RaiseAlarm then
-  elseif topic == df.talk_choice_type.DemandDropWeapon then
-  elseif topic == df.talk_choice_type.AgreeComplyDemand then
-  elseif topic == df.talk_choice_type.RefuseComplyDemand then
-  elseif topic == df.talk_choice_type.AskLocationObject then
-  elseif topic == df.talk_choice_type.DemandTribute then
-  elseif topic == df.talk_choice_type.AgreeGiveTribute then
-  elseif topic == df.talk_choice_type.RefuseGiveTribute then
-  elseif topic == df.talk_choice_type.OfferGiveTribute then
-  elseif topic == df.talk_choice_type.AgreeAcceptTribute then
-  elseif topic == df.talk_choice_type.RefuseAcceptTribute then
-  elseif topic == df.talk_choice_type.CancelTribute then
-  elseif topic == df.talk_choice_type.OfferPeace then
-  elseif topic == df.talk_choice_type.AgreePeace then
-  elseif topic == df.talk_choice_type.RefusePeace then
-  elseif topic == df.talk_choice_type.AskTradeDepotLater then
-  elseif topic == df.talk_choice_type.ExpressAstonishment then
-  elseif topic == df.talk_choice_type.CommentWeather then
-  elseif topic == df.talk_choice_type.CommentNature then
-  elseif topic == df.talk_choice_type.SummarizeTerritory then
-  elseif topic == df.talk_choice_type.SummarizePatrols then
-  elseif topic == df.talk_choice_type.SummarizeOpposition then
-  elseif topic == df.talk_choice_type.DescribeRefugees then
-  elseif topic == df.talk_choice_type.AccuseTroublemaker then
-  elseif topic == df.talk_choice_type.AskAdopt then
-  elseif topic == df.talk_choice_type.AgreeAdopt then
-  elseif topic == df.talk_choice_type.RefuseAdopt then
-  elseif topic == df.talk_choice_type.RevokeService then
-  elseif topic == df.talk_choice_type.InviteService then
-  elseif topic == df.talk_choice_type.AcceptInviteService then
-  elseif topic == df.talk_choice_type.RefuseShareInformation then
-  elseif topic == df.talk_choice_type.RefuseInviteService then
-  elseif topic == df.talk_choice_type.RefuseRequestService then
-  elseif topic == df.talk_choice_type.OfferService then
-  elseif topic == df.talk_choice_type.AcceptPositionService then
-  elseif topic == df.talk_choice_type.RefusePositionService then
-  elseif topic == df.talk_choice_type.InvokeNameBanish then
-  elseif topic == df.talk_choice_type.InvokeNameService then
-  elseif topic == df.talk_choice_type.GrovelMaster then
-  elseif topic == df.talk_choice_type.DemandItem then
-  elseif topic == df.talk_choice_type.GiveServiceReport then
-  elseif topic == df.talk_choice_type.OfferEncouragement then
-  elseif topic == df.talk_choice_type.PraiseTaskCompleter then
-  ]]
-  else
-    -- TODO: This should never happen, once the above are uncommented.
-    word = 'BLAH_BLAH_BLAH'
-  end
-  local languages = df.global.world.raws.language
-  local word_index, _ = utils.linear_index(languages.words, 'REPORT;' .. word,
-                                           'word')
-  if not word_index then
-    return tostring(topic) .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
-  end
-  -- TODO: Capitalize the result.
-  local phonology = phonologies[language.ints[3]]
-  return get_lemma(phonology, optimize(
-    parameter_sets[language.ints[2]], deserialize_word(
-      phonology.nodes, unescape(
-        languages.translations[language.ints[1]].words[word_index].value))))
-end
-
-local function closest_phoneme(phoneme, inventory)
-  -- TODO
-  return phoneme
 end
 
 --[[
@@ -2747,20 +2411,317 @@ local function random_parameters(phonology, seed, creature)
 end
 
 --[[
-Randomly generates a word for a language.
+Gets the language parameter table of a lect.
+
+If `lect` does not have its language parameter table set, then it is
+first created using its seed.
 
 Args:
-  language: A language.
+  lect! A lect.
+
+Returns:
+  The language parameter table of `lect`.
+]]
+local function get_parameters(lect)
+  if not lect.parameters then
+    lect.parameters = random_parameters(
+      lect.phonology, lect.seed, df.creature_raw.find(lect.community.race))
+  end
+  return lect.parameters
+end
+
+--[[
+Gets a constituent for an utterance.
+
+Args:
+  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
+    or `true` to force a goodbye.
+  topic1: An integer whose exact interpretation depends on `topic`.
+  topic2: Ditto.
+  topic3: Ditto.
+  english: The English text of the utterance.
+
+Returns:
+  The constituent corresponding to the utterance.
+]]
+local function get_constituent(topic, topic1, topic2, topic3, english)
+  local word
+  if topic == true then
+    word = 'FORCE_GOODBYE'
+  elseif topic == df.talk_choice_type.Greet then
+    word = 'GREETINGS'
+  --[[
+  elseif topic == df.talk_choice_type.Nevermind then
+  elseif topic == df.talk_choice_type.Trade then
+  elseif topic == df.talk_choice_type.AskJoin then
+  elseif topic == df.talk_choice_type.AskSurroundings then
+  ]]
+  elseif topic == df.talk_choice_type.SayGoodbye then
+    word = 'GOODBYE'
+  --[[
+  elseif topic == df.talk_choice_type.AskStructure then
+  elseif topic == df.talk_choice_type.AskFamily then
+  elseif topic == df.talk_choice_type.AskProfession then
+  elseif topic == df.talk_choice_type.AskPermissionSleep then
+  elseif topic == df.talk_choice_type.AccuseNightCreature then
+  elseif topic == df.talk_choice_type.AskTroubles then
+  elseif topic == df.talk_choice_type.BringUpEvent then
+  elseif topic == df.talk_choice_type.SpreadRumor then
+  elseif topic == df.talk_choice_type.ReplyGreeting then
+  elseif topic == df.talk_choice_type.RefuseConversation then
+  elseif topic == df.talk_choice_type.ReplyImpersonate then
+  elseif topic == df.talk_choice_type.BringUpIncident then
+  elseif topic == df.talk_choice_type.TellNothingChanged then
+  elseif topic == df.talk_choice_type.Goodbye2 then
+  elseif topic == df.talk_choice_type.ReturnTopic then
+  elseif topic == df.talk_choice_type.ChangeSubject then
+  elseif topic == df.talk_choice_type.AskTargetAction then
+  elseif topic == df.talk_choice_type.RequestSuggestAction then
+  elseif topic == df.talk_choice_type.AskJoinInsurrection then
+  elseif topic == df.talk_choice_type.AskJoinRescue then
+  ]]
+  elseif topic == df.talk_choice_type.StateOpinion then
+    if topic1 == 0 then
+      word = 'VIOLENT'
+    elseif topic1 == 2 then
+      word = 'INEVITABLE'
+    elseif topic1 == 4 then
+      word = 'TERRIFYING'
+    elseif topic1 == 8 then
+      word = 'DONT_CARE'
+    else
+      -- TODO: more opinions
+      word = 'OPINION'
+    end
+  -- elseif topic == 28 then
+  -- elseif topic == 29 then
+  --[[
+  elseif topic == df.talk_choice_type.AllowPermissionSleep then
+  elseif topic == df.talk_choice_type.DenyPermissionSleep then
+  -- elseif topic == 32 then
+  elseif topic == df.talk_choice_type.AskJoinAdventure then
+  elseif topic == df.talk_choice_type.AskGuideLocation then
+  elseif topic == df.talk_choice_type.RespondJoin then
+  elseif topic == df.talk_choice_type.RespondJoin2 then
+  elseif topic == df.talk_choice_type.OfferCondolences then
+  elseif topic == df.talk_choice_type.StateNotAcquainted then
+  elseif topic == df.talk_choice_type.SuggestTravel then
+  elseif topic == df.talk_choice_type.SuggestTalk then
+  elseif topic == df.talk_choice_type.RequestSelfRescue then
+  elseif topic == df.talk_choice_type.AskWhatHappened then
+  elseif topic == df.talk_choice_type.AskBeRescued then
+  elseif topic == df.talk_choice_type.SayNotRemember then
+  -- elseif topic == 45 then
+  elseif topic == df.talk_choice_type.SayNoFamily then
+  elseif topic == df.talk_choice_type.StateUnitLocation then
+  elseif topic == df.talk_choice_type.ReferToElder then
+  elseif topic == df.talk_choice_type.AskComeCloser then
+  elseif topic == df.talk_choice_type.DoBusiness then
+  elseif topic == df.talk_choice_type.AskComeStoreLater then
+  elseif topic == df.talk_choice_type.AskComeMarketLater then
+  elseif topic == df.talk_choice_type.TellTryShopkeeper then
+  elseif topic == df.talk_choice_type.DescribeSurroundings then
+  elseif topic == df.talk_choice_type.AskWaitUntilHome then
+  elseif topic == df.talk_choice_type.DescribeFamily then
+  elseif topic == df.talk_choice_type.StateAge then
+  elseif topic == df.talk_choice_type.DescribeProfession then
+  elseif topic == df.talk_choice_type.AnnounceNightCreature then
+  elseif topic == df.talk_choice_type.StateIncredulity then
+  elseif topic == df.talk_choice_type.BypassGreeting then
+  elseif topic == df.talk_choice_type.AskCeaseHostilities then
+  elseif topic == df.talk_choice_type.DemandYield then
+  elseif topic == df.talk_choice_type.HawkWares then
+  elseif topic == df.talk_choice_type.YieldTerror then
+  elseif topic == df.talk_choice_type.Yield then
+  elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
+  elseif topic == df.talk_choice_type.ExpressGreatEmotion then
+  elseif topic == df.talk_choice_type.ExpressEmotion then
+  elseif topic == df.talk_choice_type.ExpressMinorEmotion then
+  elseif topic == df.talk_choice_type.ExpressLackEmotion then
+  elseif topic == df.talk_choice_type.OutburstFleeConflict then
+  elseif topic == df.talk_choice_type.StateFleeConflict then
+  elseif topic == df.talk_choice_type.MentionJourney then
+  elseif topic == df.talk_choice_type.SummarizeTroubles then
+  elseif topic == df.talk_choice_type.AskAboutIncident then
+  elseif topic == df.talk_choice_type.AskDirectionsPerson then
+  elseif topic == df.talk_choice_type.AskDirectionsPlace then
+  elseif topic == df.talk_choice_type.AskWhereabouts then
+  elseif topic == df.talk_choice_type.RequestGuide then
+  elseif topic == df.talk_choice_type.RequestGuide2 then
+  elseif topic == df.talk_choice_type.ProvideDirections then
+  elseif topic == df.talk_choice_type.ProvideWhereabouts then
+  elseif topic == df.talk_choice_type.TellTargetSelf then
+  elseif topic == df.talk_choice_type.TellTargetDead then
+  elseif topic == df.talk_choice_type.RecommendGuide then
+  elseif topic == df.talk_choice_type.ProfessIgnorance then
+  elseif topic == df.talk_choice_type.TellAboutPlace then
+  elseif topic == df.talk_choice_type.AskFavorMenu then
+  elseif topic == df.talk_choice_type.AskWait then
+  elseif topic == df.talk_choice_type.AskFollow then
+  elseif topic == df.talk_choice_type.ApologizeBusy then
+  elseif topic == df.talk_choice_type.ComplyOrder then
+  elseif topic == df.talk_choice_type.AgreeFollow then
+  elseif topic == df.talk_choice_type.ExchangeItems then
+  elseif topic == df.talk_choice_type.AskComeCloser2 then
+  elseif topic == df.talk_choice_type.InitiateBarter then
+  elseif topic == df.talk_choice_type.AgreeCeaseHostile then
+  elseif topic == df.talk_choice_type.RefuseCeaseHostile then
+  elseif topic == df.talk_choice_type.RefuseCeaseHostile2 then
+  elseif topic == df.talk_choice_type.RefuseYield then
+  elseif topic == df.talk_choice_type.RefuseYield2 then
+  elseif topic == df.talk_choice_type.Brag then
+  elseif topic == df.talk_choice_type.DescribeRelation then
+  -- elseif topic == 105 then
+  elseif topic == df.talk_choice_type.AnnounceLairHunt then
+  elseif topic == df.talk_choice_type.RequestDuty then
+  elseif topic == df.talk_choice_type.AskJoinService then
+  elseif topic == df.talk_choice_type.AcceptService then
+  elseif topic == df.talk_choice_type.TellRemainVigilant then
+  elseif topic == df.talk_choice_type.GiveServiceOrder then
+  elseif topic == df.talk_choice_type.WelcomeSelfHome then
+  -- elseif topic == 113 then
+  elseif topic == df.talk_choice_type.AskTravelReason then
+  elseif topic == df.talk_choice_type.TellTravelReason then
+  elseif topic == df.talk_choice_type.AskLocalRuler then
+  elseif topic == df.talk_choice_type.ComplainAgreement then
+  elseif topic == df.talk_choice_type.CancelAgreement then
+  elseif topic == df.talk_choice_type.SummarizeConflict then
+  elseif topic == df.talk_choice_type.SummarizeViews then
+  elseif topic == df.talk_choice_type.AskClaimStrength then
+  elseif topic == df.talk_choice_type.AskArmyPosition then
+  elseif topic == df.talk_choice_type.AskOtherClaims then
+  elseif topic == df.talk_choice_type.AskDeserters then
+  elseif topic == df.talk_choice_type.AskSiteNeighbors then
+  elseif topic == df.talk_choice_type.DescribeSiteNeighbors then
+  elseif topic == df.talk_choice_type.RaiseAlarm then
+  elseif topic == df.talk_choice_type.DemandDropWeapon then
+  elseif topic == df.talk_choice_type.AgreeComplyDemand then
+  elseif topic == df.talk_choice_type.RefuseComplyDemand then
+  elseif topic == df.talk_choice_type.AskLocationObject then
+  elseif topic == df.talk_choice_type.DemandTribute then
+  elseif topic == df.talk_choice_type.AgreeGiveTribute then
+  elseif topic == df.talk_choice_type.RefuseGiveTribute then
+  elseif topic == df.talk_choice_type.OfferGiveTribute then
+  elseif topic == df.talk_choice_type.AgreeAcceptTribute then
+  elseif topic == df.talk_choice_type.RefuseAcceptTribute then
+  elseif topic == df.talk_choice_type.CancelTribute then
+  elseif topic == df.talk_choice_type.OfferPeace then
+  elseif topic == df.talk_choice_type.AgreePeace then
+  elseif topic == df.talk_choice_type.RefusePeace then
+  elseif topic == df.talk_choice_type.AskTradeDepotLater then
+  elseif topic == df.talk_choice_type.ExpressAstonishment then
+  elseif topic == df.talk_choice_type.CommentWeather then
+  elseif topic == df.talk_choice_type.CommentNature then
+  elseif topic == df.talk_choice_type.SummarizeTerritory then
+  elseif topic == df.talk_choice_type.SummarizePatrols then
+  elseif topic == df.talk_choice_type.SummarizeOpposition then
+  elseif topic == df.talk_choice_type.DescribeRefugees then
+  elseif topic == df.talk_choice_type.AccuseTroublemaker then
+  elseif topic == df.talk_choice_type.AskAdopt then
+  elseif topic == df.talk_choice_type.AgreeAdopt then
+  elseif topic == df.talk_choice_type.RefuseAdopt then
+  elseif topic == df.talk_choice_type.RevokeService then
+  elseif topic == df.talk_choice_type.InviteService then
+  elseif topic == df.talk_choice_type.AcceptInviteService then
+  elseif topic == df.talk_choice_type.RefuseShareInformation then
+  elseif topic == df.talk_choice_type.RefuseInviteService then
+  elseif topic == df.talk_choice_type.RefuseRequestService then
+  elseif topic == df.talk_choice_type.OfferService then
+  elseif topic == df.talk_choice_type.AcceptPositionService then
+  elseif topic == df.talk_choice_type.RefusePositionService then
+  elseif topic == df.talk_choice_type.InvokeNameBanish then
+  elseif topic == df.talk_choice_type.InvokeNameService then
+  elseif topic == df.talk_choice_type.GrovelMaster then
+  elseif topic == df.talk_choice_type.DemandItem then
+  elseif topic == df.talk_choice_type.GiveServiceReport then
+  elseif topic == df.talk_choice_type.OfferEncouragement then
+  elseif topic == df.talk_choice_type.PraiseTaskCompleter then
+  ]]
+  else
+    -- TODO: This should never happen, once the above are uncommented.
+    word = ':invalid:'
+  end
+  local languages = df.global.world.raws.language
+  local word_index = utils.linear_index(languages.words, 'REPORT;' .. word,
+                                        'word')
+  if not word_index then
+    return tostring(topic) .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
+  end
+  -- TODO: Instead of `word`, set a constituent.
+  -- TODO: context_callback
+  return constituent
+end
+
+--[[
+Converts a sequence of mwords to a string.
+
+The full transcription is the concatenation of the transcriptions of the
+mwords joined by `WORD_SEPARATOR`. Each mword transcription is the
+concatenation of the transcriptions of its morphemes joined by
+`MORPHEME_SEPARATOR`. Each morpheme transcription is the concatenation
+of the transcription of its phonemes. Phonemes are transcribe using the
+phonology's symbols.
+
+Args:
+  mwords: A sequence of mwords.
+  phonology: A phonology.
+
+Returns:
+  The string transcription of `mwords` using `phonology`'s symbols.
+]]
+-- TODO: literal text
+local function transcribe(mwords, phonology)
+  local t1 = {}
+  for _, mword in ipairs(mwords) do
+    local t2 = {}
+    for _, morpheme in ipairs(morpheme) do
+      t2[#t2 + 1] = get_lemma(phonology, morpheme.pword)
+    end
+    t1[#t1 + 1] = table.concat(t2, MORPHEME_SEPARATOR)
+  end
+  return table.concat(t1, WORD_SEPARATOR)
+end
+
+--[[
+Translates an utterance into a lect.
+
+Args:
+  lect: The lect to translate into.
+  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
+    or `true` to force a goodbye.
+  topic1: An integer whose exact interpretation depends on `topic`.
+  topic2: Ditto.
+  topic3: Ditto.
+  english: The English text of the utterance.
+
+Returns:
+  The text of the translated utterance.
+]]
+local function translate(lect, topic, topic1, topic2, topic3, english)
+  print('translate ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+  local constituent = get_constituent(topic, topic1, topic2, topic3, english)
+  local mwords =
+    make_utterance(constituent, lect.morphemes, get_parameters(lect))
+  return transcribe(mwords, lect.phonology)
+end
+
+--[[
+Randomly generates a word for a lect.
+
+Args:
+  lect! A lect.
   parameters: A language parameter table.
 
 Returns:
-  TODO
-  TODO
+  A constituent representing a random word.
+  The sequence of morphemes used by the constituent.
+  The lemma of the word as a string.
 ]]
-local function random_word(language, parameters)
+local function random_word(lect)
   -- TODO: OCP
   -- TODO: Protect against infinite loops due to sonority dead ends.
-  local phonology = phonologies[language.ints[3]]
+  local phonology = lect.phonology
+  local parameters = get_parameters(lect)
   -- TODO: random sonority parameters
   local min_peak_sonority = parameters.max_sonority
   local min_sonority_delta = math.max(1, math.floor((parameters.max_sonority - parameters.min_sonority) / 2))
@@ -2769,7 +2730,7 @@ local function random_word(language, parameters)
   -- TODO: make sure this is low enough so it never triggers a new syllable on the first phoneme (here and below)
   local peak_sonority = -100
   local prev_sonority = -100
-  local word = {}
+  local pword = {}
   local limit = 20  -- TODO: make this limit unnecessary
   while syllables_left ~= 0 and limit ~= 0 do
     limit = limit - 1
@@ -2800,12 +2761,13 @@ local function random_word(language, parameters)
         peak_sonority = sonority
       end
       prev_sonority = sonority
-      table.insert(word, phoneme)
+      pword[#pword + 1] = phoneme
     end
   end
-  local constituent = xp{m={m{pword=word}}}
-  return serialize_constituent(phonology.nodes, constituent),
-    get_lemma(phonology, word)
+  local morpheme = m{id=tostring(#lect.morphemes), pword=pword}
+  lect.morphemes[#lect.morphemes + 1] = morpheme
+  local morphemes = {morpheme}
+  return x{m=morphemes}, morphemes, get_lemma(phonology, pword)
 end
 
 --[[
@@ -3121,12 +3083,12 @@ or final element in the other sequence, controlled by its `after` and
 that position in the inner-end word of the other sequence.
 
 Args:
-  s1: A sequence of morphemes or words.
-  s2: A sequence of morphemes or words (whichever `s1` has).
+  s1: A sequence of morphemes or mwords.
+  s2: A sequence of morphemes or mwords (whichever `s1` has).
   force_dislocation: Whether local dislocation must happen.
 
 Returns:
-  The concatenation of the two sequences of morphemes or words with
+  The concatenation of the two sequences of morphemes or mwords with
     local dislocation of the morphemes at the boundary between them.
 ]]
 local function dislocate(s1, s2, force_dislocation)
@@ -3308,9 +3270,7 @@ local function merge_constituents(target, source)
   target.n2 = source.n2 and copy_constituent(source.n2)
   target.is_phrase = source.is_phrase
   target.morphemes = dislocate(target.morphemes, source.morphemes)
-  for feature, value in pairs(source.features) do
-    target.features[feature] = value
-  end
+  utils.fillTable(target.features, source.features)
   source.moved_to = target
 end
 
@@ -3433,7 +3393,7 @@ end
 Determines whether a constituent should lower to another.
 
 Lowering should happen if and only if the constituents share a feature
-value for a feature which causes lowering in this language.
+value for a feature which causes lowering in this lect.
 
 Args:
   f1: The feature map of one constituent.
@@ -3531,7 +3491,7 @@ syntactic features, and merging constituents by raising.
 
 Args:
   constituent! A constituent.
-  lexicon: A lexicon. -- TODO: What is a lexicon?
+  lexicon: A lexicon.
   parameters: A language parameter table.
 
 Returns:
@@ -3568,9 +3528,7 @@ local function do_syntax(constituent, lexicon, parameters)
       if replacement then
         replacement = copy_constituent(replacement)
         if constituent.features then
-          for feature, value in pairs(constituent.features) do
-            replacement.features[feature] = value
-          end
+          utils.fillTable(replacement.features, constituent.features)
         end
         return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
@@ -3578,10 +3536,8 @@ local function do_syntax(constituent, lexicon, parameters)
       else
         constituent.maximal = maximal
         for _, morpheme in ipairs(constituent.morphemes) do
-          for feature, value in pairs(morpheme.features) do
-            -- TODO: Which takes precedence, constituent's or morpheme's?
-            constituent.features[feature] = value
-          end
+          -- TODO: Which should take precedence, constituent's or morpheme's?
+          utils.fillTable(constituent.features, morpheme.features)
         end
         for feature, value in pairs(constituent.features) do
           sfis[#sfis + 1] = {depth=depth, head=constituent, feature=feature}
@@ -3596,8 +3552,8 @@ end
 --[[
 Linearizes a constituent.
 
-A linearization is the sequence of the words of the heads dominated by a
-constituent in breadth-first order. If a constituent has two children,
+A linearization is the sequence of the mwords of the heads dominated by
+a constituent in breadth-first order. If a constituent has two children,
 the second is linearized first if the `swap` parameter is set, and the
 two linearizations are dislocated around each other.
 
@@ -3606,7 +3562,7 @@ Args:
   parameters: A language parameter table.
 
 Returns:
-  The linearization of the constituent as a sequence of words. If
+  The linearization of the constituent as a sequence of mwords. If
   `constituent` is nil, the sequence is empty.
 ]]
 local function linearize(constituent, parameters)
@@ -3616,9 +3572,7 @@ local function linearize(constituent, parameters)
   end
   constituent = copy_constituent(constituent)
   for i, morpheme in ipairs(constituent.morphemes) do
-    for feature, value in pairs(constituent.features) do
-      morpheme.features[feature] = value
-    end
+    utils.fillTable(morpheme.features, constituent.features)
   end
   if not constituent.n1 then
     return {constituent.morphemes}
@@ -3696,27 +3650,27 @@ if TEST then
 end
 
 --[[
-Rearranges a sequence of morphemes with fusion.
+Rearranges the morphemes of an mword with fusion.
 
-The output sequence is the final phonological form of the word, except
+The output sequence is the final phonological form of the mword, except
 for dummy support.
 
 Args:
-  morphemes! A sequence of morphemes.
+  mword! An mword.
 
 Returns:
-  `morphemes`.
+  `mword`.
 ]]
-local function make_word(morphemes)
+local function do_fusion(mword)
   local i = 1
-  while i < #morphemes do
-    if fuse(morphemes, i) then
-      if morphemes[i].affix then
-        table.remove(morphemes, i)
+  while i < #mword do
+    if fuse(mword, i) then
+      if mword[i].affix then
+        table.remove(mword, i)
         if morpheme[i].after then
-          table.insert(morphemes, morpheme)
+          table.insert(mword, morpheme)
         else
-          table.insert(morphemes, 1, morpheme)
+          table.insert(mword, 1, morpheme)
           i = 1
         end
       end
@@ -3724,7 +3678,7 @@ local function make_word(morphemes)
       i = i + 1
     end
   end
-  return morphemes
+  return mword
 end
 
 if TEST then
@@ -3732,51 +3686,51 @@ if TEST then
   local past = {id='PAST', fusion={}}
   local went = {id='went', fusion={}}
   local go = {id='go', fusion={PAST=went}}
-  local morphemes = {will, go}
-  make_word(morphemes)
-  assert_eq(morphemes, {will, go})
-  morphemes = {go, past}
-  make_word(morphemes)
-  assert_eq(morphemes, {went})
+  local mword = {will, go}
+  do_fusion(mword)
+  assert_eq(mword, {will, go})
+  mword = {go, past}
+  do_fusion(mword)
+  assert_eq(mword, {went})
 end
 
 --[[
-Gets a word with dummy support if necessary and possible.
+Provides an mword with dummy support if necessary and possible.
 
 Args:
-  word: A sequence of morphemes.
+  mword: An mword.
 
 Returns:
-  If `word` has a free morpheme, `word`; if not, `word` with dummy
-  support for one of the morphemes; if no morpheme has a dummy, `word`.
+  If `mword` has a free morpheme, `mword`; if not, `mword` with dummy
+  support for one of the morphemes; if no morpheme has a dummy, `mword`.
 ]]
-local function get_dummy(word)
+local function insert_dummy(mword)
   local dummy
-  for _, morpheme in ipairs(word) do
+  for _, morpheme in ipairs(mword) do
     if morpheme.affix then
       dummy = dummy or morpheme.dummy
     else
-      return word
+      return mword
     end
   end
   if dummy then
+    -- TODO: This is pointless. What was the intent?
     for f, v in pairs(dummy.features) do
-      -- TODO: Precedence? See above.
       dummy.features[f] = v
     end
   end
-  return dummy and dislocate(word, {dummy}, true) or word
+  return dummy and dislocate(mword, {dummy}, true) or mword
 end
 
 if TEST then
   local do_ = {id='do', features={}}
   local past = {id='PAST', features={}, affix=true, after=true, dummy=do_}
-  assert_eq(get_dummy({{id='go'}, past}), {{id='go'}, past})
-  assert_eq(get_dummy({past}), {do_, past})
+  assert_eq(insert_dummy({{id='go'}, past}), {{id='go'}, past})
+  assert_eq(insert_dummy({past}), {do_, past})
 end
 
 --[[
-Converts a constituent to a sequence of words.
+Converts a constituent to a sequence of mwords.
 
 Args:
   constituent! A constituent.
@@ -3784,21 +3738,22 @@ Args:
   parameters: A language parameter table.
 
 Returns:
-  A sequence of words.
+  A sequence of mwords.
 ]]
+-- TODO: What about literal text?
 local function make_utterance(constituent, lexicon, parameters)
-  local words = {}
-  for _, word in ipairs(linearize(do_lowering(
+  local mwords = {}
+  for _, mword in ipairs(linearize(do_lowering(
     do_syntax(constituent, lexicon, parameters), parameters), parameters))
   do
-    local new_word = word
+    local new_mword = mword
     repeat
-      word = make_word(new_word)
-      new_word = get_dummy(word)
-    until new_word == word
-    words[#words + 1] = word
+      mword = do_fusion(new_mword)
+      new_mword = insert_dummy(mword)
+    until new_mword == mword
+    mwords[#mwords + 1] = mword
   end
-  return words
+  return mwords
 end
 
 --[[
@@ -3829,26 +3784,26 @@ local function spell_morpheme(morpheme)
 end
 
 --[[
-Gets the string representation of a sequence of words.
+Gets the string representation of a sequence of mwords.
 
-Every word has a space after it, except those without morphemes.
+Every mword has a space after it, except those without morphemes.
 
 Args:
-  utterance: A sequence of words.
+  utterance: A sequence of mwords.
 
 Returns:
   The string representation of `utterance`.
 ]]
 local function spell_utterance(utterance)
   local s = ''
-  for _, word in ipairs(utterance) do
-    for i, morpheme in ipairs(word) do
+  for _, mword in ipairs(utterance) do
+    for i, morpheme in ipairs(mword) do
       if i ~= 1 then
         s = s .. '-'
       end
       s = s .. spell_morpheme(morpheme)
     end
-    if next(word) then
+    if next(mword) then
       s = s .. ' '
     end
   end
@@ -3974,56 +3929,32 @@ if TEST then
 end
 
 --[[
-Gets the two translations associated with a language.
+Gets a civilization's native lect.
 
 Args:
-  language: A language.
+  civ: A historical entity, or nil.
 
 Returns:
-  The lexicon translation.
-  The lemma translation.
+  A lect, or nil if there is none or `civ` is nil.
 ]]
-local function language_translations(language)
-  local translation_id = language.ints[1]
-  return df.language_translation.find(translation_id),
-    df.language_translation.find(translation_id + 1)
-end
-
---[[
-Gets a civilization's native language.
-
-Args:
-  civ: A historical entity.
-
-Returns:
-  A language, or nil if there is none.
-]]
-local function civ_native_language(civ)
+local function get_civ_native_lect(civ)
   if civ then
-    local all_languages = dfhack.persistent.get_all('babel/language') or {}
-    for _, language in pairs(all_languages) do
-      if language.ints[2] == civ.id then
-        return language
-      end
-    end
+    local _, lect = utils.linear_index(lect, civ, 'community')
+    return lect
   end
 end
 
 --[[
-Gets the two translations associated with a civilization.
+TODO
 
 Args:
-  civ: A historical entity.
-
-Returns:
-  The lexicon translation.
-  The lemma translation.
+  resource_id:
+  word:
+  noun_sing:
+  noun_plur:
+  adj:
+  resource_functions:
 ]]
-local function civ_translations(civ)
-  return language_translations(civ_native_language(civ))
-end
-
--- TODO: doc
 local function update_word(resource_id, word, noun_sing, noun_plur, adj,
                            resource_functions)
   if noun_sing ~= '' and noun_sing ~= 'n/a' then
@@ -4050,25 +3981,18 @@ local function update_word(resource_id, word, noun_sing, noun_plur, adj,
   end
   for _, entity in pairs(df.global.world.entities.all) do
     if entity.type == df.historical_entity_type.Civilization then
-      local language = civ_native_language(entity)
-      local parameters = parameter_sets[entity.id]
-      if not parameters then
-        parameters = random_parameters(phonologies[language.ints[3]],
-                                       language.ints[4])
-        parameter_sets[entity.id] = parameters
-      end
-      local u_translation, s_translation = language_translations(language)
-      local u_form = ''
-      local s_form = ''
+      local lect = get_civ_native_lect(entity)
+      local constituent
+      local morphemes
+      local lemma
       for _, f in pairs(resource_functions) do
-        if f == true or in_list(resource_id, f(entity), 0) then
-          u_form, s_form = random_word(language, parameters)
-          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. escape(u_form) .. '\t' .. escape(s_form))
+        if utils.linear_index(f(entity), resource_id) then
+          constituent, morphemes, lemma = random_word(lect)
+          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. lemma)
           break
         end
       end
-      u_translation.words:insert('#', {new=true, value=escape(u_form)})
-      s_translation.words:insert('#', {new=true, value=escape(s_form)})
+      lect.lemmas.words:insert('#', {new=true, value=escape(lemma)})
     end
   end
 end
@@ -4081,7 +4005,8 @@ local function expand_lexicons()
   for _, word in pairs{'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
                        'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'} do
     words:insert('#', {new=true, word='REPORT;' .. word})
-    update_word(nil, words[#words - 1], '', '', '', {true})
+    update_word(true, words[#words - 1], '', '', '',
+                {function(civ) return {true} end})
   end
   -- Inorganic materials
   local inorganics = raws.inorganics
@@ -4876,7 +4801,7 @@ Sets a historical figure's fluency in `fluency_data`.
 
 Args:
   hf_id: The ID of a historical figure.
-  civ_id: The ID of a civilization corresponding to a language.
+  civ_id: The ID of a civilization corresponding to a lect.
   fluency: A number.
 ]]
 local function set_fluency(hf_id, civ_id, fluency)
@@ -4891,10 +4816,10 @@ Gets a historical figure's fluency from `fluency_data`.
 
 Args:
   hf_id: The ID of a historical figure.
-  civ_id: The ID of a civilization corresponding to a language.
+  civ_id: The ID of a civilization corresponding to a lect.
 
 Returns:
-  The historical figure's fluency in the civilization's language.
+  The historical figure's fluency in the civilization's lect.
 ]]
 local function get_fluency(hf_id, civ_id)
   if not fluency_data[hf_id] then
@@ -4912,7 +4837,7 @@ Loads fluency data from a file into `fluency_data`.
 The file must be `fluency_data.txt` in the raws directory. Each line of
 the file has three numbers separated by spaces. The numbers are the ID
 of a historical figure, the ID of a civilization, and the fluency level
-of the historical figure in the civilization's language.
+of the historical figure in the civilization's lect.
 ]]
 local function load_fluency_data()
   fluency_data = {}
@@ -4953,6 +4878,321 @@ local function write_fluency_data()
       end
     end
     file:close()
+  end
+end
+
+--[[
+Writes all lects from `lects` to files.
+]]
+local function write_lect_files()
+  for i, lect in ipairs(lects) do
+    local filename = 'lect_' .. string.format('%04d', i)
+    local file = io.open(dir .. '/' .. filename .. '.txt', 'w')
+    file:write(filename, '\n\n[OBJECT:LECT]\n\n[LECT]\n')
+    file:write('\t[SEED:', lect.seed, ']\n')
+    file:write('\t[LEMMAS:', lect.lemmas.name, ']\n')
+    file:write('\t[COMMUNITY:', lect.community.id, ']\n')
+    file:write('\t[PHONOLOGY:', lect.phonology.name, ']\n')
+    for id, morpheme in pairs(lect.morphemes) do
+      file:write('\t[MORPHEME:', id, ']\n')
+      file:write('\t\t[PWORD:', escape(serialize_pword(morpheme.pword)), ']\n')
+      for k, v in pairs(morpheme.features) do
+        file:write('\t\t[M_FEATURE:', k, ':', v, ']\n')
+      end
+      if morpheme.affix then
+        file:write('\t\t[AFFIX]')
+      end
+      if morpheme.after then
+        file:write('\t\t[AFTER]')
+      end
+      if morpheme.affix then
+        file:write('\t\t[INITIAL]')
+      end
+      for k, v in pairs(morpheme.fusion) do
+        file:write('\t\t[FUSE:', k, ':', v.id, ']\n')
+      end
+      if morpheme.dummy then
+        file:write('\t\t[DUMMY:', morpheme.dummy.id, ']\n')
+      end
+    end
+    for id, constituent in pairs(lect.constituents) do
+      write_constituent(file, constituent, 1, id)
+    end
+    file:close()
+  end
+end
+
+--[[
+Writes a constituent to a file.
+
+Args:
+  file: An open file handle.
+  constituent: A constituent to write.
+  depth: The depth of the constituent, where a top-level constituent's
+    depth is 1 and any other's is one more than its parent's.
+  id: The constituent's ID, or nil if it is a top-level constituent.
+]]
+local function write_constituent(file, constituent, depth, id)
+  local indent = ('\t'):rep(depth)
+  file:write(indent, '[CONSTITUENT')
+  if id then
+    file:write(':', id)
+  end
+  file:write(']\n')
+  if constituent.n1 then
+    write_constituent(file, constituent.n1, depth + 1)
+  end
+  if constituent.n2 then
+    write_constituent(file, constituent.n2, depth + 1)
+  end
+  for k, v in pairs(constituent.features or {}) do
+    file:write(indent, '\t[C_FEATURE:', tostring(k), ':', tostring(v), ']\n')
+  end
+  for _, morpheme in ipairs(constituent.morphemes or {}) do
+    file:write(indent, '\t[C_MORPHEME:', morpheme.id, ']')
+  end
+  if constituent.is_phrase then
+    file:write(indent, '\t[PHRASE]\n')
+  end
+  if constituent.ref then
+    file:write(indent, '\t[REF:', constituent.ref, ']\n')
+  end
+  if constituent.text then
+    file:write(indent, '\t[TEXT:', escape(constituent.text), ']\n')
+  end
+  file:write(indent, '[END_CONSTITUENT')
+end
+
+--[[
+Loads all lect raw files into `lects`.
+
+The raw files must match 'lect_*.txt'.
+]]
+local function load_lects()
+  local dir = dfhack.getSavePath()
+  if not dir then
+    return
+  end
+  dir = dir .. '/raw/objects'
+  for _, filename in pairs(dfhack.filesystem.listdir(dir)) do
+    local path = dir .. '/' .. filename
+    if (dfhack.filesystem.isfile(path) and filename:match('^lect_.*%.txt')) then
+      io.input(path)
+      local current_lect
+      local current_morpheme
+      local morphemes_to_backpatch = {}
+      local constituent_stack
+      for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
+        local subtags = {}
+        for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
+          table.insert(subtags, subtag)
+        end
+        if #subtags >= 1 then
+          if subtags[1] == 'OBJECT' then
+            if #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            if subtags[2] ~= 'LECT' then
+              qerror('Wrong object type: ' .. subtags[2])
+            end
+            lects = {}
+          elseif not lects then
+            qerror('Missing OBJECT tag: ' .. filename)
+          elseif subtags[1] == 'LECT' then
+            if #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_lect = {morphemes={}, constituents={}}
+            lects[#lects + 1] = current_lect
+            current_morpheme = nil
+            constituent_stack = {}
+          elseif subtags[1] == 'SEED' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_lect.seed = tonumber(subtags[2])
+            if not current_lect.seed then
+              qerror('The seed must be a number: ' .. current_lect.seed)
+            end
+          elseif subtags[1] == 'LEMMAS' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local _, translation = utils.linear_index(df.global.world.raws.language.translations, subtags[2], 'name')
+            if not translation then
+              qerror('Lemmas not found: ' .. subtags[2])
+            end
+            current_lect.lemmas = translation
+          elseif subtags[1] == 'COMMUNITY' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local _, community = df.historical_entity.find(tonumber(subtags[2]))
+            if not community then
+              qerror('Entity not found: ' .. subtags[2])
+            end
+            current_lect.community = community
+          elseif subtags[1] == 'PHONOLOGY' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            elseif not phonologies then
+              qerror('Phonologies must be loaded before lects.')
+            end
+            local _, phonology =
+              utils.linear_index(phonologies, subtags[2], 'name')
+            if not phonology then
+              qerror('Phonology ' .. subtags[2] .. ' not found.')
+            end
+            current_lect.phonology = phonology
+          elseif subtags[1] == 'MORPHEME' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            elseif current_lect.morphemes[subtags[2]] then
+              qerror('Duplicate morpheme: ' .. subtags[2])
+            end
+            current_morpheme = {id=subtags[2], features={}, fusion={}}
+            current_lect.morphemes[subtags[2]] = current_morpheme
+          elseif subtags[1] == 'PWORD' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_morpheme.pword = deserialize_pword(unescape(subtags[2]))
+          elseif subtags[1] == 'M_FEATURE' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 3 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_morpheme.features[subtags[2]] = subtags[3]
+          elseif subtags[1] == 'AFFIX' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_morpheme.affix = true
+          elseif subtags[1] == 'AFTER' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_morpheme.after = true
+          elseif subtags[1] == 'INITIAL' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            current_morpheme.initial = true
+          elseif subtags[1] == 'FUSE' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 3 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            morphemes_to_backpatch[#morphemes_to_backpatch + 1] =
+              {t=current_morpheme.fusion, k=subtags[2], v=subtags[3],
+               m=current_lect.morphemes}
+          elseif subtags[1] == 'DUMMY' then
+            if not current_morpheme then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            morphemes_to_backpatch[#morphemes_to_backpatch + 1] =
+              {t=current_morpheme, k='dummy', v=subtags[2],
+               m=current_lect.morphemes}
+          elseif subtags[1] == 'CONSTITUENT' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif next(constituent_stack) and #subtags ~= 1
+              or not next(constituent_stack) and #subtags ~= 2
+            then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local current_constituent = constituent_stack[#constituent_stack]
+            local new_constituent = {features={}, morphemes={}}
+            if current_constituent then
+              if current_constituent.n1 then
+                if current_constituent.n2 then
+                  current_constituent.n2 = new_constituent
+                else
+                  qerror('Extra constituent: ' .. tag)
+                end
+              else
+                current_constituent.n1 = new_constituent
+              end
+            end
+            constituent_stack[#constituent_stack + 1] = new_constituent
+          elseif subtags[1] == 'C_FEATURE' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].features[subtags[2]] =
+              subtags[3]
+          elseif subtags[1] == 'C_MORPHEME' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local morphemes = constituent_stack[#constituent_stack].morphemes
+            morphemes[#morphemes + 1] = 0
+            morphemes_to_backpatch[#morphemes_to_backpatch + 1] =
+              {t=morphemes, k=#morphemes, v=subtags[2],
+               m=current_lect.morphemes}
+          elseif subtags[1] == 'PHRASE' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].is_phrase = true
+          elseif subtags[1] == 'REF' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].ref = subtags[2]
+          elseif subtags[1] == 'TEXT' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].text = subtags[2]
+          elseif subtags[1] == 'END_CONSTITUENT' then
+            constituent_stack[#constituent_stack] = nil
+          else
+            qerror('Unknown tag: ' .. tag)
+          end
+        end
+      end
+      for _, mtb in ipairs(morphemes_to_backpatch) do
+        local _, morpheme = utils.linear_index(mtb.m, mtb.v, 'id')
+        if not morpheme then
+          qerror('No such morpheme: ' .. mtb.v)
+        end
+        mtb.t[mtb.k] = morpheme
+      end
+      io.input():close()
+    end
   end
 end
 
@@ -5075,31 +5315,40 @@ local function overwrite_language_files()
 end
 
 --[[
-Loans words from one civilization's language to another's.
+Loans words from one civilization's lect to another's.
 
 Args:
-  dst_civ_id: The ID of the historical entity whose language is the
+  dst_civ_id: The ID of the historical entity whose lect is the
     destination.
-  src_civ_id: The ID of the historical entity whose language is the
-    source.
+  src_civ_id: The ID of the historical entity whose lect is the source.
   loans: A sequence of loans.
 ]]
 local function loan_words(dst_civ_id, src_civ_id, loans)
-  -- TODO: Don't loan between languages with different feature geometries.
+  -- TODO: Don't loan between lects with different phonologies.
   local dst_civ = df.historical_entity.find(dst_civ_id)
   local src_civ = df.historical_entity.find(src_civ_id)
-  local dst_u_lang, dst_s_lang = civ_translations(dst_civ)
-  local src_u_lang, src_s_lang = civ_translations(src_civ)
+  local dst_lect = get_civ_native_lect(dst_civ)
+  local src_lect = get_civ_native_lect(src_civ)
   for i = 1, #loans do
     for _, id in pairs(loans[i].get(src_civ)) do
-      local word_index = utils.linear_index(df.global.world.raws.language.words,
-        loans[i].prefix .. loans[i].type.find(id)[loans[i].id], 'word')
-      if dst_u_lang.words[word_index].value == '' then
-        local u_loanword = src_u_lang.words[word_index].value
-        local s_loanword = src_s_lang.words[word_index].value
-        print('Civ ' .. dst_civ.id .. ' gets "' .. s_loanword .. '" (' .. loans[i].prefix .. loans[i].type.find(id)[loans[i].id] .. ') from civ ' .. src_civ.id)
-        dst_u_lang.words[word_index].value = u_loanword
-        dst_s_lang.words[word_index].value = s_loanword
+      local word_id = loans[i].prefix .. loans[i].type.find(id)[loans[i].id]
+      local word_index =
+        utils.linear_index(df.global.world.raws.language.words, word_id, 'word')
+      if not dst_lect.constituents[word_id] then
+        local lemma = src_lect.lemmas.words[word_index].value
+        print('Civ ' .. dst_civ_id .. ' gets "' .. lemma .. '" (' .. word_id .. ') from civ ' .. src_civ_id)
+        dst_lect.lemmas.words[word_index].value = lemma
+        local mwords =
+          make_utterance(copy_constituent(src_lect.constituents[word_id]))
+        local pwords = {}
+        for _, mword in ipairs(mwords) do
+          pwords[#pwords + 1] = mword.pword
+          -- TODO: literal text
+        end
+        local morpheme =
+          m{id=tostring(#dst_lect.morphemes), pword=table.concat(pwords)}
+        dst_lect.morphemes[#dst_lect.morphemes + 1] = morpheme
+        dst_lect.constituents[word_id] = x{m={m{pword=table.concat(pwords)}}}
       end
     end
   end
@@ -5204,32 +5453,25 @@ local function copy_translation(dst, src)
 end
 
 --[[
-Creates a language for a civilization.
-
-The new language goes in `df.global.world.raws.language.translations`.
-If `civ` is nil, nothing happens.
+Creates a lect for a civilization.
 
 Args:
-  civ: A historical entity, or nil.
+  civ: A historical entity.
 ]]
-local function create_language(civ)
-  if not civ then
-    return
-  end
+local function create_lect(civ)
   local translations = df.global.world.raws.language.translations
-  -- Create a persistent entry to represent the language.
-  -- TODO: Choose a phonology based on physical ability to produce the phones.
-  local language = dfhack.persistent.save(
-    {key='babel/language', value='LG' .. civ.id,
-     ints={#translations, civ.id, math.random(#phonologies),
-           dfhack.random.new():random()}},
-    true)
-  -- Create two copies (underlying and surface forms) of the language.
-  -- TODO: Don't simply copy from the first translation.
-  translations:insert('#', {new=true, name=civ.id .. 'U'})
-  copy_translation(translations[#translations - 1], translations[0])
   translations:insert('#', {new=true, name=civ.id .. 'S'})
+  -- TODO: Don't simply copy from the first translation.
   copy_translation(translations[#translations - 1], translations[0])
+  -- TODO: Choose a phonology based on physical ability to produce the phones.
+  lects[#lects + 1] = {
+    seed=dfhack.random.new():random(),
+    lemmas=translations[#translations],
+    community=civ,
+    phonology=phonologies[1],
+    morphemes={},
+    constituents={},
+  }
 end
 
 --[[
@@ -5256,98 +5498,95 @@ local function is_unprocessed_hf(hf)
 end
 
 --[[
-Gets a historical figure's native language.
+Gets a historical figure's native lect.
 
-A historical figure's native language is the native language of their
-civilization. Naturally, outsiders have no native language.
+A historical figure's native lect is the native lect of their
+civilization. Naturally, outsiders have no native lect.
 
 Args:
   hf: A historical figure.
 
 Returns:
-  A language, or nil if there is none.
+  A lect, or nil if there is none.
 ]]
-local function hf_native_language(hf)
---  print('hf native language: hf.id=' .. hf.id)
-  return civ_native_language(df.historical_entity.find(hf.civ_id))
+local function get_hf_native_lect(hf)
+--  print('hf native lect: hf.id=' .. hf.id)
+  return get_civ_native_lect(df.historical_entity.find(hf.civ_id))
 end
 
 --[[
-Gets all of a historical figure's languages.
+Gets all of a historical figure's lects.
 
 Args:
   hf: A historical figure.
 
 Returns:
-  A sequence of languages the historical figure knows.
+  A sequence of lects the historical figure knows.
 ]]
-local function hf_languages(hf)
---  print('hf languages: hf.id=' .. hf.id)
+local function get_hf_lects(hf)
+--  print('hf lects: hf.id=' .. hf.id)
   if not fluency_data[hf.id] then
-    local language = hf_native_language(hf)
-    if language then
-      set_fluency(hf.id, language.ints[2], MAXIMUM_FLUENCY)
+    local lect = get_hf_native_lect(hf)
+    if lect then
+      set_fluency(hf.id, lect.community.id, MAXIMUM_FLUENCY)
     else
       fluency_data[hf.id] = {}
     end
   end
-  local languages = {}
-  local all_languages = dfhack.persistent.get_all('babel/language')
+  local hf_lects = {}
   for civ_id, fluency_record in pairs(fluency_data[hf.id]) do
     if fluency_record.fluency == MAXIMUM_FLUENCY then
-      for _, language in pairs(all_languages) do
-        if language.ints[2] == civ_id then
-          table.insert(languages, language)
+      for _, lect in pairs(lects) do
+        if lect.community.id == civ_id then
+          table.insert(hf_lects, lect)
           break
         end
       end
     end
   end
-  return languages
+  return hf_lects
 end
 
 --[[
-Gets all of a unit's languages.
+Gets all of a unit's lects.
 
-If the unit is historical, it uses `hf_languages`. If not, it assumes
-the unit knows only the native language of their civilization.
+If the unit is historical, it uses `get_hf_lects`. If not, it assumes
+the unit knows only the native lect of their civilization.
 
 Args:
   unit: A unit.
 
 Returns:
-  A sequence of languages the unit knows.
+  A sequence of lects the unit knows.
 ]]
-local function get_unit_languages(unit)
---  print('unit languages: unit.id=' .. unit.id)
+local function get_unit_lects(unit)
+--  print('unit lects: unit.id=' .. unit.id)
   local _, hf = utils.linear_index(df.global.world.history.figures,
                                    unit.hist_figure_id, 'id')
   if hf then
-    return hf_languages(hf)
+    return get_hf_lects(hf)
   end
   print('unit has no hf')
-  return {civ_native_language(df.historical_entity.find(unit.civ_id))}
+  return {get_civ_native_lect(df.historical_entity.find(unit.civ_id))}
 end
 
 --[[
-Gets the language a report was spoken in.
+Gets the lect a report was spoken in.
 
 Args:
-  report: A report representating part of a conversation.
+  report: A report representing part of a conversation.
 
 Returns:
-  The language of the report.
+  The lect of the report.
 ]]
-local function get_report_language(report)
---  print('report language: report.id=' .. report.id)
+local function get_report_lect(report)
+--  print('report lect: report.id=' .. report.id)
   local speaker = df.unit.find(report.unk_v40_3)
-  -- TODO: Take hearer's language knowledge into account.
-  if unit then
-    local languages = get_unit_languages(speaker)
-    if #languages ~= 0 then
-      -- TODO: Don't always choose the first one.
-      return languages[1]
-    end
+  -- TODO: Take hearer's lect knowledge into account.
+  if speaker then
+    local unit_lects = get_unit_lects(speaker)
+    -- TODO: Don't always choose the first one.
+    return unit_lects[1]
   end
 end
 
@@ -5355,6 +5594,10 @@ local function initialize()
   load_phonologies()
   if not phonologies then
     qerror('At least one phonology must be defined.')
+  end
+  load_lects()
+  if not lects then
+    qerror('At least one lect must be defined.')
   end
   if not fluency_data then
     load_fluency_data()
@@ -5391,8 +5634,6 @@ local function handle_new_items(i, item_type)
     for i = entry1.ints[i], #new_items - 1 do
       total_handlers.process_new[item_type](new_items[i], i)
     end
---    entry1.ints[i] = #new_items
---    entry1:save()
     dfhack.persistent.save{key='babel/config1', ints={[i]=#new_items}}
   end
 end
@@ -5403,7 +5644,7 @@ end
 
 function total_handlers.process_new.entities(entity, i)
   if entity.type == df.historical_entity_type.Civilization then
-    create_language(entity)
+    create_lect(entity)
   end
   entity.name.nickname = 'Ent' .. i
 end
@@ -5415,7 +5656,7 @@ end
 --[[
 Simulate the linguistic effects of a historical event.
 
-This can modify anything related to translations or languages.
+This can modify anything related to translations or lects.
 
 Args:
   event: A historical event.
@@ -5443,7 +5684,7 @@ function total_handlers.process_new.events(event, i)
     loan_words(event.source, event.destination, TRADE)
     loan_words(event.destination, event.source, TRADE)
   elseif df.history_event_entity_incorporatedst:is_instance(event) then
-    -- TODO: migrant_entity no longer speaks their language
+    -- TODO: migrant_entity no longer speaks their lect
   elseif df.history_event_masterpiece_createdst:is_instance(event) then
     --[[TODO: maker_entity coins word for item/building type
     civ1 = event.maker_entity
@@ -5538,17 +5779,18 @@ local function get_new_turn_counts(reports, conversation_id)
   return new_turn_counts
 end
 
-local function update_fluency(acquirer, report_language)
+local function update_fluency(acquirer, report_lect)
   local fluency_record =
-    get_fluency(acquirer.hist_figure_id, report_language.ints[2])
+    get_fluency(acquirer.hist_figure_id, report_lect.community.id)
   fluency_record.fluency = math.min(
-    MAXIMUM_FLUENCY, fluency_record.fluency +
-    math.ceil(acquirer.status.current_soul.mental_attrs
-              .LINGUISTIC_ABILITY.value / UTTERANCES_PER_XP))
+    MAXIMUM_FLUENCY, fluency_record.fluency + math.ceil(
+      acquirer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value /
+      UTTERANCES_PER_XP))
   print('strength <-- ' .. fluency_record.fluency)
   if fluency_record.fluency == MAXIMUM_FLUENCY then
     dfhack.gui.showAnnouncement(
-      'You have learned ' .. dfhack.TranslateName(report_language.value) .. '.',
+      'You have learned the language of ' ..
+      dfhack.TranslateName(report_language.community.name) .. '.',
       COLOR_GREEN)
   end
 end
@@ -5657,10 +5899,11 @@ local function handle_new_reports()
       report.id = report.id + id_delta
       i = i + 1
     else
-      local report_language = get_report_language(report)
+      local report_language = get_report_lect(report)
+      -- TODO: What if `report_language == nil`?
       local adventurer = df.global.world.units.active[0]
-      local adventurer_languages = get_unit_languages(adventurer)
-      if in_list(report_language, adventurer_languages, 1) then
+      local adventurer_languages = get_unit_lects(adventurer)
+      if utils.linear_index(adventurer_languages, report_language) then
         print('  adventurer understands: ' .. report.text)
         report.id = report.id + id_delta
         i = i + 1
@@ -5698,12 +5941,14 @@ local function run()
     -- Only do I/O right before retiring or abandoning.
     -- TODO: Only do I/O once when on this screen.
     write_fluency_data()
+    write_lect_files()
     overwrite_language_files()
   end
 end
 
 local function finalize()
   phonologies = nil
+  lects = nil
   fluency_data = nil
 end
 
@@ -5735,15 +5980,14 @@ if #args >= 1 then
     phonologies = nil
     load_phonologies()
     local morpheme = m{2, features={n=1}}
-    local language = {ints={[3]=1}}
-    local parameters = random_parameters(phonologies[1], 0x8a181, df.global.world.raws.creatures.all[466])
-    for _, ps in ipairs(parameters.inventory) do
+    local lect = {seed=0x8d168, community={race=466}, phonology=phonologies[1],
+                  morphemes={}, constituents={}}
+    for _, ps in ipairs(get_parameters(lect).inventory) do
       --print(ps[2], get_lemma(phonologies[1], {ps[1]}))
     end
     for i = 1, 30 do
-      local u_form, s_form = random_word(language, parameters)
-      load('return ' .. u_form)()
-      print(s_form, escape(u_form))
+      local constituent, morphemes, lemma = random_word(lect)
+      print(lemma)
     end
   else
     usage()
