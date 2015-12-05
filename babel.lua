@@ -1,4 +1,5 @@
 -- Add random languages to the game
+--@ enable = true
 
 local utils = require('utils')
 
@@ -5970,7 +5971,10 @@ local function main()
   end
 end
 
-args = {...}
+local args = {...}
+if dfhack_flags and dfhack_flags.enable then
+  args = {dfhack_flags.enable_state and 'start' or 'stop'}
+end
 if #args >= 1 then
   if args[1] == 'start' then
     enabled = true
