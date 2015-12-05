@@ -65,6 +65,7 @@ local fluency_data = nil
 if enabled == nil then
   enabled = false
 end
+local dirty = true
 
 --[[
 Data definitions:
@@ -5932,15 +5933,20 @@ local function run()
   end
   handle_new_reports()
   local viewscreen = dfhack.gui.getCurViewscreen()
-  if (dfhack.gui.getFocusString(viewscreen) == 'option' and
-      (viewscreen.in_retire_adv == 1 or
-       viewscreen.in_retire_dwf_abandon_adv == 1 or
-       viewscreen.in_abandon_dwf == 1)) then
-    -- Only do I/O right before retiring or abandoning.
-    -- TODO: Only do I/O once when on this screen.
-    write_fluency_data()
-    write_lect_files()
-    overwrite_language_files()
+  if dfhack.gui.getFocusString(viewscreen) == 'option' then
+    -- Only write files right before retiring or abandoning.
+    if (viewscreen.in_retire_adv == 1 or
+        viewscreen.in_retire_dwf_abandon_adv == 1 or
+        viewscreen.in_abandon_dwf == 1) then
+      if dirty then
+        write_fluency_data()
+        write_lect_files()
+        overwrite_language_files()
+        dirty = false
+      end
+    end
+  else
+    dirty = true
   end
 end
 
