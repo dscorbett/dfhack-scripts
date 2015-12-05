@@ -1267,7 +1267,7 @@ Args:
 
 Returns:
   Whether `a` and `b` are equal, when both masked by the union of all
-  the masks in `...`.
+    the masks in `...`.
 ]]
 local function bitfield_equals(a, b, ...)
   local m = math.max(#a, #b)
@@ -1406,8 +1406,8 @@ Args:
 
 Returns:
   Whether at least one articulator from `articulators` would be present
-  in an unwounded `creature`, of no matter what caste; or true, if
-  `articulators` is empty.
+    in an unwounded `creature`, of no matter what caste; or true, if
+    `articulators` is empty.
 ]]
 local function can_articulate(creature, articulators)
   if not next(articulators) then
@@ -1658,7 +1658,7 @@ Args:
 
 Returns:
   A dimension which is the root of a binary tree of dimensions. The
-  children of a node in the tree are in `d1` and `d2`.
+    children of a node in the tree are in `d1` and `d2`.
 ]]
 local function get_dimension(rng, phonology, creature)
   if not can_articulate(creature, phonology.articulators) then
@@ -1721,7 +1721,7 @@ Args:
 
 Returns:
   -1 if a < b, 1 if a > b, and 0 otherwise. The comparison relation is a
-  partial order but is otherwise unspecified.
+    partial order but is otherwise unspecified.
 ]]
 local function compare_dimension_values(a, b)
   a = dimension_value_to_bitfield(a)
@@ -1771,8 +1771,8 @@ Args:
 
 Returns:
   A grid using `mask_1` and `values_1` for the rows and `mask_2` and
-  `values_2` for the columns. The scores in the grid are the products of
-  the dimension values' scores from the relevant row and column.
+    `values_2` for the columns. The scores in the grid are the products
+    of the dimension values' scores from the relevant row and column.
 ]]
 local function make_grid(mask_1, mask_2, values_1, values_2)
   local grid = {rows={mask=mask_1, values=values_1},
@@ -1819,7 +1819,7 @@ Args:
 
 Returns:
   A sequence of those scalings in `scalings` which could possibly apply
-  to dimension values in this row or column.
+    to dimension values in this row or column.
 ]]
 local function get_satisfied_scalings(roc_values, le, pivot, scalings, roc_mask)
   local rv = {}
@@ -2141,7 +2141,7 @@ Args:
 
 Returns:
   A sequence of dimension values from the grid, or nil if there is
-  nothing left.
+    nothing left.
 ]]
 local function pick_from_grid(rng, grid, dispersions)
   local rocs = grid.rows
@@ -2316,9 +2316,9 @@ Args:
 
 Returns:
   If `x` is a constituent key, a constituent using that key as a `ref`
-  and with no features. Otherwise, a function that given a constituent
-  key returns a constituent with that key as a `ref` and `x` as the
-  features.
+    and with no features. Otherwise, a function that given a constituent
+    key returns a constituent with that key as a `ref` and `x` as the
+    features.
 ]]
 local function r(x)
   return type(x) == 'string' and {ref=x, features={}} or function(s)
@@ -2334,10 +2334,10 @@ Args:
 
 Returns:
   If `m` is a string, a morpheme with `id` and `text` set to `m`.
-  Otherwise, a morpheme with `id` set to `m[1]`, `text` set to `m[2]`,
-  and all other morpheme keys set to their values in `m`. Either way,
-  unspecified required keys (like `fusion`) are initialized to
-  reasonable defaults.
+    Otherwise, a morpheme with `id` set to `m[1]`, `text` set to `m[2]`,
+    and all other morpheme keys set to their values in `m`. Either way,
+    unspecified required keys (like `fusion`) are initialized to
+    reasonable defaults.
 ]]
 local function m(m)
   return type(m) ~= 'table' and
@@ -2355,8 +2355,8 @@ Args:
 
 Returns:
   A constituent using values from `c`, with reasonable defaults when
-  required but not specified. `[1]` becomes `n1`; `[2]`, `n2`; `f`,
-  `features`; `m`, `morphemes`; and `moved_to`, `moved_to`.
+    required but not specified. `[1]` becomes `n1`; `[2]`, `n2`; `f`,
+    `features`; `m`, `morphemes`; and `moved_to`, `moved_to`.
 ]]
 local function x(c)
   return {n1=c[1], n2=c[2], features=c.f or {}, morphemes=c.m or {},
@@ -2710,7 +2710,6 @@ Randomly generates a word for a lect.
 
 Args:
   lect! A lect.
-  parameters: A language parameter table.
 
 Returns:
   A constituent representing a random word.
@@ -3400,8 +3399,9 @@ Args:
   f2: The feature map of the other constituent.
   parameters: A language parameter table.
 
-Returns: Whether the constituents of which `f1` and `f2` are the feature
-  maps should participate in lowering with each other.
+Returns:
+  Whether the constituents of which `f1` and `f2` are the feature maps
+    should participate in lowering with each other.
 ]]
 local function should_lower(f1, f2, parameters)
   for f, v in pairs(f1) do
@@ -3563,7 +3563,7 @@ Args:
 
 Returns:
   The linearization of the constituent as a sequence of mwords. If
-  `constituent` is nil, the sequence is empty.
+    `constituent` is nil, the sequence is empty.
 ]]
 local function linearize(constituent, parameters)
   if (not constituent or
@@ -3702,7 +3702,8 @@ Args:
 
 Returns:
   If `mword` has a free morpheme, `mword`; if not, `mword` with dummy
-  support for one of the morphemes; if no morpheme has a dummy, `mword`.
+    support for one of the morphemes; if no morpheme has a dummy,
+    `mword`.
 ]]
 local function insert_dummy(mword)
   local dummy
@@ -4885,6 +4886,7 @@ end
 Writes all lects from `lects` to files.
 ]]
 local function write_lect_files()
+  local dir = dfhack.getSavePath() .. '/raw/objects'
   for i, lect in ipairs(lects) do
     local filename = 'lect_' .. string.format('%04d', i)
     local file = io.open(dir .. '/' .. filename .. '.txt', 'w')
@@ -4969,6 +4971,7 @@ Loads all lect raw files into `lects`.
 The raw files must match 'lect_*.txt'.
 ]]
 local function load_lects()
+  lects = {}
   local dir = dfhack.getSavePath()
   if not dir then
     return
@@ -4995,7 +4998,6 @@ local function load_lects()
             if subtags[2] ~= 'LECT' then
               qerror('Wrong object type: ' .. subtags[2])
             end
-            lects = {}
           elseif not lects then
             qerror('Missing OBJECT tag: ' .. filename)
           elseif subtags[1] == 'LECT' then
@@ -5033,7 +5035,7 @@ local function load_lects()
             elseif #subtags ~= 2 then
               qerror('Wrong number of subtags: ' .. tag)
             end
-            local _, community = df.historical_entity.find(tonumber(subtags[2]))
+            local community = df.historical_entity.find(tonumber(subtags[2]))
             if not community then
               qerror('Entity not found: ' .. subtags[2])
             end
@@ -5466,7 +5468,7 @@ local function create_lect(civ)
   -- TODO: Choose a phonology based on physical ability to produce the phones.
   lects[#lects + 1] = {
     seed=dfhack.random.new():random(),
-    lemmas=translations[#translations],
+    lemmas=translations[#translations - 1],
     community=civ,
     phonology=phonologies[1],
     morphemes={},
@@ -5596,9 +5598,6 @@ local function initialize()
     qerror('At least one phonology must be defined.')
   end
   load_lects()
-  if not lects then
-    qerror('At least one lect must be defined.')
-  end
   if not fluency_data then
     load_fluency_data()
   end
@@ -5610,9 +5609,7 @@ local function initialize()
     translations:erase(#translations - 1)
   end
   local entry1 = dfhack.persistent.get('babel/config1')
-  local first_time = false
   if not entry1 then
-    first_time = true
     entry1 = dfhack.persistent.save{key='babel/config1',
                                     ints={0, 0, 0, 0, 0, 0, 0}}
     -- TODO: Is there always exactly one generated translation, the last?
@@ -5634,7 +5631,8 @@ local function handle_new_items(i, item_type)
     for i = entry1.ints[i], #new_items - 1 do
       total_handlers.process_new[item_type](new_items[i], i)
     end
-    dfhack.persistent.save{key='babel/config1', ints={[i]=#new_items}}
+    entry1.ints[i] = #new_items
+    entry1:save()
   end
 end
 
@@ -5953,7 +5951,7 @@ local function finalize()
 end
 
 local function main()
-  if dfhack.isWorldLoaded() then
+  if dfhack.isMapLoaded() then
     if not phonologies then
       initialize()
     end
@@ -5974,7 +5972,7 @@ if #args >= 1 then
   elseif args[1] == 'stop' then
     enabled = false
     if timer then
-      dfhack.timeout_active(timer, nil)
+      dfhack.timeout_active(timer)
     end
   elseif args[1] == 'test' then
     phonologies = nil
