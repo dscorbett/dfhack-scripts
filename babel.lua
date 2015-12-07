@@ -3941,25 +3941,36 @@ Returns:
   A lect, or nil if there is none or `civ` is nil.
 ]]
 local function get_civ_native_lect(civ)
+--  print('civ native lect: civ.id=' .. (civ and civ.id or 'nil'))
   if civ then
-    local _, lect = utils.linear_index(lect, civ, 'community')
+    local _, lect = utils.linear_index(lects, civ, 'community')
     return lect
   end
 end
 
 --[[
-TODO
+Creates a word, setting its flags and adding it to each translation.
+
+The entry added to each translation is the empty string. The point is to
+maintain the invariant that every translation has one entry per word.
+Other functions can be called after this one if the entry should not be
+empty.
 
 Args:
-  resource_id:
-  word:
-  noun_sing:
-  noun_plur:
-  adj:
-  resource_functions:
+  _1: Ignored.
+  _2: Ignored.
+  word_id: The ID of the new word.
+  noun_sing: The singular noun form of the word in English, or '' or
+    'n/a' if this word cannot be used as a singular noun.
+  noun_plur: The pural noun form of the word in English, or '' or 'NP'
+    if this word cannot be used as a plural noun.
+  adj: The adjective form of the word in English, or '' or 'n/a' if this
+    word cannot be used as an adjective.
 ]]
-local function update_word(resource_id, word, noun_sing, noun_plur, adj,
-                           resource_functions)
+local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
+  local words = df.global.world.raws.language.words
+  words:insert('#', {new=true, word=word_id})
+  local word = words[#words - 1]
   if noun_sing ~= '' and noun_sing ~= 'n/a' then
     word.forms.Noun = noun_sing
     word.flags.front_compound_noun_sing = true
@@ -3982,239 +3993,245 @@ local function update_word(resource_id, word, noun_sing, noun_plur, adj,
     word.flags.rear_compound_adj = true
     word.flags.the_compound_adj = true
   end
-  for _, entity in pairs(df.global.world.entities.all) do
-    if entity.type == df.historical_entity_type.Civilization then
-      local lect = get_civ_native_lect(entity)
-      local constituent
-      local morphemes
-      local lemma
-      for _, f in pairs(resource_functions) do
-        if utils.linear_index(f(entity), resource_id) then
-          constituent, morphemes, lemma = random_word(lect)
-          print('Civ ' .. entity.id .. '\t' .. word.word .. '\t' .. lemma)
-          break
-        end
-      end
-      lect.lemmas.words:insert('#', {new=true, value=escape(lemma)})
+  for _,  translation in ipairs(df.global.world.raws.language.translations) do
+    translation.words:insert('#', {new=true})
+  end
+end
+
+--[[
+Creates a new word for a lect, if appropriate for its speech community.
+
+Args:
+  lect! A lect.
+  resource_id: An ID of the referent of the word.
+  resource_functions: A sequence of functions, each of which takes a
+    speech community and returns a list of values. If any of the
+    returned values of one of these functions given `lect.community` is
+    `resource_id`, the word is appropriate for `lect.community` and a
+    new word is added to the lect.
+  word_id: The ID of the new word.
+]]
+local function add_word_to_lect(lect, resource_id, resource_functions, word_id)
+  for _, f in ipairs(resource_functions) do
+    if utils.linear_index(f(lect.community), resource_id) then
+      local _, _, lemma = random_word(lect)
+      print('civ ' .. lect.community.id, resource_id, lemma)
+      lect.lemmas.words[utils.linear_index(
+        df.global.world.raws.language.words, word_id, 'word')].value =
+        escape(lemma)
+      return
     end
   end
 end
 
--- TODO: doc
-local function expand_lexicons()
+--[[
+Calls a function for everything that a lect might have a word for.
+
+Args:
+  f: A function which takes:
+    resource_id: See `add_word_to_lect`.
+    resource_functions: Ditto.
+    word_id: The ID of the word.
+    noun_sing: See `create_word`.
+    noun_plur: Ditto.
+    adj: Ditto.
+    Any of these arguments can be ignored.
+]]
+local function expand_lexicons(f)
   local raws = df.global.world.raws
-  local words = raws.language.words
   -- Words used in conversations
-  for _, word in pairs{'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
-                       'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'} do
-    words:insert('#', {new=true, word='REPORT;' .. word})
-    update_word(true, words[#words - 1], '', '', '',
-                {function(civ) return {true} end})
+  for _, word in ipairs{'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
+                        'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'} do
+    f(true, {function(civ) return {true} end}, 'REPORT;' .. word, '', '', '')
   end
   -- Inorganic materials
-  local inorganics = raws.inorganics
-  for i = 0, #inorganics - 1 do
-    local noun_sing = inorganics[i].material.state_name.Solid
-    local adj = inorganics[i].material.state_adj.Solid
-    words:insert('#', {new=true, word='INORGANIC;' .. inorganics[i].id})
-    update_word(i, words[#words - 1], noun_sing, '', adj,
-                {function(civ) return civ.resources.metals end,
-                 function(civ) return civ.resources.stones end,
-                 function(civ) return civ.resources.gems end})
+  for i, inorganic in ipairs(raws.inorganics) do
+    f(i,
+      {function(civ) return civ.resources.metals end,
+       function(civ) return civ.resources.stones end,
+       function(civ) return civ.resources.gems end},
+      'INORGANIC;' .. inorganic.id,
+      inorganic.material.state_name.Solid,
+      '',
+      inorganic.material.state_adj.Solid)
   end
   -- Plants
-  local plants = raws.plants.all
-  for i = 0, #plants - 1 do
-    local noun_sing = plants[i].name
-    local noun_plur = plants[i].name_plural
-    local adj = plants[i].adj
-    words:insert('#', {new=true, word='PLANT;' .. plants[i].id})
-    update_word(plants[i].anon_1, words[#words - 1], noun_sing, noun_plur, adj,
-                {function(civ) return civ.resources.tree_fruit_plants end,
-                 function(civ) return civ.resources.shrub_fruit_plants end})
+  for _, plant in ipairs(raws.plants.all) do
+    f(plant.anon_1,
+      {function(civ) return civ.resources.tree_fruit_plants end,
+       function(civ) return civ.resources.shrub_fruit_plants end},
+      'PLANT;' .. plant.id,
+      plant.name,
+      plant.name_plural,
+      plant.adj)
   end
   --[[
   -- Tissues
-  local tissues = raws.tissue_templates
-  for i = 0, #tissues - 1 do
-    local noun_sing = tissues[i].tissue_name_singular
-    local noun_plur = tissues[i].tissue_name_plural
-    words:insert('#', {new=true, word='TISSUE_TEMPLATE;' .. tissues[i].id})
-    update_word(words[#words - 1], noun_sing, noun_plur, '')
+  for _, tissue in ipairs(raws.tissue_templates) do
+    f(?, ?,
+      'TISSUE_TEMPLATE;' .. tissue.id,
+      tissue.tissue_name_singular,
+      tissue.tissue_name_plural,
+      '')
   end
   ]]
   -- Creatures
-  local creatures = raws.creatures.all
-  for i = 0, #creatures - 1 do
-    local noun_sing = creatures[i].name[0]
-    local noun_plur = creatures[i].name[1]
-    local adj = creatures[i].name[2]
-    words:insert('#', {new=true, word='CREATURE;' .. creatures[i].creature_id})
-    update_word(i, words[#words - 1], noun_sing, noun_plur, adj,
-                {function(civ) return {civ.race} end,
-                 function(civ) return civ.resources.fish_races end,
-                 function(civ) return civ.resources.fish_races end,
-                 function(civ) return civ.resources.egg_races end,
-                 function(civ) return civ.resources.animals.pet_races end,
-                 function(civ) return civ.resources.animals.wagon_races end,
-                 function(civ) return civ.resources.animals.pack_animal_races end,
-                 function(civ) return civ.resources.animals.wagon_puller_races end,
-                 function(civ) return civ.resources.animals.mount_races end,
-                 function(civ) return civ.resources.animals.minion_races end,
-                 function(civ) return civ.resources.animals.exotic_pet_races end
-                })
+  for i, creature in ipairs(raws.creatures.all) do
+    f(i,
+      {function(civ) return {civ.race} end,
+       function(civ) return civ.resources.fish_races end,
+       function(civ) return civ.resources.fish_races end,
+       function(civ) return civ.resources.egg_races end,
+       function(civ) return civ.resources.animals.pet_races end,
+       function(civ) return civ.resources.animals.wagon_races end,
+       function(civ) return civ.resources.animals.pack_animal_races end,
+       function(civ) return civ.resources.animals.wagon_puller_races end,
+       function(civ) return civ.resources.animals.mount_races end,
+       function(civ) return civ.resources.animals.minion_races end,
+       function(civ) return civ.resources.animals.exotic_pet_races end},
+      'CREATURE;' .. creature.creature_id,
+      creature.name[0],
+      creature.name[1],
+      creature.name[2])
   end
   -- Weapons
-  local weapons = raws.itemdefs.weapons
-  for i = 0, #weapons - 1 do
-    local noun_sing = weapons[i].name
-    local noun_plur = weapons[i].name_plural
-    words:insert('#', {new=true, word='ITEM_WEAPON;' .. weapons[i].id})
-    update_word(weapons[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.digger_type end,
-                 function(civ) return civ.resources.weapon_type end,
-                 function(civ) return civ.resources.training_weapon_type end
-                })
+  for _, weapon in ipairs(raws.itemdefs.weapons) do
+    f(weapon.subtype,
+      {function(civ) return civ.resources.digger_type end,
+       function(civ) return civ.resources.weapon_type end,
+       function(civ) return civ.resources.training_weapon_type end},
+      'ITEM_WEAPON;' .. weapon.id,
+      weapon.name,
+      weapon.name_plural,
+      '')
   end
   -- Trap components
-  local trapcomps = raws.itemdefs.trapcomps
-  for i = 0, #trapcomps - 1 do
-    local noun_sing = trapcomps[i].name
-    local noun_plur = trapcomps[i].name_plural
-    words:insert('#', {new=true, word='ITEM_TRAPCOMP;' .. trapcomps[i].id})
-    update_word(trapcomps[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.trapcomp_type end})
+  for _, trapcomp in ipairs(raws.itemdefs.trapcomps) do
+    f(trapcomp.subtype,
+      {function(civ) return civ.resources.trapcomp_type end},
+      'ITEM_TRAPCOMP;' .. trapcomp.id,
+       trapcomp.name,
+       trapcomp.name_plural,
+       '')
   end
   -- Toys
-  local toys = raws.itemdefs.toys
-  for i = 0, #toys - 1 do
-    local noun_sing = toys[i].name
-    local noun_plur = toys[i].name_plural
-    words:insert('#', {new=true, word='ITEM_TOY;' .. toys[i].id})
-    update_word(toys[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.toy_type end})
+  for _, toy in ipairs(raws.itemdefs.toys) do
+    f(toy.subtype,
+      {function(civ) return civ.resources.toy_type end},
+      'ITEM_TOY;' .. toy.id,
+      toy.name,
+      toy.name_plural,
+      '')
   end
   -- Tools
-  local tools = raws.itemdefs.tools
-  for i = 0, #tools - 1 do
-    local noun_sing = tools[i].name
-    local noun_plur = tools[i].name_plural
-    words:insert('#', {new=true, word='ITEM_TOOL;' .. tools[i].id})
-    update_word(tools[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.toy_type end})
+  for _, tool in ipairs(raws.itemdefs.tools) do
+    f(tool.subtype,
+      {function(civ) return civ.resources.toy_type end},
+      'ITEM_TOOL;' .. tool.id,
+      tool.name,
+      tool.name_plural,
+      '')
   end
   -- Instruments
-  local instruments = raws.itemdefs.instruments
-  for i = 0, #instruments - 1 do
-    local noun_sing = instruments[i].name
-    local noun_plur = instruments[i].name_plural
-    words:insert('#', {new=true, word='ITEM_INSTRUMENT;' .. instruments[i].id})
-    update_word(instruments[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.instrument_type end})
+  for _, instrument in ipairs(raws.itemdefs.instruments) do
+    f(instrument.subtype,
+      {function(civ) return civ.resources.instrument_type end},
+      'ITEM_INSTRUMENT;' .. instrument.id,
+      instrument.name,
+      instrument.name_plural,
+      '')
   end
   -- Armor
-  local armor = raws.itemdefs.armor
-  for i = 0, #armor - 1 do
-    local noun_sing = armor[i].name
-    local noun_plur = armor[i].name_plural
-    words:insert('#', {new=true, word='ITEM_ARMOR;' .. armor[i].id})
-    update_word(armor[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.armor_type end})
+  for _, armor in ipairs(raws.itemdefs.armor) do
+    f(armor.subtype,
+      {function(civ) return civ.resources.armor_type end},
+      'ITEM_ARMOR;' .. armor.id,
+      armor.name,
+      armor.name_plural,
+      '')
   end
   -- Ammo
-  local ammo = raws.itemdefs.ammo
-  for i = 0, #ammo - 1 do
-    local noun_sing = ammo[i].name
-    local noun_plur = ammo[i].name_plural
-    words:insert('#', {new=true, word='ITEM_AMMO;' .. ammo[i].id})
-    update_word(ammo[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.ammo_type end})
+  for _, ammo in ipairs(raws.itemdefs.ammo) do
+    f(ammo.subtype,
+      {function(civ) return civ.resources.ammo_type end},
+      'ITEM_AMMO;' .. ammo.id,
+      ammo.name,
+      ammo.name_plural,
+      '')
   end
   -- Siege ammo
-  local siege_ammo = raws.itemdefs.siege_ammo
-  for i = 0, #siege_ammo - 1 do
-    local noun_sing = siege_ammo[i].name
-    local noun_plur = siege_ammo[i].name_plural
-    words:insert('#', {new=true, word='ITEM_SIEGEAMMO;' .. siege_ammo[i].id})
-    update_word(siege_ammo[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.siegeammo_type end})
+  for _, siege_ammo in ipairs(raws.itemdefs.siege_ammo) do
+    f(siege_ammo.subtype,
+      {function(civ) return civ.resources.siegeammo_type end},
+      'ITEM_SIEGEAMMO;' .. siege_ammo.id,
+      siege_ammo.name,
+      siege_ammo.name_plural,
+      '')
   end
   -- Gloves
-  local gloves = raws.itemdefs.gloves
-  for i = 0, #gloves - 1 do
-    local noun_sing = gloves[i].name
-    local noun_plur = gloves[i].name_plural
-    words:insert('#', {new=true, word='ITEM_GLOVES;' .. gloves[i].id})
-    update_word(gloves[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.gloves_type end})
+  for _, glove in ipairs(raws.itemdefs.gloves) do
+    f(glove.subtype,
+      {function(civ) return civ.resources.gloves_type end},
+      'ITEM_GLOVES;' .. glove.id,
+      glove.name,
+      glove.name_plural,
+      '')
   end
   -- Shoes
-  local shoes = raws.itemdefs.shoes
-  for i = 0, #shoes - 1 do
-    local noun_sing = shoes[i].name
-    local noun_plur = shoes[i].name_plural
-    words:insert('#', {new=true, word='ITEM_SHOES;' .. shoes[i].id})
-    update_word(shoes[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.shoes_type end})
+  for _, shoe in ipairs(raws.itemdefs.shoes) do
+    f(shoe.subtype,
+      {function(civ) return civ.resources.shoes_type end},
+      'ITEM_SHOES;' .. shoe.id,
+      shoe.name,
+      shoe.name_plural,
+      '')
   end
   -- Shields
-  local shields = raws.itemdefs.shields
-  for i = 0, #shields - 1 do
-    local noun_sing = shields[i].name
-    local noun_plur = shields[i].name_plural
-    words:insert('#', {new=true, word='ITEM_SHIELD;' .. shields[i].id})
-    update_word(shields[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.shield_type end})
+  for _, shield in ipairs(raws.itemdefs.shields) do
+    f(shield.subtype,
+      {function(civ) return civ.resources.shield_type end},
+      'ITEM_SHIELD;' .. shield.id,
+      shield.name,
+      shield.name_plural,
+      '')
   end
   -- Helms
-  local helms = raws.itemdefs.helms
-  for i = 0, #helms - 1 do
-    local noun_sing = helms[i].name
-    local noun_plur = helms[i].name_plural
-    words:insert('#', {new=true, word='ITEM_HELM;' .. helms[i].id})
-    update_word(helms[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.helm_type end})
+  for _, helm in ipairs(raws.itemdefs.helms) do
+    f(helm.subtype,
+      {function(civ) return civ.resources.helm_type end},
+      'ITEM_HELM;' .. helm.id,
+      helm.name,
+      helm.name_plural,
+      '')
   end
   -- Pants
-  local pants = raws.itemdefs.pants
-  for i = 0, #pants - 1 do
-    local noun_sing = pants[i].name
-    local noun_plur = pants[i].name_plural
-    words:insert('#', {new=true, word='ITEM_PANTS;' .. pants[i].id})
-    update_word(pants[i].subtype, words[#words - 1], noun_sing, noun_plur, '',
-                {function(civ) return civ.resources.helm_type end})
+  for _, pants in ipairs(raws.itemdefs.pants) do
+    f(pants.subtype,
+      {function(civ) return civ.resources.helm_type end},
+      'ITEM_PANTS;' .. pants.id,
+      pants.name,
+      pants.name_plural,
+      '')
   end
   --[[
   -- Food
-  local food = raws.itemdefs.food
-  for i = 0, #food - 1 do
-    local noun_sing = food[i].name
-    words:insert('#', {new=true, word='ITEM_FOOD;' .. food[i].id})
-    update_word(words[#words - 1], noun_sing, '', '')
+  for _, food in ipairs(raws.itemdefs.food) do
+    f(?, ?, 'ITEM_FOOD;' .. food.id, food.name, '', '')
   end
   -- Buildings
-  local buildings = raws.buildings.all
-  for i = 0, #buildings - 1 do
-    local noun_sing = buildings[i].name
-    words:insert('#', {new=true, word='BUILDING;' .. buildings[i].id})
-    update_word(words[#words - 1], noun_sing, '', '')
+  for _, building in ipairs(raws.buildings.all) do
+    f(?, ?, 'BUILDING;' .. building.id, building.name, '', '')
   end
   -- Built-in materials
-  local builtins = raws.mat_table.builtin
-  for i = 0, #builtins - 1 do
-    if builtins[i] then
-      local noun_sing = builtins[i].state_name.Solid
-      local adj = builtins[i].state_adj.Solid
-      words:insert('#', {new=true, word='BUILTIN;' .. builtins[i].id})
-      update_word(words[#words - 1], noun_sing, '', '')
+  for _, builtin in ipairs(raws.mat_table.builtin) do
+    if builtin then
+      f(?, ?, 'BUILTIN;' .. builtin.id,
+        builtin.state_name.Solid, '', builtin.state_adj.Solid)
     end
   end
   -- Syndromes
-  local syndromes = raws.syndromes.all
-  for i = 0, #syndromes - 1 do
-    local noun_sing = syndromes[i].syn_name
-    words:insert('#', {new=true, word='SYNDROME;' .. syndromes[i].id})
-    update_word(words[#words - 1], noun_sing, '', '')
+  for _, syndrome in ipairs(raws.syndromes.all) do
+    f(?, ?, 'SYNDROME;' .. syndrome.id, syndrome.syn_name, '', '')
   end
   ]]
   -- TODO: descriptors
@@ -4899,7 +4916,8 @@ local function write_lect_files()
     file:write('\t[PHONOLOGY:', lect.phonology.name, ']\n')
     for id, morpheme in pairs(lect.morphemes) do
       file:write('\t[MORPHEME:', id, ']\n')
-      file:write('\t\t[PWORD:', escape(serialize_pword(morpheme.pword)), ']\n')
+      file:write('\t\t[PWORD:',
+        escape(serialize_pword(lect.phonology.nodes, morpheme.pword)), ']\n')
       for k, v in pairs(morpheme.features) do
         file:write('\t\t[M_FEATURE:', k, ':', v, ']\n')
       end
@@ -4973,7 +4991,6 @@ Loads all lect raw files into `lects`.
 The raw files must match 'lect_*.txt'.
 ]]
 local function load_lects()
-  lects = {}
   local dir = dfhack.getSavePath()
   if not dir then
     return
@@ -5198,6 +5215,7 @@ local function load_lects()
       io.input():close()
     end
   end
+  lects = lects or {}
 end
 
 --[[
@@ -5468,7 +5486,7 @@ local function create_lect(civ)
   -- TODO: Don't simply copy from the first translation.
   copy_translation(translations[#translations - 1], translations[0])
   -- TODO: Choose a phonology based on physical ability to produce the phones.
-  lects[#lects + 1] = {
+  lect = {
     seed=dfhack.random.new():random(),
     lemmas=translations[#translations - 1],
     community=civ,
@@ -5476,6 +5494,8 @@ local function create_lect(civ)
     morphemes={},
     constituents={},
   }
+  lects[#lects + 1] = lect
+  expand_lexicons(dfhack.curry(add_word_to_lect, lect))
 end
 
 --[[
@@ -5618,6 +5638,7 @@ local function initialize()
     entry2 = dfhack.persistent.save{
       key='babel/config2',
       ints={#df.global.world.raws.language.translations - 1}}
+    expand_lexicons(create_word)
   end
   df.global.world.status.announcements:resize(0)
   df.global.world.status.reports:resize(0)
@@ -5899,11 +5920,11 @@ local function handle_new_reports()
       report.id = report.id + id_delta
       i = i + 1
     else
-      local report_language = get_report_lect(report)
-      -- TODO: What if `report_language == nil`?
+      local report_lect = get_report_lect(report)
+      -- TODO: What if `report_lect == nil`?
       local adventurer = df.global.world.units.active[0]
-      local adventurer_languages = get_unit_lects(adventurer)
-      if utils.linear_index(adventurer_languages, report_language) then
+      local adventurer_lects = get_unit_lects(adventurer)
+      if utils.linear_index(adventurer_lects, report_lect) then
         print('  adventurer understands: ' .. report.text)
         report.id = report.id + id_delta
         i = i + 1
@@ -5915,10 +5936,10 @@ local function handle_new_reports()
         end
         id_delta = id_delta - 1
         if i == #reports or not reports[i].flags.continuation then
-          id_delta, i, announcement_index = replace_turn(conversation_id, new_turn_counts, english, id_delta, report, i, announcement_index, adventurer, report_language)
+          id_delta, i, announcement_index = replace_turn(conversation_id, new_turn_counts, english, id_delta, report, i, announcement_index, adventurer, report_lect)
           english = ''
-          if report_language then
-            update_fluency(adventurer, report_language)
+          if report_lect then
+            update_fluency(adventurer, report_lect)
           end
         end
       end
