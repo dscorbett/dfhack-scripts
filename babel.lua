@@ -2424,11 +2424,18 @@ Args:
 Returns:
   The language parameter table of `lect`.
 ]]
+-- TODO: This function takes minutes to run. The cache helps when testing.
+local cached_parameters
 local function get_parameters(lect)
+  lect.seed = 0
+  if cached_parameters then
+    return cached_parameters
+  end
   if not lect.parameters then
     lect.parameters = random_parameters(
       lect.phonology, lect.seed, df.creature_raw.find(lect.community.race))
   end
+  cached_parameters = lect.parameters
   return lect.parameters
 end
 
@@ -3971,27 +3978,60 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   local words = df.global.world.raws.language.words
   words:insert('#', {new=true, word=word_id})
   local word = words[#words - 1]
+  local str = word.str
+  local has_noun_sing = false
+  local has_noun_plur = false
+  local noun_str
   if noun_sing ~= '' and noun_sing ~= 'n/a' then
+    has_noun_sing = true
+  end
+  if noun_plur ~= '' and noun_plur ~= 'NP' then
+    has_noun_plur = true
+  end
+  if has_noun_sing or has_noun_plur then
+    noun_str = '[NOUN'
+  end
+  if has_noun_sing then
+    noun_str = noun_str .. ':' .. noun_sing
     word.forms.Noun = noun_sing
     word.flags.front_compound_noun_sing = true
     word.flags.rear_compound_noun_sing = true
     word.flags.the_noun_sing = true
     word.flags.the_compound_noun_sing = true
     word.flags.of_noun_sing = true
+    str:insert('#', {new=true, value='[FRONT_COMPOUND_NOUN_SING]'})
+    str:insert('#', {new=true, value='[REAR_COMPOUND_NOUN_SING]'})
+    str:insert('#', {new=true, value='[THE_NOUN_SING]'})
+    str:insert('#', {new=true, value='[THE_COMPOUND_NOUN_SING]'})
+    str:insert('#', {new=true, value='[OF_NOUN_SING]'})
   end
-  if noun_plur ~= '' and noun_plur ~= 'NP' then
+  if has_noun_plur then
+    noun_str = noun_str .. ':' .. noun_plur
     word.forms.NounPlural = noun_plur
     word.flags.front_compound_noun_plur = true
     word.flags.rear_compound_noun_plur = true
     word.flags.the_noun_plur = true
     word.flags.the_compound_noun_plur = true
     word.flags.of_noun_plur = true
+    str:insert('#', {new=true, value='[FRONT_COMPOUND_NOUN_PLUR]'})
+    str:insert('#', {new=true, value='[REAR_COMPOUND_NOUN_PLUR]'})
+    str:insert('#', {new=true, value='[THE_NOUN_PLUR]'})
+    str:insert('#', {new=true, value='[THE_COMPOUND_NOUN_PLUR]'})
+    str:insert('#', {new=true, value='[OF_NOUN_PLUR]'})
+  end
+  if noun_str then
+    str:insert('#', {new=true, value=noun_str .. ']'})
   end
   if adj ~= '' and adj ~= 'n/a' then
     word.forms.Adjective = adj
     word.flags.front_compound_adj = true
     word.flags.rear_compound_adj = true
     word.flags.the_compound_adj = true
+    str:insert('#', {new=true, value='[ADJ:' .. adj .. ']'})
+    str:insert('#', {new=true, value='[FRONT_COMPOUND_ADJ]'})
+    str:insert('#', {new=true, value='[REAR_COMPOUND_ADJ]'})
+    str:insert('#', {new=true, value='[THE_COMPOUND_ADJ]'})
+    str:insert('#', {new=true, value='[ADJ_DIST:4]'})
   end
   for _,  translation in ipairs(df.global.world.raws.language.translations) do
     translation.words:insert('#', {new=true})
@@ -4042,7 +4082,7 @@ local function expand_lexicons(f)
   -- Words used in conversations
   for _, word in ipairs{'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
                         'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'} do
-    f(true, {function(civ) return {true} end}, 'REPORT;' .. word, '', '', '')
+    f(0, {function(civ) return {0} end}, 'REPORT;' .. word, '', '', '')
   end
   -- Inorganic materials
   for i, inorganic in ipairs(raws.inorganics) do
@@ -4991,6 +5031,7 @@ Loads all lect raw files into `lects`.
 The raw files must match 'lect_*.txt'.
 ]]
 local function load_lects()
+  lects = lects or {}
   local dir = dfhack.getSavePath()
   if not dir then
     return
@@ -5000,6 +5041,7 @@ local function load_lects()
     local path = dir .. '/' .. filename
     if (dfhack.filesystem.isfile(path) and filename:match('^lect_.*%.txt')) then
       io.input(path)
+      local object_seen = false
       local current_lect
       local current_morpheme
       local morphemes_to_backpatch = {}
@@ -5013,11 +5055,11 @@ local function load_lects()
           if subtags[1] == 'OBJECT' then
             if #subtags ~= 2 then
               qerror('Wrong number of subtags: ' .. tag)
-            end
-            if subtags[2] ~= 'LECT' then
+            elseif subtags[2] ~= 'LECT' then
               qerror('Wrong object type: ' .. subtags[2])
             end
-          elseif not lects then
+            object_seen = true
+          elseif not object_seen then
             qerror('Missing OBJECT tag: ' .. filename)
           elseif subtags[1] == 'LECT' then
             if #subtags ~= 1 then
@@ -5088,8 +5130,11 @@ local function load_lects()
               qerror('Orphaned tag: ' .. tag)
             elseif #subtags ~= 2 then
               qerror('Wrong number of subtags: ' .. tag)
+            elseif not current_lect.phonology then
+              qerror('The phonology must be set before the morphemes.')
             end
-            current_morpheme.pword = deserialize_pword(unescape(subtags[2]))
+            current_morpheme.pword = deserialize_pword(
+              current_lect.phonology.nodes, unescape(subtags[2]))
           elseif subtags[1] == 'M_FEATURE' then
             if not current_morpheme then
               qerror('Orphaned tag: ' .. tag)
@@ -5215,7 +5260,6 @@ local function load_lects()
       io.input():close()
     end
   end
-  lects = lects or {}
 end
 
 --[[
