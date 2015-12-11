@@ -87,6 +87,8 @@ A language or dialect.
     only the top-level constituents of this lect.
 All the IDs, features, and feature values of all morphemes and
 constituents in a lect must contain no characters invalid in raw tags.
+Morpheme IDs must be positive integers such that `morphemes` is a
+sequence, and the others must be strings.
 
 Phonology:
   name: A name, for internal use.
@@ -1866,7 +1868,7 @@ synchronized with the splitting and must be fixed by the caller.
 Args:
   grid! The grid to split.
   is_row: Whether to split a row, as opposed to a column.
-  x: The index of the is_row or column to split.
+  x: The index of the row or column to split.
   scalings: A sequence of scalings to make new rows or columns for.
 ]]
 local function split_roc(grid, is_row, x, scalings)
@@ -2772,10 +2774,12 @@ local function random_word(lect)
       pword[#pword + 1] = phoneme
     end
   end
-  local morpheme = m{id=tostring(#lect.morphemes), pword=pword}
+  local morpheme = m{tostring(#lect.morphemes + 1), pword=pword}
   lect.morphemes[#lect.morphemes + 1] = morpheme
   local morphemes = {morpheme}
-  return x{m=morphemes}, morphemes, get_lemma(phonology, pword)
+  local constituent = x{m=morphemes}
+  lect.constituents[morpheme.id] = constituent
+  return constituent, morphemes, get_lemma(phonology, pword)
 end
 
 --[[
@@ -4942,6 +4946,47 @@ local function write_fluency_data()
 end
 
 --[[
+Writes a constituent to a file.
+
+Args:
+  file: An open file handle.
+  constituent: A constituent to write.
+  depth: The depth of the constituent, where a top-level constituent's
+    depth is 1 and any other's is one more than its parent's.
+  id: The constituent's ID, or nil if it is a top-level constituent.
+]]
+local function write_constituent(file, constituent, depth, id)
+  local indent = ('\t'):rep(depth)
+  file:write(indent, '[CONSTITUENT')
+  if id then
+    file:write(':', id)
+  end
+  file:write(']\n')
+  if constituent.n1 then
+    write_constituent(file, constituent.n1, depth + 1)
+  end
+  if constituent.n2 then
+    write_constituent(file, constituent.n2, depth + 1)
+  end
+  for k, v in pairs(constituent.features or {}) do
+    file:write(indent, '\t[C_FEATURE:', tostring(k), ':', tostring(v), ']\n')
+  end
+  for _, morpheme in ipairs(constituent.morphemes or {}) do
+    file:write(indent, '\t[C_MORPHEME:', morpheme.id, ']\n')
+  end
+  if constituent.is_phrase then
+    file:write(indent, '\t[PHRASE]\n')
+  end
+  if constituent.ref then
+    file:write(indent, '\t[REF:', constituent.ref, ']\n')
+  end
+  if constituent.text then
+    file:write(indent, '\t[TEXT:', escape(constituent.text), ']\n')
+  end
+  file:write(indent, '[END_CONSTITUENT]\n')
+end
+
+--[[
 Writes all lects from `lects` to files.
 ]]
 local function write_lect_files()
@@ -4982,47 +5027,6 @@ local function write_lect_files()
     end
     file:close()
   end
-end
-
---[[
-Writes a constituent to a file.
-
-Args:
-  file: An open file handle.
-  constituent: A constituent to write.
-  depth: The depth of the constituent, where a top-level constituent's
-    depth is 1 and any other's is one more than its parent's.
-  id: The constituent's ID, or nil if it is a top-level constituent.
-]]
-local function write_constituent(file, constituent, depth, id)
-  local indent = ('\t'):rep(depth)
-  file:write(indent, '[CONSTITUENT')
-  if id then
-    file:write(':', id)
-  end
-  file:write(']\n')
-  if constituent.n1 then
-    write_constituent(file, constituent.n1, depth + 1)
-  end
-  if constituent.n2 then
-    write_constituent(file, constituent.n2, depth + 1)
-  end
-  for k, v in pairs(constituent.features or {}) do
-    file:write(indent, '\t[C_FEATURE:', tostring(k), ':', tostring(v), ']\n')
-  end
-  for _, morpheme in ipairs(constituent.morphemes or {}) do
-    file:write(indent, '\t[C_MORPHEME:', morpheme.id, ']')
-  end
-  if constituent.is_phrase then
-    file:write(indent, '\t[PHRASE]\n')
-  end
-  if constituent.ref then
-    file:write(indent, '\t[REF:', constituent.ref, ']\n')
-  end
-  if constituent.text then
-    file:write(indent, '\t[TEXT:', escape(constituent.text), ']\n')
-  end
-  file:write(indent, '[END_CONSTITUENT')
 end
 
 --[[
@@ -5123,8 +5127,9 @@ local function load_lects()
             elseif current_lect.morphemes[subtags[2]] then
               qerror('Duplicate morpheme: ' .. subtags[2])
             end
-            current_morpheme = {id=subtags[2], features={}, fusion={}}
-            current_lect.morphemes[subtags[2]] = current_morpheme
+            local id = tonumber(subtags[2])
+            current_morpheme = {id=id, features={}, fusion={}}
+            current_lect.morphemes[id] = current_morpheme
           elseif subtags[1] == 'PWORD' then
             if not current_morpheme then
               qerror('Orphaned tag: ' .. tag)
@@ -5203,6 +5208,9 @@ local function load_lects()
               end
             end
             constituent_stack[#constituent_stack + 1] = new_constituent
+            if subtags[2] then
+              current_lect.constituents[subtags[2]] = new_constituent
+            end
           elseif subtags[1] == 'C_FEATURE' then
             if not next(constituent_stack) then
               qerror('Orphaned tag: ' .. tag)
@@ -5251,7 +5259,7 @@ local function load_lects()
         end
       end
       for _, mtb in ipairs(morphemes_to_backpatch) do
-        local _, morpheme = utils.linear_index(mtb.m, mtb.v, 'id')
+        local _, morpheme = utils.linear_index(mtb.m, tonumber(mtb.v), 'id')
         if not morpheme then
           qerror('No such morpheme: ' .. mtb.v)
         end
