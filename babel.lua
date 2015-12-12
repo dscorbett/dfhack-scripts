@@ -38,6 +38,7 @@ local UTTERANCES_PER_XP = 16
 local MINIMUM_DIMENSION_CACHE_SIZE = 32
 local WORD_SEPARATOR = ' '
 local MORPHEME_SEPARATOR = nil
+local WORD_ID_CHAR = '/'
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -307,6 +308,13 @@ What sort of movement to do when checking a certain feature.
   pied_piping: Whether to pied-pipe the constituents dominated by the
     maximal projection of the moving constituent along with it.
 
+Context:
+A table containing whatever is necessary to complete a syntax tree based
+on the speaker, hearer, and any other non-constant information which may
+differ between utterances of basically the same sentence. See
+`context_key` and `context_callback` in constituent.
+-- TODO: Should the keys be standardized?
+
 Constituent:
 A node in a syntax tree.
   n1: A child constituent.
@@ -324,9 +332,11 @@ A node in a syntax tree.
   moved_to: The constituent to which this constituent was moved, or nil
     if none.
   text: A string to use verbatim in the output.
-  TODO:
-  var: A key to look up in a context table. At most one of `n1`, `word`,
-    `text`, and `var` can be non-nil.
+  context_key: A key to look up in a context. At most one of `n1`,
+    `word`, `text`, and `context_key` can be non-nil.
+  context_callback: A function returning a constituent to replace
+    this one given `context[context_key]` where `context` is a context.
+    It is nil if and only if `context_key` is.
 
 Morpheme:
   id: A unique ID for this morpheme within its language.
@@ -2442,6 +2452,27 @@ local function get_parameters(lect)
 end
 
 --[[
+TODO
+]]
+local function contextualize(constituent, context)
+  local context_key = constituent.context_key
+  if context_key then
+    return constituent.context_callback(content[context_key])
+  end
+  return {
+    n1=constituent.n1 and contextualize(constituent.n1),
+    n2=constituent.n2 and contextualize(constituent.n2),
+    features=constituent.features,
+    morphemes=constituent.morphemes,
+    is_phrase=constituent.is_phrase,
+  }
+end
+
+if TEST then
+  -- TODO
+end
+
+--[[
 Gets a constituent for an utterance.
 
 Args:
@@ -2453,14 +2484,16 @@ Args:
   english: The English text of the utterance.
 
 Returns:
-  The constituent corresponding to the utterance.
+  The ID of the constituent corresponding to the utterance.
+  The context in which the utterance was produced.
 ]]
 local function get_constituent(topic, topic1, topic2, topic3, english)
-  local word
+  local constituent_id
+  local context = {}
   if topic == true then
-    word = 'FORCE_GOODBYE'
+    constituent_id = '/FORCE_GOODBYE'
   elseif topic == df.talk_choice_type.Greet then
-    word = 'GREETINGS'
+    constituent_id = '/GREETINGS'
   --[[
   elseif topic == df.talk_choice_type.Nevermind then
   elseif topic == df.talk_choice_type.Trade then
@@ -2468,7 +2501,7 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   elseif topic == df.talk_choice_type.AskSurroundings then
   ]]
   elseif topic == df.talk_choice_type.SayGoodbye then
-    word = 'GOODBYE'
+    constituent_id = '/GOODBYE'
   --[[
   elseif topic == df.talk_choice_type.AskStructure then
   elseif topic == df.talk_choice_type.AskFamily then
@@ -2483,7 +2516,10 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   elseif topic == df.talk_choice_type.ReplyImpersonate then
   elseif topic == df.talk_choice_type.BringUpIncident then
   elseif topic == df.talk_choice_type.TellNothingChanged then
+  ]]
   elseif topic == df.talk_choice_type.Goodbye2 then
+    constituent_id = '/GOODBYE'
+  --[[
   elseif topic == df.talk_choice_type.ReturnTopic then
   elseif topic == df.talk_choice_type.ChangeSubject then
   elseif topic == df.talk_choice_type.AskTargetAction then
@@ -2493,16 +2529,16 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   ]]
   elseif topic == df.talk_choice_type.StateOpinion then
     if topic1 == 0 then
-      word = 'VIOLENT'
+      constituent_id = '/VIOLENT'
     elseif topic1 == 2 then
-      word = 'INEVITABLE'
+      constituent_id = '/INEVITABLE'
     elseif topic1 == 4 then
-      word = 'TERRIFYING'
+      constituent_id = '/TERRIFYING'
     elseif topic1 == 8 then
-      word = 'DONT_CARE'
+      constituent_id = '/DONT_CARE'
     else
       -- TODO: more opinions
-      word = 'OPINION'
+      constituent_id = '/OPINION'
     end
   -- elseif topic == 28 then
   -- elseif topic == 29 then
@@ -2650,17 +2686,9 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   ]]
   else
     -- TODO: This should never happen, once the above are uncommented.
-    word = ':invalid:'
+    constituent_id = ':invalid:'
   end
-  local languages = df.global.world.raws.language
-  local word_index = utils.linear_index(languages.words, 'REPORT;' .. word,
-                                        'word')
-  if not word_index then
-    return tostring(topic) .. '/' .. topic1 .. '/' .. topic2 .. '/' .. topic3
-  end
-  -- TODO: Instead of `word`, set a constituent.
-  -- TODO: context_callback
-  return constituent
+  return constituent_id, context
 end
 
 --[[
@@ -2685,7 +2713,7 @@ local function transcribe(mwords, phonology)
   local t1 = {}
   for _, mword in ipairs(mwords) do
     local t2 = {}
-    for _, morpheme in ipairs(morpheme) do
+    for _, morpheme in ipairs(mword) do
       t2[#t2 + 1] = get_lemma(phonology, morpheme.pword)
     end
     t1[#t1 + 1] = table.concat(t2, MORPHEME_SEPARATOR)
@@ -2697,7 +2725,7 @@ end
 Translates an utterance into a lect.
 
 Args:
-  lect: The lect to translate into.
+  lect: The lect to translate into, or nil to skip translation.
   topic: An integer corresponding to DFHack's `talk_choice_type` enum,
     or `true` to force a goodbye.
   topic1: An integer whose exact interpretation depends on `topic`.
@@ -2708,9 +2736,16 @@ Args:
 Returns:
   The text of the translated utterance.
 ]]
+local make_utterance  -- TODO
 local function translate(lect, topic, topic1, topic2, topic3, english)
-  print('translate ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
-  local constituent = get_constituent(topic, topic1, topic2, topic3, english)
+  print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+  if not lect then
+    return english
+  end
+  local constituent_id, context =
+    get_constituent(topic, topic1, topic2, topic3, english)
+  print('CID', constituent_id)
+  local constituent = contextualize(lect.constituents[constituent_id], context)
   local mwords =
     make_utterance(constituent, lect.morphemes, get_parameters(lect))
   return transcribe(mwords, lect.phonology)
@@ -2721,13 +2756,14 @@ Randomly generates a word for a lect.
 
 Args:
   lect! A lect.
+  word_id: The ID of the new word.
 
 Returns:
   A constituent representing a random word.
   The sequence of morphemes used by the constituent.
   The lemma of the word as a string.
 ]]
-local function random_word(lect)
+local function random_word(lect, word_id)
   -- TODO: OCP
   -- TODO: Protect against infinite loops due to sonority dead ends.
   local phonology = lect.phonology
@@ -2774,11 +2810,11 @@ local function random_word(lect)
       pword[#pword + 1] = phoneme
     end
   end
-  local morpheme = m{tostring(#lect.morphemes + 1), pword=pword}
+  local morpheme = m{#lect.morphemes + 1, pword=pword}
   lect.morphemes[#lect.morphemes + 1] = morpheme
   local morphemes = {morpheme}
   local constituent = x{m=morphemes}
-  lect.constituents[morpheme.id] = constituent
+  lect.constituents[word_id] = constituent
   return constituent, morphemes, get_lemma(phonology, pword)
 end
 
@@ -3019,12 +3055,19 @@ local function copy_constituent(constituent)
       morphemes[i] = copy_morpheme(morpheme)
     end
   end
-  return {n1=constituent.n1 and copy_constituent(constituent.n1),
-          n2=constituent.n2 and copy_constituent(constituent.n2),
-          features=copyall(constituent.features),
-          morphemes=morphemes, is_phrase=constituent.is_phrase,
-          depth=constituent.depth, ref=constituent.ref,
-          maximal=constituent.maximal, moved_to=constituent.moved_to}
+  return {
+    n1=constituent.n1 and copy_constituent(constituent.n1),
+    n2=constituent.n2 and copy_constituent(constituent.n2),
+    features=copyall(constituent.features),
+    morphemes=morphemes,
+    is_phrase=constituent.is_phrase,
+    depth=constituent.depth,
+    ref=constituent.ref,
+    maximal=constituent.maximal,
+    moved_to=constituent.moved_to,
+    context_key=constituent.context_key,
+    context_callback=constituent.context_callback,
+  }
 end
 
 if TEST then
@@ -3755,7 +3798,7 @@ Returns:
   A sequence of mwords.
 ]]
 -- TODO: What about literal text?
-local function make_utterance(constituent, lexicon, parameters)
+make_utterance = function(constituent, lexicon, parameters)
   local mwords = {}
   for _, mword in ipairs(linearize(do_lowering(
     do_syntax(constituent, lexicon, parameters), parameters), parameters))
@@ -3952,8 +3995,9 @@ Returns:
   A lect, or nil if there is none or `civ` is nil.
 ]]
 local function get_civ_native_lect(civ)
---  print('civ native lect: civ.id=' .. (civ and civ.id or 'nil'))
+  print('civ native lect: civ.id=' .. (civ and civ.id or 'nil'))
   if civ then
+    print('      ' .. #lects)
     local _, lect = utils.linear_index(lects, civ, 'community')
     return lect
   end
@@ -4058,7 +4102,7 @@ Args:
 local function add_word_to_lect(lect, resource_id, resource_functions, word_id)
   for _, f in ipairs(resource_functions) do
     if utils.linear_index(f(lect.community), resource_id) then
-      local _, _, lemma = random_word(lect)
+      local _, _, lemma = random_word(lect, word_id)
       print('civ ' .. lect.community.id, resource_id, lemma)
       lect.lemmas.words[utils.linear_index(
         df.global.world.raws.language.words, word_id, 'word')].value =
@@ -4083,43 +4127,46 @@ Args:
 ]]
 local function expand_lexicons(f)
   local raws = df.global.world.raws
-  -- Words used in conversations
-  for _, word in ipairs{'FORCE_GOODBYE', 'GREETINGS', 'GOODBYE', 'VIOLENT',
-                        'INEVITABLE', 'TERRIFYING', 'DONT_CARE', 'OPINION'} do
-    f(0, {function(civ) return {0} end}, 'REPORT;' .. word, '', '', '')
+  for _, word in ipairs{
+    'FORCE_GOODBYE',
+    'GREETINGS',
+    'GOODBYE',
+    'VIOLENT',
+    'INEVITABLE',
+    'TERRIFYING',
+    'DONT_CARE',
+    'OPINION',
+  } do
+    f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. word, '', '', '')
   end
-  -- Inorganic materials
   for i, inorganic in ipairs(raws.inorganics) do
     f(i,
       {function(civ) return civ.resources.metals end,
        function(civ) return civ.resources.stones end,
        function(civ) return civ.resources.gems end},
-      'INORGANIC;' .. inorganic.id,
+      'INORGANIC' .. WORD_ID_CHAR .. inorganic.id,
       inorganic.material.state_name.Solid,
       '',
       inorganic.material.state_adj.Solid)
   end
-  -- Plants
   for _, plant in ipairs(raws.plants.all) do
     f(plant.anon_1,
       {function(civ) return civ.resources.tree_fruit_plants end,
        function(civ) return civ.resources.shrub_fruit_plants end},
-      'PLANT;' .. plant.id,
+      'PLANT' .. WORD_ID_CHAR .. plant.id,
       plant.name,
       plant.name_plural,
       plant.adj)
   end
   --[[
-  -- Tissues
   for _, tissue in ipairs(raws.tissue_templates) do
     f(?, ?,
-      'TISSUE_TEMPLATE;' .. tissue.id,
+      'TISSUE_TEMPLATE' .. WORD_ID_CHAR .. tissue.id,
       tissue.tissue_name_singular,
       tissue.tissue_name_plural,
       '')
   end
   ]]
-  -- Creatures
   for i, creature in ipairs(raws.creatures.all) do
     f(i,
       {function(civ) return {civ.race} end,
@@ -4133,149 +4180,133 @@ local function expand_lexicons(f)
        function(civ) return civ.resources.animals.mount_races end,
        function(civ) return civ.resources.animals.minion_races end,
        function(civ) return civ.resources.animals.exotic_pet_races end},
-      'CREATURE;' .. creature.creature_id,
+      'CREATURE' .. WORD_ID_CHAR .. creature.creature_id,
       creature.name[0],
       creature.name[1],
       creature.name[2])
   end
-  -- Weapons
   for _, weapon in ipairs(raws.itemdefs.weapons) do
     f(weapon.subtype,
       {function(civ) return civ.resources.digger_type end,
        function(civ) return civ.resources.weapon_type end,
        function(civ) return civ.resources.training_weapon_type end},
-      'ITEM_WEAPON;' .. weapon.id,
+      'ITEM_WEAPON' .. WORD_ID_CHAR .. weapon.id,
       weapon.name,
       weapon.name_plural,
       '')
   end
-  -- Trap components
   for _, trapcomp in ipairs(raws.itemdefs.trapcomps) do
     f(trapcomp.subtype,
       {function(civ) return civ.resources.trapcomp_type end},
-      'ITEM_TRAPCOMP;' .. trapcomp.id,
+      'ITEM_TRAPCOMP' .. WORD_ID_CHAR .. trapcomp.id,
        trapcomp.name,
        trapcomp.name_plural,
        '')
   end
-  -- Toys
   for _, toy in ipairs(raws.itemdefs.toys) do
     f(toy.subtype,
       {function(civ) return civ.resources.toy_type end},
-      'ITEM_TOY;' .. toy.id,
+      'ITEM_TOY' .. WORD_ID_CHAR .. toy.id,
       toy.name,
       toy.name_plural,
       '')
   end
-  -- Tools
   for _, tool in ipairs(raws.itemdefs.tools) do
     f(tool.subtype,
       {function(civ) return civ.resources.toy_type end},
-      'ITEM_TOOL;' .. tool.id,
+      'ITEM_TOOL' .. WORD_ID_CHAR .. tool.id,
       tool.name,
       tool.name_plural,
       '')
   end
-  -- Instruments
   for _, instrument in ipairs(raws.itemdefs.instruments) do
     f(instrument.subtype,
       {function(civ) return civ.resources.instrument_type end},
-      'ITEM_INSTRUMENT;' .. instrument.id,
+      'ITEM_INSTRUMENT' .. WORD_ID_CHAR .. instrument.id,
       instrument.name,
       instrument.name_plural,
       '')
   end
-  -- Armor
   for _, armor in ipairs(raws.itemdefs.armor) do
     f(armor.subtype,
       {function(civ) return civ.resources.armor_type end},
-      'ITEM_ARMOR;' .. armor.id,
+      'ITEM_ARMOR' .. WORD_ID_CHAR .. armor.id,
       armor.name,
       armor.name_plural,
       '')
   end
-  -- Ammo
   for _, ammo in ipairs(raws.itemdefs.ammo) do
     f(ammo.subtype,
       {function(civ) return civ.resources.ammo_type end},
-      'ITEM_AMMO;' .. ammo.id,
+      'ITEM_AMMO' .. WORD_ID_CHAR .. ammo.id,
       ammo.name,
       ammo.name_plural,
       '')
   end
-  -- Siege ammo
   for _, siege_ammo in ipairs(raws.itemdefs.siege_ammo) do
     f(siege_ammo.subtype,
       {function(civ) return civ.resources.siegeammo_type end},
-      'ITEM_SIEGEAMMO;' .. siege_ammo.id,
+      'ITEM_SIEGEAMMO' .. WORD_ID_CHAR .. siege_ammo.id,
       siege_ammo.name,
       siege_ammo.name_plural,
       '')
   end
-  -- Gloves
   for _, glove in ipairs(raws.itemdefs.gloves) do
     f(glove.subtype,
       {function(civ) return civ.resources.gloves_type end},
-      'ITEM_GLOVES;' .. glove.id,
+      'ITEM_GLOVES' .. WORD_ID_CHAR .. glove.id,
       glove.name,
       glove.name_plural,
       '')
   end
-  -- Shoes
   for _, shoe in ipairs(raws.itemdefs.shoes) do
     f(shoe.subtype,
       {function(civ) return civ.resources.shoes_type end},
-      'ITEM_SHOES;' .. shoe.id,
+      'ITEM_SHOES' .. WORD_ID_CHAR .. shoe.id,
       shoe.name,
       shoe.name_plural,
       '')
   end
-  -- Shields
   for _, shield in ipairs(raws.itemdefs.shields) do
     f(shield.subtype,
       {function(civ) return civ.resources.shield_type end},
-      'ITEM_SHIELD;' .. shield.id,
+      'ITEM_SHIELD' .. WORD_ID_CHAR .. shield.id,
       shield.name,
       shield.name_plural,
       '')
   end
-  -- Helms
   for _, helm in ipairs(raws.itemdefs.helms) do
     f(helm.subtype,
       {function(civ) return civ.resources.helm_type end},
-      'ITEM_HELM;' .. helm.id,
+      'ITEM_HELM' .. WORD_ID_CHAR .. helm.id,
       helm.name,
       helm.name_plural,
       '')
   end
-  -- Pants
   for _, pants in ipairs(raws.itemdefs.pants) do
     f(pants.subtype,
       {function(civ) return civ.resources.helm_type end},
-      'ITEM_PANTS;' .. pants.id,
+      'ITEM_PANTS' .. WORD_ID_CHAR .. pants.id,
       pants.name,
       pants.name_plural,
       '')
   end
   --[[
-  -- Food
   for _, food in ipairs(raws.itemdefs.food) do
-    f(?, ?, 'ITEM_FOOD;' .. food.id, food.name, '', '')
+    f(?, ?, 'ITEM_FOOD' .. WORD_ID_CHAR .. food.id, food.name, '', '')
   end
-  -- Buildings
   for _, building in ipairs(raws.buildings.all) do
-    f(?, ?, 'BUILDING;' .. building.id, building.name, '', '')
+    f(?, ?, 'BUILDING' .. WORD_ID_CHAR .. building.id, building.name, '', '')
   end
-  -- Built-in materials
   for _, builtin in ipairs(raws.mat_table.builtin) do
     if builtin then
-      f(?, ?, 'BUILTIN;' .. builtin.id,
+      f(?, ?, 'BUILTIN' .. WORD_ID_CHAR .. builtin.id,
         builtin.state_name.Solid, '', builtin.state_adj.Solid)
     end
   end
-  -- Syndromes
   for _, syndrome in ipairs(raws.syndromes.all) do
-    f(?, ?, 'SYNDROME;' .. syndrome.id, syndrome.syn_name, '', '')
+    f(?, ?, 'SYNDROME' .. WORD_ID_CHAR .. syndrome.id, syndrome.syn_name,
+      '', '')
   end
   ]]
   -- TODO: descriptors
@@ -5586,7 +5617,7 @@ Returns:
   A lect, or nil if there is none.
 ]]
 local function get_hf_native_lect(hf)
---  print('hf native lect: hf.id=' .. hf.id)
+  print('hf native lect: hf.id=' .. hf.id)
   return get_civ_native_lect(df.historical_entity.find(hf.civ_id))
 end
 
@@ -5600,7 +5631,7 @@ Returns:
   A sequence of lects the historical figure knows.
 ]]
 local function get_hf_lects(hf)
---  print('hf lects: hf.id=' .. hf.id)
+  print('hf lects: hf.id=' .. hf.id)
   if not fluency_data[hf.id] then
     local lect = get_hf_native_lect(hf)
     if lect then
@@ -5636,7 +5667,7 @@ Returns:
   A sequence of lects the unit knows.
 ]]
 local function get_unit_lects(unit)
---  print('unit lects: unit.id=' .. unit.id)
+  print('unit lects: unit.id=' .. unit.id)
   local _, hf = utils.linear_index(df.global.world.history.figures,
                                    unit.hist_figure_id, 'id')
   if hf then
@@ -5656,7 +5687,7 @@ Returns:
   The lect of the report.
 ]]
 local function get_report_lect(report)
---  print('report lect: report.id=' .. report.id)
+  print('report lect: report.id=' .. report.id)
   local speaker = df.unit.find(report.unk_v40_3)
   -- TODO: Take hearer's lect knowledge into account.
   if speaker then
@@ -5868,13 +5899,16 @@ local function update_fluency(acquirer, report_lect)
   end
 end
 
+--[[
+TODO
+]]
 local function get_participants(report, conversation)
   local speaker_id = report.unk_v40_3
   local participants = conversation.anon_1
   local speaker = df.unit.find(speaker_id)
   -- TODO: hearer doesn't always exist.
   -- TODO: Solution: cache all <activity_event_conversationst>s' participants.
-  local hearer = #participants ~= 0 and df.unit.find(
+  local hearer = #participants > 1 and df.unit.find(
     participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
   return speaker, hearer
 end
@@ -5906,7 +5940,7 @@ local function get_turn_preamble(report, conversation, adventurer)
   return text .. ': ', force_goodbye
 end
 
-local function replace_turn(conversation_id, new_turn_counts, english, id_delta, report, report_index, announcement_index, adventurer, report_language)
+local function replace_turn(conversation_id, new_turn_counts, english, id_delta, report, report_index, announcement_index, adventurer, report_lect)
   local conversation = df.activity_entry.find(conversation_id).events[0]
   local turn = conversation.anon_9
   turn = turn[#turn - new_turn_counts[conversation_id]]
@@ -5914,7 +5948,7 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   local continuation = false
   local text, force_goodbye =
     get_turn_preamble(report, conversation, adventurer)
-  text = text .. translate(report_language, force_goodbye or turn.anon_3,
+  text = text .. translate(report_lect, force_goodbye or turn.anon_3,
                            turn.anon_11, turn.anon_12, turn.anon_13, english)
   repeat
     id_delta = id_delta + 1
@@ -5934,7 +5968,6 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
       unk_v40_2=report.unk_v40_2,
       unk_v40_3=report.unk_v40_3,
     }
-    print('id='..new_report.id)
     text = text:sub(REPORT_LINE_LENGTH + 1)
     continuation = true
     print('insert: index=' .. report_index .. ' length=' .. #df.global.world.status.reports)
@@ -6058,6 +6091,9 @@ if #args >= 1 then
       dfhack.timeout_active(timer)
     end
   elseif args[1] == 'test' then
+    finalize()
+    initialize()
+    --[[
     phonologies = nil
     load_phonologies()
     local morpheme = m{2, features={n=1}}
@@ -6067,9 +6103,10 @@ if #args >= 1 then
       --print(ps[2], get_lemma(phonologies[1], {ps[1]}))
     end
     for i = 1, 30 do
-      local constituent, morphemes, lemma = random_word(lect)
+      local constituent, morphemes, lemma = random_word(lect, tostring(i))
       print(lemma)
     end
+    ]]
   else
     usage()
   end
