@@ -81,11 +81,11 @@ A language or dialect.
   lemmas: A translation containing the lemmas of this lect.
   community: The civilization that speaks this lect.
   phonology: The phonology this lect uses.
-  morphemes: A lexicon, i.e. a map of morphemes IDs to morphemes
-    containing all the morphemes used in this lect, including those only
-    used in other morphemes.
-  constituents: A map of constituent IDs to constituents containing
-    only the top-level constituents of this lect.
+  morphemes: A map of morphemes IDs to morphemes containing all the
+    morphemes used in this lect, including those only used in other
+    morphemes.
+  constituents: A lexicon, i.e. a map of constituent IDs to constituents
+    containing only the top-level constituents of this lect.
 All the IDs, features, and feature values of all morphemes and
 constituents in a lect must contain no characters invalid in raw tags.
 Morpheme IDs must be positive integers such that `morphemes` is a
@@ -2326,7 +2326,7 @@ end
 Constructs a constituent from a constituent key.
 
 Args:
-  x: A constituent key or a sequence of features.
+  x: A constituent key or a feature table.
 
 Returns:
   If `x` is a constituent key, a constituent using that key as a `ref`
@@ -2465,6 +2465,8 @@ local function contextualize(constituent, context)
     features=constituent.features,
     morphemes=constituent.morphemes,
     is_phrase=constituent.is_phrase,
+    ref=constituent.ref,
+    text=constituent.text,
   }
 end
 
@@ -2484,16 +2486,17 @@ Args:
   english: The English text of the utterance.
 
 Returns:
-  The ID of the constituent corresponding to the utterance.
+  The constituent corresponding to the utterance.
   The context in which the utterance was produced.
 ]]
 local function get_constituent(topic, topic1, topic2, topic3, english)
-  local constituent_id
+  local constituent
   local context = {}
   if topic == true then
-    constituent_id = '/FORCE_GOODBYE'
+    constituent = r'/FORCE_GOODBYE'
+  --[=[
   elseif topic == df.talk_choice_type.Greet then
-    constituent_id = '/GREETINGS'
+    constituent = r'/GREETINGS'
   --[[
   elseif topic == df.talk_choice_type.Nevermind then
   elseif topic == df.talk_choice_type.Trade then
@@ -2501,7 +2504,7 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   elseif topic == df.talk_choice_type.AskSurroundings then
   ]]
   elseif topic == df.talk_choice_type.SayGoodbye then
-    constituent_id = '/GOODBYE'
+    constituent = r'/GOODBYE'
   --[[
   elseif topic == df.talk_choice_type.AskStructure then
   elseif topic == df.talk_choice_type.AskFamily then
@@ -2518,7 +2521,7 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   elseif topic == df.talk_choice_type.TellNothingChanged then
   ]]
   elseif topic == df.talk_choice_type.Goodbye2 then
-    constituent_id = '/GOODBYE'
+    constituent = r'/GOODBYE'
   --[[
   elseif topic == df.talk_choice_type.ReturnTopic then
   elseif topic == df.talk_choice_type.ChangeSubject then
@@ -2529,16 +2532,16 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   ]]
   elseif topic == df.talk_choice_type.StateOpinion then
     if topic1 == 0 then
-      constituent_id = '/VIOLENT'
+      constituent = r'/VIOLENT'
     elseif topic1 == 2 then
-      constituent_id = '/INEVITABLE'
+      constituent = r'/INEVITABLE'
     elseif topic1 == 4 then
-      constituent_id = '/TERRIFYING'
+      constituent = r'/TERRIFYING'
     elseif topic1 == 8 then
-      constituent_id = '/DONT_CARE'
+      constituent = r'/DONT_CARE'
     else
       -- TODO: more opinions
-      constituent_id = '/OPINION'
+      constituent = r'/OPINION'
     end
   -- elseif topic == 28 then
   -- elseif topic == 29 then
@@ -2686,9 +2689,12 @@ local function get_constituent(topic, topic1, topic2, topic3, english)
   ]]
   else
     -- TODO: This should never happen, once the above are uncommented.
-    constituent_id = ':invalid:'
+    constituent = {text='... (' .. english .. ')'}
+  ]=]
+  else
+    constituent = r(WORD_ID_CHAR .. df.talk_choice_type[topic])
   end
-  return constituent_id, context
+  return constituent, context
 end
 
 --[[
@@ -2742,12 +2748,10 @@ local function translate(lect, topic, topic1, topic2, topic3, english)
   if not lect then
     return english
   end
-  local constituent_id, context =
-    get_constituent(topic, topic1, topic2, topic3, english)
-  print('CID', constituent_id)
-  local constituent = contextualize(lect.constituents[constituent_id], context)
+  local constituent =
+    contextualize(get_constituent(topic, topic1, topic2, topic3, english))
   local mwords =
-    make_utterance(constituent, lect.morphemes, get_parameters(lect))
+    make_utterance(constituent, lect.constituents, get_parameters(lect))
   return transcribe(mwords, lect.phonology)
 end
 
@@ -3065,6 +3069,7 @@ local function copy_constituent(constituent)
     ref=constituent.ref,
     maximal=constituent.maximal,
     moved_to=constituent.moved_to,
+    text=constituent.text,
     context_key=constituent.context_key,
     context_callback=constituent.context_callback,
   }
@@ -3588,7 +3593,7 @@ local function do_syntax(constituent, lexicon, parameters)
         end
         return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
-        qerror('No morpheme with ID ' .. constituent.ref)
+        qerror('No constituent with ID ' .. constituent.ref)
       else
         constituent.maximal = maximal
         for _, morpheme in ipairs(constituent.morphemes) do
@@ -4127,17 +4132,12 @@ Args:
 ]]
 local function expand_lexicons(f)
   local raws = df.global.world.raws
-  for _, word in ipairs{
-    'FORCE_GOODBYE',
-    'GREETINGS',
-    'GOODBYE',
-    'VIOLENT',
-    'INEVITABLE',
-    'TERRIFYING',
-    'DONT_CARE',
-    'OPINION',
-  } do
-    f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. word, '', '', '')
+  f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. 'FORCE_GOODBYE',
+    '', '', '')
+  for _, topic in ipairs(df.talk_choice_type) do
+    if topic then
+      f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. topic, '', '', '')
+    end
   end
   for i, inorganic in ipairs(raws.inorganics) do
     f(i,
