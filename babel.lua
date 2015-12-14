@@ -48,9 +48,8 @@ local total_handlers = {
   get={},
   process_new={},
   types={
-    -- TODO: Track structures.
+    -- TODO: Track buildings.
     'historical_figures',
-    'units',  -- TODO: should not be persistent
     'entities',
     'sites',
     'artifacts',
@@ -59,6 +58,10 @@ local total_handlers = {
   }
 }
 local next_report_index = 0
+local region_x = -1
+local region_y = -1
+local region_z = -1
+local unit_count = -1
 
 local phonologies = nil
 local lects = nil
@@ -5726,6 +5729,10 @@ local function initialize()
   df.global.world.status.announcements:resize(0)
   df.global.world.status.reports:resize(0)
   next_report_index = 0
+  region_x = -1
+  region_y = -1
+  region_z = -1
+  unit_count = -1
   df.global.world.status.next_report_id = 0
 end
 
@@ -5833,16 +5840,6 @@ Args:
 function total_handlers.process_new.historical_figures(historical_figure)
   if is_unprocessed_hf(historical_figure) then
     historical_figure.name.nickname = 'Hf' .. historical_figure.id
-  end
-end
-
-function total_handlers.get.units()
-  return df.global.world.units.all
-end
-
-function total_handlers.process_new.units(unit, i)
-  if unit.hist_figure_id == -1 then
-    unit.name.nickname = 'U' .. i
   end
 end
 
@@ -5983,6 +5980,27 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   return id_delta, report_index, announcement_index
 end
 
+local function handle_new_units()
+  local map = df.global.world.map
+  local units = df.global.world.units.all
+  if (region_x == map.region_x and
+      region_y == map.region_y and
+      region_z == map.region_z and
+      unit_count == #units) then
+    return
+  end
+  print(#units .. ' @ ' .. region_x .. ',' .. region_y .. ',' .. region_z)
+  region_x = map.region_x
+  region_y = map.region_y
+  region_z = map.region_z
+  unit_count = #units
+  for i, unit in ipairs(units) do
+    if unit.hist_figure_id == -1 then
+      unit.name.nickname = 'U' .. i
+    end
+  end
+end
+
 local function handle_new_reports()
   local reports = df.global.world.status.reports
   if #reports <= next_report_index then
@@ -6038,6 +6056,7 @@ local function run()
   for i, item_type in ipairs(total_handlers.types) do
     handle_new_items(i, item_type)
   end
+  handle_new_units()
   handle_new_reports()
   local viewscreen = dfhack.gui.getCurViewscreen()
   if dfhack.gui.getFocusString(viewscreen) == 'option' then
