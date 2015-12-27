@@ -2481,221 +2481,670 @@ end
 Gets a constituent for an utterance.
 
 Args:
-  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
-    or `true` to force a goodbye.
+  force_goodbye: Whether to force a goodbye.
+  topic: A `talk_choice_type`.
   topic1: An integer whose exact interpretation depends on `topic`.
   topic2: Ditto.
   topic3: Ditto.
+  topic4: Ditto.
   english: The English text of the utterance.
 
 Returns:
   The constituent corresponding to the utterance.
   The context in which the utterance was produced.
 ]]
-local function get_constituent(topic, topic1, topic2, topic3, english)
+local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
+                               topic4, english)
+  -- TODO: Double spaces may be collapsed when concatenating reports.
+  -- TODO: [LISP]ing multiplies <s>es.
+  -- TODO: The first non-whitespace character of a sentence is capitalized.
+  -- TODO: So don't rely on the exact contents of `english`.
   local constituent
   local context = {}
-  if topic == true then
-    constituent = r'/FORCE_GOODBYE'
-  --[=[
+  if force_goodbye then
+    ----
   elseif topic == df.talk_choice_type.Greet then
-    constituent = r'/GREETINGS'
-  --[[
+    ----
+    -- "Hey" / "Hello" / "Greetings" / "Salutations"
+    -- etc.
   elseif topic == df.talk_choice_type.Nevermind then
+    -- N/A
   elseif topic == df.talk_choice_type.Trade then
+    -- "Let's trade."
   elseif topic == df.talk_choice_type.AskJoin then
+    -- N/A
   elseif topic == df.talk_choice_type.AskSurroundings then
-  ]]
+    -- "Tell me about this area."
   elseif topic == df.talk_choice_type.SayGoodbye then
-    constituent = r'/GOODBYE'
-  --[[
+    ----
+    -- "Goodbye."
   elseif topic == df.talk_choice_type.AskStructure then
+    -- only when in a structure?
   elseif topic == df.talk_choice_type.AskFamily then
+    -- "Tell me about your family."
   elseif topic == df.talk_choice_type.AskProfession then
+    -- "You look like a mighty warrior indeed."
   elseif topic == df.talk_choice_type.AskPermissionSleep then
+    -- crash!
   elseif topic == df.talk_choice_type.AccuseNightCreature then
+    -- "Whosoever would blight the world, preying on the helpless, fear me!  I call you a child of the night and will slay you where you stand."
   elseif topic == df.talk_choice_type.AskTroubles then
+    -- "How have things been?" / "How's life here?"
   elseif topic == df.talk_choice_type.BringUpEvent then
+    -- ?
   elseif topic == df.talk_choice_type.SpreadRumor then
+    -- ?
   elseif topic == df.talk_choice_type.ReplyGreeting then
+    ----
+    -- "Hello"
+    -- ".  It is good to see you."
   elseif topic == df.talk_choice_type.RefuseConversation then
+    -- "You are my neighbor."
+    -- ?
   elseif topic == df.talk_choice_type.ReplyImpersonate then
+    -- "Behold mortal.  I am "
+    -- "a divine being"
+    -- ".  I know why you have come."
   elseif topic == df.talk_choice_type.BringUpIncident then
+    ----
+    -- ?
   elseif topic == df.talk_choice_type.TellNothingChanged then
-  ]]
+    -- "It has been the same as ever."
   elseif topic == df.talk_choice_type.Goodbye2 then
-    constituent = r'/GOODBYE'
-  --[[
+    ----
+    -- "Goodbye."
   elseif topic == df.talk_choice_type.ReturnTopic then
+    -- N/A
   elseif topic == df.talk_choice_type.ChangeSubject then
+    -- N/A
   elseif topic == df.talk_choice_type.AskTargetAction then
+    -- "What will you do about it?"
   elseif topic == df.talk_choice_type.RequestSuggestAction then
+    -- "What should I do about it?"
   elseif topic == df.talk_choice_type.AskJoinInsurrection then
+    -- "Join me and we can shake off the yoke of "
+    -- "the oppressors"
+    -- " from "
+    -- "the weary shoulders of the people of "
+    -- "this place"
+    -- " forever!"
   elseif topic == df.talk_choice_type.AskJoinRescue then
-  ]]
+    -- "Join me and we'll bring "
+    -- "this poor soul"
+    -- " back home!"
   elseif topic == df.talk_choice_type.StateOpinion then
+    ----
     if topic1 == 0 then
-      constituent = r'/VIOLENT'
+      -- "This must be stopped by any means at our disposal."
+      -- / "They must be stopped by any means at our disposal."
+    elseif topic1 == 1 then
+      -- "It's not my problem."
     elseif topic1 == 2 then
-      constituent = r'/INEVITABLE'
+      -- "It was inevitable."
+    elseif topic1 == 3 then
+      -- "This is the life for me."
     elseif topic1 == 4 then
-      constituent = r'/TERRIFYING'
+      -- "It is terrifying."
+    elseif topic1 == 5 then
+      -- "I don't know anything about that."
+    elseif topic1 == 6 then
+      -- "We are in the right in all matters."
+    elseif topic1 == 7 then
+      -- "It's for the best."
     elseif topic1 == 8 then
-      constituent = r'/DONT_CARE'
+      -- "I don't care one way or another."
+    elseif topic1 == 9 then
+      -- "I hate it." / "I hate them."
+    elseif topic1 == 10 then
+      -- "I am afraid of it." / "I am afriad of them."
+    elseif topic1 == 12 then
+      -- "That is sad but not unexpected."
+    elseif topic1 == 12 then
+      -- "That is terrible."
+    elseif topic1 == 13 then
+      -- "That's terrific!"
     else
-      -- TODO: more opinions
-      constituent = r'/OPINION'
+      -- ?
     end
-  -- elseif topic == 28 then
-  -- elseif topic == 29 then
-  --[[
+  elseif topic == 27 then  -- respond to invitation to insurrection
+    -- topic1: invitation response
+  elseif topic == 28 then
+    -- "I'm with you on this."
   elseif topic == df.talk_choice_type.AllowPermissionSleep then
+    -- "Uh... what was that?"
+    -- ?
   elseif topic == df.talk_choice_type.DenyPermissionSleep then
-  -- elseif topic == 32 then
+    -- "Ah, I'm sorry.  Permission is not mine to give."
+  elseif topic == 31 then
+    -- Seems to do nothing, like Nevermind?
   elseif topic == df.talk_choice_type.AskJoinAdventure then
+    -- "Come, join me on my adventures!"
   elseif topic == df.talk_choice_type.AskGuideLocation then
+    -- N/A
   elseif topic == df.talk_choice_type.RespondJoin then
+    -- topic1: invitation response
   elseif topic == df.talk_choice_type.RespondJoin2 then
+    -- topic1: invitation response
   elseif topic == df.talk_choice_type.OfferCondolences then
+    -- "My condolences."
   elseif topic == df.talk_choice_type.StateNotAcquainted then
+    -- "We weren't personally acquainted."
   elseif topic == df.talk_choice_type.SuggestTravel then
+    -- "You should travel to "
+    -- topic1: world_site key
+    -- "."
   elseif topic == df.talk_choice_type.SuggestTalk then
+    -- "You should talk to "
+    -- topic1: historical_figure key
+    -- "."
   elseif topic == df.talk_choice_type.RequestSelfRescue then
+    ----
+    -- "Please help me!"
   elseif topic == df.talk_choice_type.AskWhatHappened then
+    -- "What happened?"
   elseif topic == df.talk_choice_type.AskBeRescued then
+    -- "Come with me and I'll bring you to safety."
   elseif topic == df.talk_choice_type.SayNotRemember then
-  -- elseif topic == 45 then
+    -- "I don't remember clearly."
+  elseif topic == 44 then
+    -- "Thank you!"
   elseif topic == df.talk_choice_type.SayNoFamily then
+    -- "I have no family to speak of."
   elseif topic == df.talk_choice_type.StateUnitLocation then
+    -- topic1: historical_figure key
+    -- " lives in "
+    -- topic2: world_site key
+    -- "."
   elseif topic == df.talk_choice_type.ReferToElder then
+    -- "You'll have to talk to somebody older."
   elseif topic == df.talk_choice_type.AskComeCloser then
+    -- "Fantastic!  Please come closer and ask again."
   elseif topic == df.talk_choice_type.DoBusiness then
+    -- "Of course.  Let's do business."
   elseif topic == df.talk_choice_type.AskComeStoreLater then
+    -- "Come see me in my store sometime."
   elseif topic == df.talk_choice_type.AskComeMarketLater then
+    -- "Come see me in the market sometime."
   elseif topic == df.talk_choice_type.TellTryShopkeeper then
+    -- "You should probably try a shopkeeper."
   elseif topic == df.talk_choice_type.DescribeSurroundings then
+    -- ?
   elseif topic == df.talk_choice_type.AskWaitUntilHome then
+    -- "Ask me when I've returned to my home!"
   elseif topic == df.talk_choice_type.DescribeFamily then
+    -- ?
   elseif topic == df.talk_choice_type.StateAge then
+    -- "I'm "
+    -- speaker's age in years
+    -- "!"
   elseif topic == df.talk_choice_type.DescribeProfession then
+    -- "I am "
+    -- speaker's profession
+    -- "."
   elseif topic == df.talk_choice_type.AnnounceNightCreature then
+    -- "Fool!"
+    -- Brag
   elseif topic == df.talk_choice_type.StateIncredulity then
+    -- "What is this madness?  Calm yourself!"
   elseif topic == df.talk_choice_type.BypassGreeting then
+    -- N/A
   elseif topic == df.talk_choice_type.AskCeaseHostilities then
+    ----
+    -- "Let us stop this pointless fighting!"
   elseif topic == df.talk_choice_type.DemandYield then
+    ----
+    -- "You must yield!"
   elseif topic == df.talk_choice_type.HawkWares then
+    ----
+    -- "try" / "get your" / "your very own"
+    -- "real" / "authentic"
+    -- topic1: item key
+    -- "clear" / "all the way"
+    -- "from"
+    -- "distant" / "faraway" / "fair" / "the great"
+    -- "here" / "right here"
+    -- "!  Today only" / "!  Limited supply" / "!  Best price in town"
+    -- " were " / " was "
+    -- "tanned" / "cut" / "made"
+    -- "town" / "the surrounding area" / "just outside town" / "a village nearby" / "the settlements"
+    -- " out to the"
+    -- "some of my kind " / "some of our kind "
+    -- "Are you interested in " / "Might I interest you in "
+    -- "Great" / "Splendid" / "Good" / "Decent" / "Fantastic" / "Excellent"
+    -- "right there"
+    -- "my good "
+    -- "man" / "woman" / "person"
+    -- topic2: ?
+    -- topic3: ?
   elseif topic == df.talk_choice_type.YieldTerror then
+    ----
+    -- "Stop!  This isn't happening!"
   elseif topic == df.talk_choice_type.Yield then
+    ----
+    -- "I yield!  I yield!" / "We yield!  We yield!"
   elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
+    ----
+    -- topic1: emotion_type
+    -- topic2: unit_thought_type
+    -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressGreatEmotion then
+    ----
+    -- topic1: emotion_type
+    -- topic2: unit_thought_type
+    -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressEmotion then
+    ----
+    -- topic1: emotion_type
+    -- topic2: unit_thought_type
+    -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressMinorEmotion then
+    ----
+    -- topic1: emotion_type
+    -- topic2: unit_thought_type
+    -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressLackEmotion then
+    ----
+    -- topic1: emotion_type
+    -- topic2: unit_thought_type
+    -- topic3,4: various
   elseif topic == df.talk_choice_type.OutburstFleeConflict then
+    ----
+    -- "Help!  Save me!"
   elseif topic == df.talk_choice_type.StateFleeConflict then
+    ----
+    -- "I must withdraw!"
   elseif topic == df.talk_choice_type.MentionJourney then
+    -- "I've forgotten what I was going to say..."
+    -- ?
   elseif topic == df.talk_choice_type.SummarizeTroubles then
+    ----
+    -- "Well, let's see..."
+    -- ?
+    -- / incident summary
   elseif topic == df.talk_choice_type.AskAboutIncident then
+    -- "Tell me about "
+    -- topic1: trouble type
+    -- topic2: number of troubles
+    -- "."
   elseif topic == df.talk_choice_type.AskDirectionsPerson then
+    -- N/A
   elseif topic == df.talk_choice_type.AskDirectionsPlace then
+    -- "Can you tell me the way to "
+    -- topic1: world_site key
+    -- "?"
   elseif topic == df.talk_choice_type.AskWhereabouts then
+    -- "Can you tell me where I can find "
+    -- topic1: historical_figure key
+    -- "?"
   elseif topic == df.talk_choice_type.RequestGuide then
+    -- "Please guide me to "
+    -- topic1: world_site key
+    -- "."
   elseif topic == df.talk_choice_type.RequestGuide2 then
+    -- "Please guide me to "
+    -- topic1: historical_figure key
+    -- "."
   elseif topic == df.talk_choice_type.ProvideDirections then
+    -- topic1: world_site key
+    -- " is "
+    -- "far"?
+    -- " to the "
+    -- compass direction
+    -- ".  [You receive a detailed description.]  "
+    -- historical event involving the site
+    -- / "No such place exists."
   elseif topic == df.talk_choice_type.ProvideWhereabouts then
+    -- topic1: historical_figure key
+    -- " is in "
+    -- whereabouts
+    -- "."
   elseif topic == df.talk_choice_type.TellTargetSelf then
+    -- "That's me.  I'm right here."
   elseif topic == df.talk_choice_type.TellTargetDead then
+    -- topic1: historical_figure key
+    -- " is dead."
   elseif topic == df.talk_choice_type.RecommendGuide then
+    -- topic1: historical_figure key
+    -- " is well-traveled and would probably have that information."
   elseif topic == df.talk_choice_type.ProfessIgnorance then
+    -- ?
   elseif topic == df.talk_choice_type.TellAboutPlace then
+    -- crash!
   elseif topic == df.talk_choice_type.AskFavorMenu then
+    -- N/A
   elseif topic == df.talk_choice_type.AskWait then
+    -- "Wait here until I return."
   elseif topic == df.talk_choice_type.AskFollow then
+    -- "Let's continue onward together."
   elseif topic == df.talk_choice_type.ApologizeBusy then
+    -- "Sorry, I'm otherwise occupied."
   elseif topic == df.talk_choice_type.ComplyOrder then
+    -- "Of course."
   elseif topic == df.talk_choice_type.AgreeFollow then
+    -- "Yes, let's go."
   elseif topic == df.talk_choice_type.ExchangeItems then
+    -- "Here's something you might be interested in..."
   elseif topic == df.talk_choice_type.AskComeCloser2 then
+    -- "Really?  Please come closer."
   elseif topic == df.talk_choice_type.InitiateBarter then
+    -- "Really?  Alright."
   elseif topic == df.talk_choice_type.AgreeCeaseHostile then
+    -- "I will fight no more."
+    -- ? / "We will fight no more."
   elseif topic == df.talk_choice_type.RefuseCeaseHostile then
+    -- "I am compelled to continue!"
+    -- ? / "Over my dead body!"
   elseif topic == df.talk_choice_type.RefuseCeaseHostile2 then
+    -- "Never!"
   elseif topic == df.talk_choice_type.RefuseYield then
+    -- "I am compelled to continue!"
+    -- ? / "Over my dead body!"
   elseif topic == df.talk_choice_type.RefuseYield2 then
+    -- "You first, coward!"
   elseif topic == df.talk_choice_type.Brag then
+    -- ?
   elseif topic == df.talk_choice_type.DescribeRelation then
-  -- elseif topic == 105 then
+    -- ?
+  elseif topic == 104 then
+    -- "I'm in charge of "
+    -- this site
+    -- " now.  Make way for "
+    -- speaker's title
+    -- " "
+    -- speaker's name
+    -- " and "
+    -- new group
+    -- "!"
   elseif topic == df.talk_choice_type.AnnounceLairHunt then
+    -- ?
   elseif topic == df.talk_choice_type.RequestDuty then
+    -- "I am your loyal "
+    -- hearthperson
+    -- ".  What do you command?"
   elseif topic == df.talk_choice_type.AskJoinService then
+    -- "I would be honored to serve as a "
+    -- hearthperson
+    -- ".  Will you have me?"
   elseif topic == df.talk_choice_type.AcceptService then
+    -- "Gladly.  You are now one of my "
+    -- hearthpeople
+    -- "."
   elseif topic == df.talk_choice_type.TellRemainVigilant then
+    -- "You may enjoy these times of peace, but remain vigilant."
   elseif topic == df.talk_choice_type.GiveServiceOrder then
+    -- ?
   elseif topic == df.talk_choice_type.WelcomeSelfHome then
-  -- elseif topic == 113 then
+    -- "This is my new home."
+  elseif topic == 112 then
+    -- topic1: invitation response
   elseif topic == df.talk_choice_type.AskTravelReason then
+    -- "Why are you traveling?"
   elseif topic == df.talk_choice_type.TellTravelReason then
+    -- "I'm returning to my home in"
+    -- "I'm going to"
+    -- " to take up my position"
+    -- " as"
+    -- " to move into my new home with"
+    -- "spouse"
+    -- "wife"
+    -- "husband"
+    -- " to start a new life"
+    -- " in search of a thrilling adventure"
+    -- " in search of excitement"
+    -- " in search of adventure"
+    -- " in search of work"
+    -- ", and wealth and pleasures beyond measure!"
+    -- ".   Perhaps I'll finally make my fortune!"
+    -- " and maybe something to drink as well!"
+    -- "I'm on an important mission."
+    -- "I'm returning from my patrol."
+    -- "I'm just out for a stroll."
+    -- "I was just out for some water."
+    -- "I was out visiting the temple."
+    -- "I was just out at the tavern."
+    -- "I was out visiting the library."
+    -- "I'm walking my patrol."
+    -- "I'm going out for some water."
+    -- "I'm going to visit the temple."
+    -- "I'm going out to the tavern."
+    -- "I'm going to visit the library."
+    -- "I'm not planning a journey."
   elseif topic == df.talk_choice_type.AskLocalRuler then
+    -- "Tell me about the local ruler."
   elseif topic == df.talk_choice_type.ComplainAgreement then
+    -- ?
   elseif topic == df.talk_choice_type.CancelAgreement then
+    -- "We can no longer travel together."
   elseif topic == df.talk_choice_type.SummarizeConflict then
+    ----
+    -- ?
   elseif topic == df.talk_choice_type.SummarizeViews then
+    ----
+    -- topic1: historical_figure key
+    -- " rules "
+    -- site
+    -- "."
+    -- / " is a group of "
+    -- race
+    -- "I don't know anything else about them."
+    -- "I don't care one way or another."
+    -- "The seat of "
+    -- HF
+    -- " is also located here."
   elseif topic == df.talk_choice_type.AskClaimStrength then
+    -- "Do they have a firm grip on these lands?"
   elseif topic == df.talk_choice_type.AskArmyPosition then
+    -- "Where are their forces?  Are there patrols or guards?"
   elseif topic == df.talk_choice_type.AskOtherClaims then
+    -- "Does anybody else still have a stake in these lands?"
   elseif topic == df.talk_choice_type.AskDeserters then
+    -- "Did anybody flee the attack?"
   elseif topic == df.talk_choice_type.AskSiteNeighbors then
+    -- "Does this settlement engage in trade?  Tell me about those places."
   elseif topic == df.talk_choice_type.DescribeSiteNeighbors then
+    -- " trades directly with no fewer than"
+    -- " other major settlements."
+    -- "  The largest of these is"
+    -- " engages in trade with"
+    -- "There are"
+    -- " villages which utilize the market here."
+    -- "The villages"
+    -- "The village"
+    -- " is the only other settlement to utilize the market here."
+    -- " utilize the market here."
+    -- "This place is insulated from the rest of the world, at least in terms of trade."
+    -- "The people of"
+    -- " go to"
+    -- " to trade."
+    -- " other villages which utilize the market there."
+    -- " is the only other settlement to utilize the market there."
+    -- " also utilize the market there."
+    -- ? "There's nothing organized here."
   elseif topic == df.talk_choice_type.RaiseAlarm then
+    -- "Intruder!  Intruder!"
   elseif topic == df.talk_choice_type.DemandDropWeapon then
+    ----
+    -- "Drop the "
+    -- topic1: item key
+    -- "!"
   elseif topic == df.talk_choice_type.AgreeComplyDemand then
+    ----
+    -- "Okay!  I'll do it."
   elseif topic == df.talk_choice_type.RefuseComplyDemand then
+    ----
+    -- "Over my dead body!"
   elseif topic == df.talk_choice_type.AskLocationObject then
+    -- "Where is the "
+    -- topic1: item key
+    -- "?"
   elseif topic == df.talk_choice_type.DemandTribute then
+    -- topic1: historical_entity key
+    -- " must pay homage to "
+    -- topic2: historical_entity key
+    -- " or suffer the consequences."
   elseif topic == df.talk_choice_type.AgreeGiveTribute then
+    -- "I agree to submit to your request."
   elseif topic == df.talk_choice_type.RefuseGiveTribute then
+    -- "I will not bow before you."
   elseif topic == df.talk_choice_type.OfferGiveTribute then
+    -- topic1: historical_entity key
+    -- " offers to pay homage to "
+    -- topic2: historical_entity key
+    -- "."
   elseif topic == df.talk_choice_type.AgreeAcceptTribute then
+    -- "I accept your offer."
   elseif topic == df.talk_choice_type.RefuseAcceptTribute then
+    -- "I have no reason to accept this."
   elseif topic == df.talk_choice_type.CancelTribute then
+    -- topic1: historical_entity key
+    -- " will no longer pay homage to "
+    -- topic2: historical_entity key
+    -- "."
   elseif topic == df.talk_choice_type.OfferPeace then
+    -- "Let there be peace between "
+    -- topic1: historical_entity key
+    -- " and "
+    -- topic1: historical_entity key
+    -- "."
   elseif topic == df.talk_choice_type.AgreePeace then
+    -- "Gladly.  May this new age of harmony last a thousand year."
   elseif topic == df.talk_choice_type.RefusePeace then
+    -- "Never."
   elseif topic == df.talk_choice_type.AskTradeDepotLater then
+    -- "Come see me at the trade depot sometime."
   elseif topic == df.talk_choice_type.ExpressAstonishment then
+    -- topic1: historical_figure key
+    -- ", is it really you?" / "!"
+    -- / other strings for specific family members
   elseif topic == df.talk_choice_type.CommentWeather then
+    ----
+    -- "It is scorching hot!"
+    -- "It is freezing cold!"
+    -- "Is that"
+    -- " falling outside?"
+    -- "Looks like rain outside."
+    -- "Looks to be snowing outside."
+    -- "Look at the fog out there!"
+    -- "There is fog outside."
+    -- "There is a mist outside."
+    -- "Seems a pleasant enough"
+    -- "day"
+    -- "night"
+    -- "dawn"
+    -- "sunset"
+    -- " out there."
+    -- "I wonder what the weather is like outside."
+    -- "What is this?"
+    -- "It is raining."
+    -- "It is snowing."
+    -- "Curse this fog!  I cannot see a thing."
+    -- "I hope this fog lifts soon."
+    -- "I hope this mist passes."
+    -- "Look at those clouds!"
+    -- "The weather does not look too bad today."
+    -- "The weather looks to be fine today."
+    -- "The stars are bold tonight."
+    -- "It is a starless night."
+    -- "It is hot."
+    -- "It is cold."
+    -- "What a wind!"
+    -- "  And what a wind!"
+    -- "It is a nice temperature today."
   elseif topic == df.talk_choice_type.CommentNature then
+    ----
+    -- "Look at the sky!  Are we in the Underworld?"
+    -- "What an odd glow!"
+    -- "At least it doesn't rain down here."
+    -- "Is it raining?"
+    -- "I have confidence in your abilities."
+    -- "What a strange place!"
+    -- "It is invigorating to be out in the wilds!"
+    -- "It is good to be outdoors."
+    -- "Indoors, outdoors.  It's all the same to me as long as the weather's fine."
+    -- "How I long for civilization..."
+    -- "I would prefer to be indoors."
+    -- "How sinister the glow..."
+    -- "I would prefer to be outdoors."
+    -- "It is good to be indoors."
+    -- "It sure is dark down here."
   elseif topic == df.talk_choice_type.SummarizeTerritory then
+    -- "I don't really know."
+    -- ?
   elseif topic == df.talk_choice_type.SummarizePatrols then
+    -- "I have no idea."
+    -- ?
   elseif topic == df.talk_choice_type.SummarizeOpposition then
+    -- entity 1
+    -- " and "
+    -- entity 2
+    -- " are vying for control."
   elseif topic == df.talk_choice_type.DescribeRefugees then
+    -- "Nobody I remember."
+    -- ?
   elseif topic == df.talk_choice_type.AccuseTroublemaker then
+    -- "You sound like a troublemaker."
   elseif topic == df.talk_choice_type.AskAdopt then
+    -- ?
   elseif topic == df.talk_choice_type.AgreeAdopt then
+    -- ?
   elseif topic == df.talk_choice_type.RefuseAdopt then
+    -- "I'm sorry, but I'm unable to help."
   elseif topic == df.talk_choice_type.RevokeService then
+    -- "I am confused."
+    -- ?
   elseif topic == df.talk_choice_type.InviteService then
+    -- ?
   elseif topic == df.talk_choice_type.AcceptInviteService then
+    -- ?
   elseif topic == df.talk_choice_type.RefuseShareInformation then
+    -- "I'd rather not say."
   elseif topic == df.talk_choice_type.RefuseInviteService then
+    -- "I cannot accept this honor.  I am sorry."
   elseif topic == df.talk_choice_type.RefuseRequestService then
+    -- "You are not worthy of such an honor yet."
   elseif topic == df.talk_choice_type.OfferService then
+    -- "Would you agree to become "
+    -- "someone"
+    -- " of "
+    -- topic1: historical_entity key
+    -- ", taking over my duties and responsibilities?"
   elseif topic == df.talk_choice_type.AcceptPositionService then
+    -- "I accept this honor."
   elseif topic == df.talk_choice_type.RefusePositionService then
+    -- "I am sorry, but I am otherwise disposed."
   elseif topic == df.talk_choice_type.InvokeNameBanish then
+    -- topic2: identity key
+    -- "!  The bond is broken!  Return to the Underworld and trouble us no more!"
   elseif topic == df.talk_choice_type.InvokeNameService then
+    -- topic2: identity key
+    -- "!"  You are bound to me!"
   elseif topic == df.talk_choice_type.GrovelMaster then
+    -- "Yes, master.  Ask and I shall obey."
   elseif topic == df.talk_choice_type.DemandItem then
+    -- N/A
   elseif topic == df.talk_choice_type.GiveServiceReport then
+    -- ?
   elseif topic == df.talk_choice_type.OfferEncouragement then
+    -- "I have confidence in your abilities."
   elseif topic == df.talk_choice_type.PraiseTaskCompleter then
-  ]]
-  else
+    -- "Commendable!  Your loyalty and bravery cannot be denied."
+  elseif topic == 169 then  -- Ask about somebody (new menu)
+    -- N/A
+  elseif topic == 170 then
+    -- "What can you tell me about "
+    -- topic1: historical_figure key
+    -- "?"
+  elseif topic == 171 then  -- respond to question about someone
+    -- topic1: historical_figure key
+    -- ?
+  elseif topic == 172 then
+    -- "How are you feeling right now?"
+  elseif topic == 173 then  -- Say something about your emotions or thoughts
+    -- ?
+  end
+  if not constituent then
     -- TODO: This should never happen, once the above are uncommented.
     constituent = {text='... (' .. english .. ')'}
-  ]=]
-  else
-    constituent = r(WORD_ID_CHAR .. df.talk_choice_type[topic])
   end
   return constituent, context
 end
@@ -2735,24 +3184,26 @@ Translates an utterance into a lect.
 
 Args:
   lect: The lect to translate into, or nil to skip translation.
-  topic: An integer corresponding to DFHack's `talk_choice_type` enum,
-    or `true` to force a goodbye.
+  force_goodbye: Whether to force a goodbye.
+  topic: A `talk_choice_type`.
   topic1: An integer whose exact interpretation depends on `topic`.
   topic2: Ditto.
   topic3: Ditto.
+  topic4: Ditto.
   english: The English text of the utterance.
 
 Returns:
   The text of the translated utterance.
 ]]
 local make_utterance  -- TODO
-local function translate(lect, topic, topic1, topic2, topic3, english)
+local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
+                         topic4, english)
   print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
   if not lect then
     return english
   end
-  local constituent =
-    contextualize(get_constituent(topic, topic1, topic2, topic3, english))
+  local constituent = contextualize(get_constituent(
+    force_goodbye, topic, topic1, topic2, topic3, topic4, english))
   local mwords =
     make_utterance(constituent, lect.constituents, get_parameters(lect))
   return transcribe(mwords, lect.phonology)
@@ -5945,8 +6396,9 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   local continuation = false
   local text, force_goodbye =
     get_turn_preamble(report, conversation, adventurer)
-  text = text .. translate(report_lect, force_goodbye or turn.anon_3,
-                           turn.anon_11, turn.anon_12, turn.anon_13, english)
+  text = text .. translate(
+    report_lect, force_goodbye, turn.anon_3, turn.anon_11, turn.anon_12,
+    turn.anon_13, turn.unk_v4014_1, english)
   repeat
     id_delta = id_delta + 1
     local new_report = {
