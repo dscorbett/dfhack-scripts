@@ -287,6 +287,9 @@ A sequence of phonemes.
 Mword:
 A sequence of morphemes.
 
+Utterable:
+An mword or string.
+
 SFI:
 A syntactic feature instance.
   feature: A feature.
@@ -334,7 +337,8 @@ A node in a syntax tree.
   maximal: The maximal projection of this constituent, or nil if none.
   moved_to: The constituent to which this constituent was moved, or nil
     if none.
-  text: A string to use verbatim in the output.
+  text: A string to use verbatim in the output. If this is non-nil, then
+    `features` and `morphemes` must both be empty.
   context_key: A key to look up in a context. At most one of `n1`,
     `word`, `text`, and `context_key` can be non-nil.
   context_callback: A function returning a constituent to replace
@@ -2538,6 +2542,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     ----
     -- "Hello"
     -- ".  It is good to see you."
+    -- ?
   elseif topic == df.talk_choice_type.RefuseConversation then
     -- "You are my neighbor."
     -- ?
@@ -3143,38 +3148,41 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     -- ?
   end
   if not constituent then
-    -- TODO: This should never happen, once the above are uncommented.
-    constituent = {text='... (' .. english .. ')'}
+    -- TODO: This should never happen, once the above are all filled in.
+    constituent = {text='... (' .. english .. ')', features={}, morphemes={}}
   end
   return constituent, context
 end
 
 --[[
-Converts a sequence of mwords to a string.
+Converts a sequence of utterables to a string.
 
 The full transcription is the concatenation of the transcriptions of the
-mwords joined by `WORD_SEPARATOR`. Each mword transcription is the
-concatenation of the transcriptions of its morphemes joined by
-`MORPHEME_SEPARATOR`. Each morpheme transcription is the concatenation
-of the transcription of its phonemes. Phonemes are transcribe using the
-phonology's symbols.
+utterables joined by `WORD_SEPARATOR`. Each string transcription is
+itself. Each mword transcription is the concatenation of the
+transcriptions of its morphemes joined by `MORPHEME_SEPARATOR`. Each
+morpheme transcription is the concatenation of the transcription of its
+phonemes. Phonemes are transcribed using the phonology's symbols.
 
 Args:
-  mwords: A sequence of mwords.
+  utterables: A sequence of utterables.
   phonology: A phonology.
 
 Returns:
-  The string transcription of `mwords` using `phonology`'s symbols.
+  The string transcription of `utterables` using `phonology`'s symbols.
 ]]
--- TODO: literal text
-local function transcribe(mwords, phonology)
+local function transcribe(utterables, phonology)
   local t1 = {}
-  for _, mword in ipairs(mwords) do
-    local t2 = {}
-    for _, morpheme in ipairs(mword) do
-      t2[#t2 + 1] = get_lemma(phonology, morpheme.pword)
+  for _, utterable in ipairs(utterables) do
+    if type(utterable) == 'string' then
+      t1[#t1 + 1] = utterable
+    else
+      local t2 = {}
+      for _, morpheme in ipairs(utterable) do
+        t2[#t2 + 1] = get_lemma(phonology, morpheme.pword)
+      end
+      t1[#t1 + 1] = table.concat(t2, MORPHEME_SEPARATOR)
     end
-    t1[#t1 + 1] = table.concat(t2, MORPHEME_SEPARATOR)
   end
   return table.concat(t1, WORD_SEPARATOR)
 end
@@ -3204,9 +3212,9 @@ local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
   end
   local constituent = contextualize(get_constituent(
     force_goodbye, topic, topic1, topic2, topic3, topic4, english))
-  local mwords =
+  local utterables =
     make_utterance(constituent, lect.constituents, get_parameters(lect))
-  return transcribe(mwords, lect.phonology)
+  return transcribe(utterables, lect.phonology)
 end
 
 --[[
@@ -3596,13 +3604,15 @@ or final element in the other sequence, controlled by its `after` and
 `initial` values. If the sequences are of words, the morpheme moves to
 that position in the inner-end word of the other sequence.
 
+Strings can never be dislocated.
+
 Args:
-  s1: A sequence of morphemes or mwords.
-  s2: A sequence of morphemes or mwords (whichever `s1` has).
+  s1: A sequence of morphemes or utterables.
+  s2: A sequence of morphemes or utterables (whichever `s1` has).
   force_dislocation: Whether local dislocation must happen.
 
 Returns:
-  The concatenation of the two sequences of morphemes or mwords with
+  The concatenation of the two sequences of morphemes or utterables with
     local dislocation of the morphemes at the boundary between them.
 ]]
 local function dislocate(s1, s2, force_dislocation)
@@ -3621,7 +3631,7 @@ local function dislocate(s1, s2, force_dislocation)
   local s1_onto_s2 = (s1[#s1][1] and s1[#s1][#s1[#s1]] or s1[#s1]).affix
   local i = #s1 + (s1_onto_s2 and 0 or 1)
   local addend = s1_onto_s2 and -1 or 1
-  while rv[i] do
+  while rv[i] and type(rv[i]) ~= 'string' do
     local dislocator = rv[i]
     if #dislocator ~= 0 then
       dislocator = dislocator[1]
@@ -4048,7 +4058,7 @@ local function do_syntax(constituent, lexicon, parameters)
         return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
         qerror('No constituent with ID ' .. constituent.ref)
-      else
+      elseif not constituent.text then
         constituent.maximal = maximal
         for _, morpheme in ipairs(constituent.morphemes) do
           -- TODO: Which should take precedence, constituent's or morpheme's?
@@ -4077,7 +4087,7 @@ Args:
   parameters: A language parameter table.
 
 Returns:
-  The linearization of the constituent as a sequence of mwords. If
+  The linearization of the constituent as a sequence of utterables. If
     `constituent` is nil, the sequence is empty.
 ]]
 local function linearize(constituent, parameters)
@@ -4089,7 +4099,9 @@ local function linearize(constituent, parameters)
   for i, morpheme in ipairs(constituent.morphemes) do
     utils.fillTable(morpheme.features, constituent.features)
   end
-  if not constituent.n1 then
+  if constituent.text then
+    return {constituent.text}
+  elseif not constituent.n1 then
     return {constituent.morphemes}
   end
   local n1, n2 = 'n1', 'n2'
@@ -4254,22 +4266,23 @@ Args:
   parameters: A language parameter table.
 
 Returns:
-  A sequence of mwords.
+  A sequence of utterables.
 ]]
--- TODO: What about literal text?
 make_utterance = function(constituent, lexicon, parameters)
-  local mwords = {}
-  for _, mword in ipairs(linearize(do_lowering(
+  local utterables = {}
+  for _, utterable in ipairs(linearize(do_lowering(
     do_syntax(constituent, lexicon, parameters), parameters), parameters))
   do
-    local new_mword = mword
-    repeat
-      mword = do_fusion(new_mword)
-      new_mword = insert_dummy(mword)
-    until new_mword == mword
-    mwords[#mwords + 1] = mword
+    if type(utterable) == 'table' then
+      local new_mword = utterable
+      repeat
+        utterable = do_fusion(new_mword)
+        new_mword = insert_dummy(utterable)
+      until new_mword == utterable
+    end
+    utterables[#utterables + 1] = utterable
   end
-  return mwords
+  return utterables
 end
 
 --[[
@@ -6388,7 +6401,9 @@ local function get_turn_preamble(report, conversation, adventurer)
   return text .. ': ', force_goodbye
 end
 
-local function replace_turn(conversation_id, new_turn_counts, english, id_delta, report, report_index, announcement_index, adventurer, report_lect)
+local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
+                            report, report_index, announcement_index,
+                            adventurer, report_lect)
   local conversation = df.activity_entry.find(conversation_id).events[0]
   local turn = conversation.anon_9
   turn = turn[#turn - new_turn_counts[conversation_id]]
