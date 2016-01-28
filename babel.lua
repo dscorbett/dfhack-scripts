@@ -6401,6 +6401,51 @@ local function get_turn_preamble(report, conversation, adventurer)
   return text .. ': ', force_goodbye
 end
 
+--[[
+Breaks a string into lines.
+
+Args:
+  max_length: The maximum length of a line as a positive integer.
+  text: A string.
+
+Returns:
+  The line-broken text as a sequence of strings.
+]]
+local function line_break(max_length, text)
+  local lines = {''}
+  local previous_space = ''
+  for word, space in text:gmatch('([^ ]+)( *)') do
+    local line_plus_space = lines[#lines] .. previous_space
+    local line_plus_word = line_plus_space .. word
+    if #line_plus_word <= max_length then
+      lines[#lines] = line_plus_word
+    elseif #word > max_length and #line_plus_space < max_length then
+      local remainder_length = max_length - #line_plus_space
+      lines[#lines] = line_plus_space .. word:sub(1, remainder_length)
+      word = word:sub(remainder_length + 1)
+      repeat
+        lines[#lines + 1] = word:sub(1, max_length)
+        word = word:sub(max_length + 1)
+      until word == ''
+    else
+      lines[#lines + 1] = word
+    end
+    previous_space = space
+  end
+  return lines
+end
+
+if TEST then
+  assert_eq(line_break(80, ''), {''})
+  assert_eq(line_break(5, ' a  b  c '), {'a  b', 'c'})
+  assert_eq(line_break(11, 'Lorem ipsum dolor sit amet.'),
+    {'Lorem ipsum', 'dolor sit', 'amet.'})
+  assert_eq(line_break(4, '123412341234'), {'1234', '1234', '1234'})
+  assert_eq(line_break(4, '1234123412345'), {'1234', '1234', '1234', '5'})
+  assert_eq(line_break(4, '0 123412341234'), {'0 12', '3412', '3412', '34'})
+  assert_eq(line_break(4, '0 1234'), {'0', '1234'})
+end
+
 local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
                             report, report_index, announcement_index,
                             adventurer, report_lect)
@@ -6409,17 +6454,17 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   turn = turn[#turn - new_turn_counts[conversation_id]]
   new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
   local continuation = false
-  local text, force_goodbye =
+  local preamble, force_goodbye =
     get_turn_preamble(report, conversation, adventurer)
-  text = text .. translate(
+  for _, line in ipairs(line_break(REPORT_LINE_LENGTH, preamble .. translate(
     report_lect, force_goodbye, turn.anon_3, turn.anon_11, turn.anon_12,
-    turn.anon_13, turn.unk_v4014_1, english)
-  repeat
+    turn.anon_13, turn.unk_v4014_1, english)))
+  do
     id_delta = id_delta + 1
     local new_report = {
       new=true,
       type=report.type,
-      text=text:sub(1, REPORT_LINE_LENGTH),
+      text=line,
       color=report.color,
       bright=report.bright,
       duration=report.duration,
@@ -6432,7 +6477,6 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
       unk_v40_2=report.unk_v40_2,
       unk_v40_3=report.unk_v40_3,
     }
-    text = text:sub(REPORT_LINE_LENGTH + 1)
     continuation = true
     print('insert: index=' .. report_index .. ' length=' .. #df.global.world.status.reports)
     df.global.world.status.reports:insert(report_index, new_report)
@@ -6443,7 +6487,7 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
         announcement_index, new_report)
       announcement_index = announcement_index + 1
     end
-  until text == ''
+  end
   return id_delta, report_index, announcement_index
 end
 
