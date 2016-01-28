@@ -3188,36 +3188,6 @@ local function transcribe(utterables, phonology)
 end
 
 --[[
-Translates an utterance into a lect.
-
-Args:
-  lect: The lect to translate into, or nil to skip translation.
-  force_goodbye: Whether to force a goodbye.
-  topic: A `talk_choice_type`.
-  topic1: An integer whose exact interpretation depends on `topic`.
-  topic2: Ditto.
-  topic3: Ditto.
-  topic4: Ditto.
-  english: The English text of the utterance.
-
-Returns:
-  The text of the translated utterance.
-]]
-local make_utterance  -- TODO
-local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
-                         topic4, english)
-  print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
-  if not lect then
-    return english
-  end
-  local constituent = contextualize(get_constituent(
-    force_goodbye, topic, topic1, topic2, topic3, topic4, english))
-  local utterables =
-    make_utterance(constituent, lect.constituents, get_parameters(lect))
-  return transcribe(utterables, lect.phonology)
-end
-
---[[
 Randomly generates a word for a lect.
 
 Args:
@@ -4268,7 +4238,7 @@ Args:
 Returns:
   A sequence of utterables.
 ]]
-make_utterance = function(constituent, lexicon, parameters)
+function make_utterance(constituent, lexicon, parameters)
   local utterables = {}
   for _, utterable in ipairs(linearize(do_lowering(
     do_syntax(constituent, lexicon, parameters), parameters), parameters))
@@ -4455,6 +4425,35 @@ if TEST then
   assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lexicon,
                                            en_parameters)),
             'you did thing ')
+end
+
+--[[
+Translates an utterance into a lect.
+
+Args:
+  lect: The lect to translate into, or nil to skip translation.
+  force_goodbye: Whether to force a goodbye.
+  topic: A `talk_choice_type`.
+  topic1: An integer whose exact interpretation depends on `topic`.
+  topic2: Ditto.
+  topic3: Ditto.
+  topic4: Ditto.
+  english: The English text of the utterance.
+
+Returns:
+  The text of the translated utterance.
+]]
+local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
+                         topic4, english)
+  print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+  if not lect then
+    return english
+  end
+  local constituent = contextualize(get_constituent(
+    force_goodbye, topic, topic1, topic2, topic3, topic4, english))
+  local utterables =
+    make_utterance(constituent, lect.constituents, get_parameters(lect))
+  return transcribe(utterables, lect.phonology)
 end
 
 --[[
@@ -6355,7 +6354,7 @@ local function update_fluency(acquirer, report_lect)
   if fluency_record.fluency == MAXIMUM_FLUENCY then
     dfhack.gui.showAnnouncement(
       'You have learned the language of ' ..
-      dfhack.TranslateName(report_language.community.name) .. '.',
+      dfhack.TranslateName(report_lect.community.name) .. '.',
       COLOR_GREEN)
   end
 end
