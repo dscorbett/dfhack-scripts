@@ -3243,9 +3243,15 @@ local function transcribe(utterables, phonology)
     else
       local t2 = {}
       for _, morpheme in ipairs(utterable) do
-        t2[#t2 + 1] = get_lemma(phonology, morpheme.pword)
+        local lemma = get_lemma(phonology, morpheme.pword)
+        if lemma ~= '' then
+          t2[#t2 + 1] = lemma
+        end
       end
-      t1[#t1 + 1] = table.concat(t2, MORPHEME_SEPARATOR)
+      local word = table.concat(t2, MORPHEME_SEPARATOR)
+      if word ~= '' then
+        t1[#t1 + 1] = word
+      end
     end
   end
   return table.concat(t1, WORD_SEPARATOR)
