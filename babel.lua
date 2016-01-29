@@ -2348,6 +2348,22 @@ local function r(x)
 end
 
 --[[
+Constructs a constituent from a constituent key.
+
+Args:
+  x: A constituent key or a feature table.
+
+Returns:
+  The same as `r`, except the constituent key has `WORD_ID_CHAR`
+    prepended to it.
+]]
+local function k(x)
+  return type(x) == 'string' and r(WORD_ID_CHAR .. x) or function(s)
+    return r(x)(WORD_ID_CHAR .. s)
+  end
+end
+
+--[[
 Constructs a morpheme.
 
 Args:
@@ -2481,6 +2497,46 @@ if TEST then
   -- TODO
 end
 
+local function ps_clause(ps)
+  return xp{  -- CP
+    x{f={wh=false}},
+    x{
+      x{f={q=true}},
+      ps[1],
+    },
+  }
+end
+
+local function ps_infl(ps)
+  -- TODO: more inflections: aspect, voice, mood, AgrO, AgrIO...
+  -- TODO: Make some levels optional; e.g. no vP => no AgrOP.
+  -- TODO: Add features for Case etc. so movement will happen.
+  return xp{  -- AgrSP
+    x{},
+    x{
+      x{},
+      xp{  -- TP
+        x{},
+        x{
+          ps.tense,
+          xp{  -- vP
+            ps.agent,
+            x{
+              x{},
+              xp{  -- VP
+                ps.theme or x{},
+                x{
+                  ps.predicate,
+                },
+              },
+            }
+          }
+        },
+      },
+    },
+  }
+end
+
 --[[
 Gets a constituent for an utterance.
 
@@ -2590,6 +2646,14 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
       -- "This is the life for me."
     elseif topic1 == 4 then
       -- "It is terrifying."
+      constituent =
+        ps_clause{
+          ps_infl{
+            tense=k'PAST',
+            agent=k'it',
+            predicate=k'terrifying',
+          },
+        }
     elseif topic1 == 5 then
       -- "I don't know anything about that."
     elseif topic1 == 6 then
@@ -2601,7 +2665,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     elseif topic1 == 9 then
       -- "I hate it." / "I hate them."
     elseif topic1 == 10 then
-      -- "I am afraid of it." / "I am afriad of them."
+      -- "I am afraid of it." / "I am afraid of them."
     elseif topic1 == 12 then
       -- "That is sad but not unexpected."
     elseif topic1 == 12 then
@@ -4027,6 +4091,7 @@ local function do_syntax(constituent, lexicon, parameters)
         end
         return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
+        dfhack.color(COLOR_YELLOW); printall(lexicon)
         qerror('No constituent with ID ' .. constituent.ref)
       elseif not constituent.text then
         constituent.maximal = maximal
@@ -4475,6 +4540,16 @@ local function get_civ_native_lect(civ)
 end
 
 --[[
+This sequence of constituent keys must be a superset of all the
+constituent keys mentioned in `get_constituent`.
+]]
+local DEFAULT_CONSTITUENT_KEYS = {
+  'PAST',
+  'it',
+  'terrifying',
+}
+
+--[[
 Creates a word, setting its flags and adding it to each translation.
 
 The entry added to each translation is the empty string. The point is to
@@ -4598,13 +4673,16 @@ Args:
 ]]
 local function expand_lexicons(f)
   local raws = df.global.world.raws
-  f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. 'FORCE_GOODBYE',
-    '', '', '')
+  for _, topic in pairs(DEFAULT_CONSTITUENT_KEYS) do
+    f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. topic, '', '', '')
+  end
+  --[[
   for _, topic in ipairs(df.talk_choice_type) do
     if topic then
       f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. topic, '', '', '')
     end
   end
+  ]]
   for i, inorganic in ipairs(raws.inorganics) do
     f(i,
       {function(civ) return civ.resources.metals end,
