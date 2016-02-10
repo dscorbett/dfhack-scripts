@@ -2444,6 +2444,7 @@ local function random_parameters(phonology, seed, creature)
     parameters.min_sonority = math.min(sonority, parameters.min_sonority)
     parameters.max_sonority = math.max(sonority, parameters.max_sonority)
   end
+  parameters.strategies = {}  -- TODO: Fill in some movement strategies.
   return parameters
 end
 
@@ -2480,11 +2481,11 @@ TODO
 local function contextualize(constituent, context)
   local context_key = constituent.context_key
   if context_key then
-    return constituent.context_callback(content[context_key])
+    return constituent.context_callback(context[context_key])
   end
   return {
-    n1=constituent.n1 and contextualize(constituent.n1),
-    n2=constituent.n2 and contextualize(constituent.n2),
+    n1=constituent.n1 and contextualize(constituent.n1, context),
+    n2=constituent.n2 and contextualize(constituent.n2, context),
     features=constituent.features,
     morphemes=constituent.morphemes,
     is_phrase=constituent.is_phrase,
@@ -2495,6 +2496,17 @@ end
 
 if TEST then
   -- TODO
+end
+
+local function ps_xp(ps)
+  local c = x{
+    ps.head or x{},
+    ps.complement or x{},
+  }
+  for i = #ps, 1, -1 do
+    c = x{ps[i], c}
+  end
+  return xp{ps.specifier or x{}, c}
 end
 
 local function ps_clause(ps)
@@ -2511,29 +2523,40 @@ local function ps_infl(ps)
   -- TODO: more inflections: aspect, voice, mood, AgrO, AgrIO...
   -- TODO: Make some levels optional; e.g. no vP => no AgrOP.
   -- TODO: Add features for Case etc. so movement will happen.
-  return xp{  -- AgrSP
-    x{},
-    x{
-      x{},
-      xp{  -- TP
-        x{},
-        x{
-          ps.tense,
-          xp{  -- vP
-            ps.agent,
-            x{
-              x{},
-              xp{  -- VP
-                ps.theme or x{},
-                x{
-                  ps.predicate,
-                },
-              },
-            }
-          }
-        },
-      },
+  local small_vp = ps_xp{  -- vP
+    specifier=ps.agent,
+    complement=ps_xp{  -- VP
+      specifier=ps.theme,
+      complement=ps.predicate,
     },
+  }
+  local negp = ps.neg and ps_xp{
+    head=ps.neg,
+    complement=small_vp,
+  } or small_vp
+  return ps_xp{  -- AgrSP
+    complement=ps_xp{  -- TP
+      head=ps.tense,
+      complement=negp,
+    },
+  }
+end
+
+local function cc_pronoun(c)
+  local person = 1
+  if not utils.linear_index(c[3], c[1]) then
+    person = 2
+    for _, e in ipairs(c[3]) do
+      if not utils.linear_index(c[2], e) then
+        person = 3
+        break
+      end
+    end
+    person = person
+  end
+  -- TODO: gender, clusivity, distance, formality, social status, bystanderness
+  return ps_xp{  --DP
+    head=k{person=person, number=#c[3]}'PRONOUN'
   }
 end
 
@@ -2554,13 +2577,16 @@ Returns:
   The context in which the utterance was produced.
 ]]
 local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
-                               topic4, english)
+                               topic4, english, speaker, hearer)
   -- TODO: Double spaces may be collapsed when concatenating reports.
   -- TODO: [LISP]ing multiplies <s>es.
   -- TODO: The first non-whitespace character of a sentence is capitalized.
   -- TODO: So don't rely on the exact contents of `english`.
   local constituent
-  local context = {}
+  local context = {
+    speaker={speaker, {hearer}, {speaker}},
+    it={speaker, {hearer}, {true}},
+  }
   if force_goodbye then
     ----
   elseif topic == df.talk_choice_type.Greet then
@@ -2649,13 +2675,33 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
       constituent =
         ps_clause{
           ps_infl{
-            tense=k'PAST',
-            agent=k'it',
+            tense=k'PRESENT',
+            agent={context_key='it', context_callback=cc_pronoun},
             predicate=k'terrifying',
           },
         }
     elseif topic1 == 5 then
       -- "I don't know anything about that."
+      constituent =
+        ps_clause{
+          ps_infl{
+            tense=k'PRESENT',
+            neg=k'not',
+            agent={context_key='speaker', context_callback=cc_pronoun},
+            predicate=k'know',
+            theme=ps_xp{
+              head=k'any',
+              complement=ps_xp{
+                head=k'thing',
+                complement=ps_xp{
+                  head=k'about',
+                  -- TODO: that
+                  complement={context_key='it', context_callback=cc_pronoun},
+                },
+              },
+            },
+          },
+        }
     elseif topic1 == 6 then
       -- "We are in the right in all matters."
     elseif topic1 == 7 then
@@ -3381,7 +3427,7 @@ if its merging strategy is not merely agreement but the other's is.
 
 One SFI from each sequence is chosen to maximize the quality of the
 pair. They are removed from their sequences, along with any other pairs
-with between the same two heads that would be eligible for agreement.
+between the same two heads that would be eligible for agreement.
 
 Args:
   sfis_1! A sequence of SFIs sorted in decreasing order of quality as
@@ -4496,6 +4542,20 @@ if TEST then
   assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lexicon,
                                            en_parameters)),
             'you did thing ')
+  local fr_lexicon = {
+    beau=x{f={gender=false}, m={m{'beau'}}},
+    vieux=x{f={gender=false}, m={m{'vieux'}}},
+    femme=x{f={gender='FEM'}, m={m{'femme'}}},
+  }
+  local fr_parameters = {strategies={gender=nil}}
+  local fr_belle_vieille_femme = ps_xp{
+    r'beau',
+    r'vieux',
+    head=r'femme',
+  }
+  assert_eq(spell_utterance(make_utterance(fr_belle_vieille_femme, fr_lexicon,
+                                           fr_parameters)),
+            '[beau,gender=FEM] [vieux,gender=FEM] [femme,gender=FEM] ')
 end
 
 --[[
@@ -4515,13 +4575,14 @@ Returns:
   The text of the translated utterance.
 ]]
 local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
-                         topic4, english)
+                         topic4, english, speaker, hearer)
   print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
   if not lect then
     return english
   end
   local constituent = contextualize(get_constituent(
-    force_goodbye, topic, topic1, topic2, topic3, topic4, english))
+    force_goodbye, topic, topic1, topic2, topic3, topic4, english, speaker,
+    hearer))
   local utterables =
     make_utterance(constituent, lect.constituents, get_parameters(lect))
   return transcribe(utterables, lect.phonology)
@@ -4547,12 +4608,19 @@ end
 
 --[[
 This sequence of constituent keys must be a superset of all the
-constituent keys mentioned in `get_constituent`.
+constituent keys mentioned in `get_constituent` or in context callbacks
+mentioned therein.
 ]]
 local DEFAULT_CONSTITUENT_KEYS = {
-  'PAST',
+  'PRESENT',
+  'PRONOUN',
+  'about',
+  'any',
   'it',
+  'know',
+  'not',
   'terrifying',
+  'thing',
 }
 
 --[[
@@ -6481,7 +6549,7 @@ local function get_turn_preamble(report, conversation, adventurer)
       (hearer and df.profession.attrs[hearer.profession].caption or '???')
       .. ')'
   end
-  return text .. ': ', force_goodbye
+  return text .. ': ', force_goodbye, speaker, hearer
 end
 
 --[[
@@ -6537,11 +6605,11 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   turn = turn[#turn - new_turn_counts[conversation_id]]
   new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
   local continuation = false
-  local preamble, force_goodbye =
+  local preamble, force_goodbye, speaker, hearer =
     get_turn_preamble(report, conversation, adventurer)
   for _, line in ipairs(line_break(REPORT_LINE_LENGTH, preamble .. translate(
     report_lect, force_goodbye, turn.anon_3, turn.anon_11, turn.anon_12,
-    turn.anon_13, turn.unk_v4014_1, english)))
+    turn.anon_13, turn.unk_v4014_1, english, speaker, hearer)))
   do
     id_delta = id_delta + 1
     local new_report = {
@@ -6563,6 +6631,7 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
     continuation = true
     print('insert: index=' .. report_index .. ' length=' .. #df.global.world.status.reports)
     df.global.world.status.reports:insert(report_index, new_report)
+    print('        "' .. line .. '"')
     print('        new length='..#df.global.world.status.reports)
     report_index = report_index + 1
     if announcement_index then
