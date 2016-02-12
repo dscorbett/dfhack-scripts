@@ -460,6 +460,50 @@ local function shuffle(t, rng)
   return t
 end
 
+--[[
+Finds the last instance of an element in a vector.
+
+Args:
+  vector: A vector or sequence.
+  key: What to search for.
+  field: The field which is equal to `key` in the sought element, or
+    nil to compare the element itself to `key`.
+
+Returns:
+  The last index of a matching element, or nil if not found.
+  The last matching element, or nil if none is found.
+]]
+local function reverse_linear_index(vector, key, field)
+  local min, max
+  if df.isvalid(vector) then
+    min, max = 0, #vector - 1
+  else
+    min, max = 1, #vector
+  end
+  if field then
+    for i = max, min, -1 do
+      local obj = vector[i]
+      if obj[field] == key then
+        return i, obj
+      end
+    end
+  else
+    for i = max, min, -1 do
+      local obj = vector[i]
+      if obj == key then
+        return i, obj
+      end
+    end
+  end
+end
+
+if TEST then
+  assert_eq({reverse_linear_index({1, 2, 1}, 3)}, {})
+  assert_eq({reverse_linear_index({1, 2, 1}, 1)}, {3, 1})
+  assert_eq({reverse_linear_index({{k=1}, {j=1}, {j=1, k=1}, {k=2}}, 1, 'k')},
+            {3, {j=1, k=1}})
+end
+
 local function escape(str)
   return (str:gsub('[\x00\n\r\x1a%%:%]]', function(c)
     return '%' .. string.format('%02X', string.byte(c))
@@ -6676,15 +6720,18 @@ local function handle_new_reports()
   local i = next_report_index
   local english = ''
   while i < #reports do
---    print(i .. ' / ' .. #reports .. ' +' .. id_delta)
+--    print(i .. ' < ' .. #reports .. ' d=' .. id_delta)
     local report = reports[i]
     local announcement_index =
-      utils.linear_index(announcements, report.id, 'id')
+      reverse_linear_index(announcements, report.id, 'id')
     local conversation_id = report.unk_v40_1
     if conversation_id == -1 then
       print('  not a conversation: ' .. report.text)
       report.id = report.id + id_delta
       i = i + 1
+      if announcement_index then
+        announcement_index = announcement_index + 1
+      end
     else
       local report_lect = get_report_lect(report)
       -- TODO: What if `report_lect == nil`?
@@ -6694,6 +6741,9 @@ local function handle_new_reports()
         print('  adventurer understands: ' .. report.text)
         report.id = report.id + id_delta
         i = i + 1
+        if announcement_index then
+          announcement_index = announcement_index + 1
+        end
       else
         english = english .. (english == '' and '' or ' ') .. report.text
         reports:erase(i)
