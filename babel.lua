@@ -4884,6 +4884,40 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'yield',
 }
 
+if TEST then
+  local own_path
+  for path, script in pairs(dfhack.internal.scripts) do
+    if script.env == _ENV then
+      own_path = path
+      break
+    end
+  end
+  if own_path then
+    local file = io.open(own_path)
+    local code = file:read('*all')
+    file:close()
+    local keys = {}
+    for key in code:gmatch("%f[%w]k[%s(]*('[^'\n]*')") do
+      keys[key] = true
+    end
+    for key in code:gmatch("%f[%w]k[%s(]*%b{}[%s(]*('[^'\n]*')") do
+      keys[key] = true
+    end
+    local missing_keys = ''
+    for key in pairs(keys) do
+      key = load('return ' .. key)()
+      if key and not utils.linear_index(DEFAULT_CONSTITUENT_KEYS, key) then
+        missing_keys = missing_keys .. '\n' .. key
+      end
+    end
+    if missing_keys ~= '' then
+      qerror('Missing constituent keys:' .. missing_keys)
+    end
+  else
+    qerror('Cannot find the path to this script')
+  end
+end
+
 --[[
 Creates a word, setting its flags and adding it to each translation.
 
