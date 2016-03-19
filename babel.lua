@@ -316,8 +316,8 @@ What sort of movement to do when checking a certain feature.
 
 Context:
 A table containing whatever is necessary to complete a syntax tree based
-on the speaker, hearer, and any other non-constant information which may
-differ between utterances of basically the same sentence. See
+on the speaker, hearers, and any other non-constant information which
+may differ between utterances of basically the same sentence. See
 `context_key` and `context_callback` in constituent.
 -- TODO: Should the keys be standardized?
 
@@ -342,8 +342,8 @@ A node in a syntax tree.
   context_key: A key to look up in a context. At most one of `n1`,
     `word`, `text`, and `context_key` can be non-nil.
   context_callback: A function returning a constituent to replace
-    this one given `context[context_key]` where `context` is a context.
-    It is nil if and only if `context_key` is.
+    this one given `context[context_key]` and `context` where `context`
+    is a context. It is nil if and only if `context_key` is.
 
 Morpheme:
   id: A unique ID for this morpheme within its language.
@@ -2525,7 +2525,7 @@ TODO
 local function contextualize(constituent, context)
   local context_key = constituent.context_key
   if context_key then
-    return constituent.context_callback(context[context_key])
+    return constituent.context_callback(context[context_key], context)
   end
   return {
     n1=constituent.n1 and contextualize(constituent.n1, context),
@@ -2563,15 +2563,28 @@ local function ps_clause(ps)
   }
 end
 
+local function ps_sentences(ps)
+  local rv
+  for i = #ps, 1, -1 do
+    rv = rv and ps_xp{
+      specifier=ps[i],
+      head=k'SENTENCE_SEPARATOR',
+      complement=rv,
+    } or ps[i]
+  end
+  return rv
+end
+
 local function ps_infl(ps)
-  -- TODO: more inflections: aspect, voice, mood, AgrO, AgrIO...
+  -- TODO: keys: copula, mood, polite
+  -- TODO: more inflections: aspect, voice, AgrO, AgrIO...
   -- TODO: Make some levels optional; e.g. no vP => no AgrOP.
   -- TODO: Add features for Case etc. so movement will happen.
   local small_vp = ps_xp{  -- vP
-    specifier=ps.agent,
+    specifier=ps.subject,
     complement=ps_xp{  -- VP
-      specifier=ps.theme,
-      complement=ps.predicate,
+      specifier=ps.object,
+      head=ps.verb,
     },
   }
   local negp = ps.neg and ps_xp{
@@ -2586,21 +2599,50 @@ local function ps_infl(ps)
   }
 end
 
-local function cc_pronoun(c)
-  local person = 1
-  if not utils.linear_index(c[3], c[1]) then
-    person = 2
-    for _, e in ipairs(c[3]) do
-      if not utils.linear_index(c[2], e) then
-        person = 3
-        break
-      end
+local cc = setmetatable({}, {
+    __call=function(self, key, callback_name)
+      return {context_key=key, context_callback=self[callback_name]}
+    end,
+  })
+
+--[[
+Gets a context-dependent possessive pronoun.
+
+Args:
+  c: A sequence of objects. The number of elements determines the
+    number of the pronoun. Whether `context.speaker` or an element in
+    `context.hearers` is in the sequence determines the person of the
+    pronoun.
+  context: The full context.
+
+Returns:
+  The constituent for the possessive pronoun corresponding to `c`.
+]]
+function cc.possessive_pronoun(c, context)
+  local first_person = false
+  local second_person = false
+  local third_person = false
+  for i, e in ipairs(c) do
+    if e == context.speaker then
+      first_person = true
+    elseif utils.linear_index(context.hearers, e) then
+      second_person = true
+    else
+      third_person = true
     end
-    person = person
   end
-  -- TODO: gender, clusivity, distance, formality, social status, bystanderness
+  -- TODO: gender, distance, formality, social status, bystanderness
+  return k{
+    first_person=first_person,
+    second_person=second_person,
+    third_person=third_person,
+    number=#c,
+  }'PRONOUN'
+end
+
+function cc.pronoun(c, context)
   return ps_xp{  --DP
-    head=k{person=person, number=#c[3]}'PRONOUN'
+    head=cc.possessive_pronoun(c, context)
   }
 end
 
@@ -2621,18 +2663,20 @@ Returns:
   The context in which the utterance was produced.
 ]]
 local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
-                               topic4, english, speaker, hearer)
+                               topic4, english, speaker, hearers)
   -- TODO: Double spaces may be collapsed when concatenating reports.
   -- TODO: [LISP]ing multiplies <s>es.
   -- TODO: The first non-whitespace character of a sentence is capitalized.
   -- TODO: So don't rely on the exact contents of `english`.
   local constituent
   local context = {
-    speaker={speaker, {hearer}, {speaker}},
-    it={speaker, {hearer}, {true}},
+    speaker=speaker,
+    hearers=hearers,
+    it={true},
   }
   if force_goodbye then
     ----
+    constituent = k'goodbye'
   elseif topic == df.talk_choice_type.Greet then
     ----
     -- "Hey" / "Hello" / "Greetings" / "Salutations"
@@ -2648,6 +2692,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.SayGoodbye then
     ----
     -- "Goodbye."
+    constituent = k'goodbye'
   elseif topic == df.talk_choice_type.AskStructure then
     -- only when in a structure?
   elseif topic == df.talk_choice_type.AskFamily then
@@ -2684,12 +2729,28 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.Goodbye2 then
     ----
     -- "Goodbye."
+    constituent = k'goodbye'
   elseif topic == df.talk_choice_type.ReturnTopic then
     -- N/A
   elseif topic == df.talk_choice_type.ChangeSubject then
     -- N/A
   elseif topic == df.talk_choice_type.AskTargetAction then
     -- "What will you do about it?"
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'FUTURE',
+          subject=cc('speaker', 'pronoun'),
+          verb=k'do',
+          object=k'what',
+          pps={
+            ps_xp{
+              head=k'about',
+              complement=cc('it', 'pronoun'),
+            },
+          },
+        }
+      }
   elseif topic == df.talk_choice_type.RequestSuggestAction then
     -- "What should I do about it?"
   elseif topic == df.talk_choice_type.AskJoinInsurrection then
@@ -2708,39 +2769,98 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     if topic1 == 0 then
       -- "This must be stopped by any means at our disposal."
       -- / "They must be stopped by any means at our disposal."
+      local this_or_they
+      if english:find('This must') then
+        cc('it', 'pronoun')
+      else
+        context.them = {true, true}
+        cc('them', 'pronoun')
+      end
+      context.us = {speaker, true}
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            mood=k'must',
+            voice=k'passive',
+            verb=k'stop',
+            object=this_or_they,
+            pps={
+              ps_xp{
+                head=k'by',
+                complement=ps_xp{
+                  head=k'any',
+                  complement=ps_xp{
+                    head=k'means',
+                    complement=ps_xp{
+                      head=k'at',
+                      complement=ps_xp{
+                        head={cc('us', 'possessive_pronoun')},
+                        complement=ps_xp{head=k'disposal'},
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }
     elseif topic1 == 1 then
       -- "It's not my problem."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            neg=k'not',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            object=ps_xp{
+              head={cc('speaker', 'possessive_pronoun')},
+              complement=ps_xp{head=k'problem'},
+            },
+          }
+        }
     elseif topic1 == 2 then
       -- "It was inevitable."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PAST',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            object=k'inevitable',
+          }
+        }
     elseif topic1 == 3 then
       -- "This is the life for me."
     elseif topic1 == 4 then
       -- "It is terrifying."
       constituent =
-        ps_clause{
+        ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            agent={context_key='it', context_callback=cc_pronoun},
-            predicate=k'terrifying',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            object=k'terrifying',
           },
         }
     elseif topic1 == 5 then
       -- "I don't know anything about that."
       constituent =
-        ps_clause{
+        ps_sentences{
           ps_infl{
             tense=k'PRESENT',
             neg=k'not',
-            agent={context_key='speaker', context_callback=cc_pronoun},
-            predicate=k'know',
-            theme=ps_xp{
+            subject=cc('speaker', 'pronoun'),
+            verb=k'know',
+            object=ps_xp{
               head=k'any',
               complement=ps_xp{
                 head=k'thing',
                 complement=ps_xp{
                   head=k'about',
                   -- TODO: that
-                  complement={context_key='it', context_callback=cc_pronoun},
+                  complement=cc('it', 'pronoun'),
                 },
               },
             },
@@ -2760,8 +2880,27 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
       -- "That is sad but not unexpected."
     elseif topic1 == 12 then
       -- "That is terrible."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            object=k'terrible',
+          },
+        }
     elseif topic1 == 13 then
       -- "That's terrific!"
+      -- TODO: '!'
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            object=k'terrific',
+          },
+        }
     else
       -- ?
     end
@@ -2799,6 +2938,17 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.RequestSelfRescue then
     ----
     -- "Please help me!"
+    constituent =
+      ps_sentences{
+        ps_infl{
+          polite=true,
+          tense=k'PRESENT',
+          mood=k'IMPERATIVE',
+          subject=cc('hearers', 'pronoun'),
+          verb=k'help',
+          object=cc('speaker', 'pronoun'),
+        },
+      }
   elseif topic == df.talk_choice_type.AskWhatHappened then
     -- "What happened?"
   elseif topic == df.talk_choice_type.AskBeRescued then
@@ -2850,9 +3000,35 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.AskCeaseHostilities then
     ----
     -- "Let us stop this pointless fighting!"
+    context.us = {speaker, hearer}
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          mood=k'HORTATIVE',
+          subject=cc('us', 'pronoun'),
+          verb=k'stop',
+          object=ps_xp{
+            head=k'this',  -- TODO: more precise deixis
+            complement=ps_xp{
+              k'pointless',
+              head=k'fighting',
+            },
+          },
+        },
+      }
   elseif topic == df.talk_choice_type.DemandYield then
     ----
     -- "You must yield!"
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          mood=k'must',
+          subject=cc('speaker', 'pronoun'),
+          verb=k'yield',
+        },
+      }
   elseif topic == df.talk_choice_type.HawkWares then
     ----
     -- "try" / "get your" / "your very own"
@@ -2878,6 +3054,22 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.YieldTerror then
     ----
     -- "Stop!  This isn't happening!"
+    -- TODO: aspect
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          mood=k'IMPERATIVE',
+          subject=cc('hearers', 'pronoun'),
+          verb=k'stop',
+        },
+        ps_infl{
+          tense=k'PRESENT',
+          neg=k'not',
+          subject=cc('it', 'pronoun'),
+          verb=k'happen',
+        },
+      }
   elseif topic == df.talk_choice_type.Yield then
     ----
     -- "I yield!  I yield!" / "We yield!  We yield!"
@@ -4399,7 +4591,7 @@ Args:
 Returns:
   A sequence of utterables.
 ]]
-function make_utterance(constituent, lexicon, parameters)
+local function make_utterance(constituent, lexicon, parameters)
   local utterables = {}
   for _, utterable in ipairs(linearize(do_lowering(
     do_syntax(constituent, lexicon, parameters), parameters), parameters))
@@ -4619,14 +4811,14 @@ Returns:
   The text of the translated utterance.
 ]]
 local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
-                         topic4, english, speaker, hearer)
-  print('translate ' .. tostring(lect) .. ' ' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+                         topic4, english, speaker, hearers)
+  print('translate ' .. tostring(lect) .. ' ' .. tostring(force_goodbye) .. '/' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
   if not lect then
     return english
   end
   local constituent = contextualize(get_constituent(
     force_goodbye, topic, topic1, topic2, topic3, topic4, english, speaker,
-    hearer))
+    hearers))
   local utterables =
     make_utterance(constituent, lect.constituents, get_parameters(lect))
   return transcribe(utterables, lect.phonology)
@@ -4656,15 +4848,40 @@ constituent keys mentioned in `get_constituent` or in context callbacks
 mentioned therein.
 ]]
 local DEFAULT_CONSTITUENT_KEYS = {
+  'FUTURE',
+  'HORTATIVE',
+  'IMPERATIVE',
+  'PAST',
   'PRESENT',
   'PRONOUN',
+  'SENTENCE_SEPARATOR',
   'about',
   'any',
+  'at',
+  'by',
+  'disposal',
+  'do',
+  'fighting',
+  'goodbye',
+  'happen',
+  'help',
+  'inevitable',
   'it',
   'know',
+  'means',
+  'must',
   'not',
+  'passive',
+  'pointless',
+  'problem',
+  'stop',
+  'terrible',
+  'terrific',
   'terrifying',
   'thing',
+  'this',
+  'what',
+  'yield',
 }
 
 --[[
@@ -6351,7 +6568,7 @@ Returns:
 local function get_report_lect(report)
   print('report lect: report.id=' .. report.id)
   local speaker = df.unit.find(report.unk_v40_3)
-  -- TODO: Take hearer's lect knowledge into account.
+  -- TODO: Take hearers' lect knowledge into account.
   if speaker then
     local unit_lects = get_unit_lects(speaker)
     -- TODO: Don't always choose the first one.
@@ -6564,9 +6781,10 @@ local function get_participants(report, conversation)
   local speaker = df.unit.find(speaker_id)
   -- TODO: hearer doesn't always exist.
   -- TODO: Solution: cache all <activity_event_conversationst>s' participants.
+  -- TODO: Get all the hearers.
   local hearer = #participants > 1 and df.unit.find(
     participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
-  return speaker, hearer
+  return speaker, {hearer}
 end
 
 --[[
@@ -6574,26 +6792,28 @@ TODO
 ]]
 local function get_turn_preamble(report, conversation, adventurer)
   -- TODO: Invalid for goodbyes: the data has been deleted by then.
-  local speaker, hearer = get_participants(report, conversation)
+  local speaker, hearers = get_participants(report, conversation)
   local force_goodbye = false
-  if speaker == adventurer or hearer == adventurer then
+  local adventurer_is_hearer = utils.linear_index(hearers, adventurer)
+  if adventurer_is_hearer or speaker == adventurer then
     -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
     -- TODO: df.global.ui_advmode.conversation.choices instead?
     -- TODO: Cf. anon_15.
     conversation.anon_2 = 7
-    if hearer == adventurer then
+    if adventurer_is_hearer then
+      -- TODO: unless this is the first turn of the conversation
       force_goodbye = true
     end
   end
   -- TODO: What if the adventurer knows the participants' names?
   local text = speaker == adventurer and 'You' or
     df.profession.attrs[speaker.profession].caption
-  if speaker ~= adventurer and hearer ~= adventurer then
+  if speaker ~= adventurer and not adventurer_is_hearer then
     text = text .. ' (to ' ..
-      (hearer and df.profession.attrs[hearer.profession].caption or '???')
+      (hearers[1] and df.profession.attrs[hearers[1].profession].caption or '?')
       .. ')'
   end
-  return text .. ': ', force_goodbye, speaker, hearer
+  return text .. ': ', force_goodbye, speaker, hearers
 end
 
 --[[
@@ -6649,11 +6869,11 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   turn = turn[#turn - new_turn_counts[conversation_id]]
   new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
   local continuation = false
-  local preamble, force_goodbye, speaker, hearer =
+  local preamble, force_goodbye, speaker, hearers =
     get_turn_preamble(report, conversation, adventurer)
   for _, line in ipairs(line_break(REPORT_LINE_LENGTH, preamble .. translate(
     report_lect, force_goodbye, turn.anon_3, turn.anon_11, turn.anon_12,
-    turn.anon_13, turn.unk_v4014_1, english, speaker, hearer)))
+    turn.anon_13, turn.unk_v4014_1, english, speaker, hearers)))
   do
     id_delta = id_delta + 1
     local new_report = {
