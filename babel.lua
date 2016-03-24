@@ -39,6 +39,8 @@ local MINIMUM_DIMENSION_CACHE_SIZE = 32
 local WORD_SEPARATOR = ' '
 local MORPHEME_SEPARATOR = nil
 local WORD_ID_CHAR = '/'
+local STANDARD_AMBIENT_TEMPERATURE = 10045
+local NO_TEMPERATURE = 60001
 
 local FEATURE_CLASS_NEUTRAL = 0
 local FEATURE_CLASS_VOWEL = 1
@@ -5108,6 +5110,38 @@ local function add_word_to_lect(lect, resource_id, resource_functions, word_id)
 end
 
 --[[
+Gets the state of a material at standard ambient temperature.
+
+Args:
+  material: A material.
+
+Returns:
+  A `df.matter_state`.
+]]
+local function get_state_at_usual_temperature(material)
+  local melting_point = material.heat.melting_point
+  local boiling_point = material.heat.boiling_point
+  if melting_point == NO_TEMPERATURE or boiling_point == NO_TEMPERATURE then
+    if not material.state_name.Solid:find('^frozen ') then
+      return df.matter_state.Solid
+    elseif not material.state_name.Gas:find('^boiling ') then
+      return df.matter_state.Gas
+    end
+    return df.matter_state.Liquid
+  end
+  local temperature = material.heat.mat_fixed_temp
+  if temperature == NO_TEMPERATURE then
+    temperature = STANDARD_AMBIENT_TEMPERATURE
+  end
+  if temperature >= boiling_point then
+    return df.matter_state.Gas
+  elseif temperature >= melting_point then
+    return df.matter_state.Liquid
+  end
+  return df.matter_state.Solid
+end
+
+--[[
 Calls a function for everything that a lect might have a word for.
 
 Args:
@@ -5146,6 +5180,7 @@ local function expand_lexicons(f)
     f(0, universal, 'item_slabst' .. WORD_ID_CHAR .. slab_type)
   end
   for i, inorganic in ipairs(raws.inorganics) do
+    local state = get_state_at_usual_temperature(inorganic.material)
     f(i,
       {
         function(civ) return civ.resources.metals end,
@@ -5153,10 +5188,9 @@ local function expand_lexicons(f)
         function(civ) return civ.resources.gems end,
       },
       'INORGANIC' .. WORD_ID_CHAR .. inorganic.id,
-      -- TODO: Get the words at room temperature.
-      inorganic.material.state_name.Solid,
+      inorganic.material.state_name[state],
       nil,
-      inorganic.material.state_adj.Solid,
+      inorganic.material.state_adj[state],
       true)
   end
   for _, plant in ipairs(raws.plants.all) do
