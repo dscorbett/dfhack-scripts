@@ -2646,6 +2646,57 @@ function cc.pronoun(c, context)
   }
 end
 
+function cc.item(c)
+  --[[
+  TODO:
+  Memorial: memorial to $name
+  item_liquidst: water vs lye
+  item_threadst: web vs non-web
+  ]]
+  local item = df.item.find(c)
+  local coin_entity, coin_ruler
+  if item._type == df.item_coinst then
+    local coin_batch = df.coin_batch.find(item.coin_batch)
+    coin_entity = ps_xp{
+      head=k'made by entity',
+      complement=r('ENTITY' .. WORD_ID_CHAR ..
+                   df.historical_entity.find(coin_batch.entity).id),
+    }
+    -- TODO: coin_ruler = df.historical_figure.find(coin_batch.ruler)
+  end
+  local material = dfhack.matinfo.decode(item).material
+  local handedness
+  if item._type == df.item_glovesst then
+    if item.handedness[0] then
+      handedness = ps_xp{head=k'right-hand'}
+    elseif item.handedness[1] then
+      handedness = ps_xp{head=k'left-hand'}
+    end
+  end
+  local item_type = tostring(item._type):match('^<type: (.*)>$')
+  local head_key = item_type .. WORD_ID_CHAR
+  if item._type == df.item_slabst then
+    head_key = head_key .. df.slab_engraving_type[item.engraving_type]
+  else
+    local no_error, subtype = dfhack.pcall(function() return item.subtype end)
+    if no_error then
+      head_key = head_key .. subtype.id
+    else
+      head_key = 'ITEM_TYPE' .. WORD_ID_CHAR .. item_type
+    end
+  end
+  local t = {coin_entity}
+  t[#t + 1] = coin_ruler
+  t[#t + 1] = ps_xp{
+    head=k'made of material',
+    -- TODO: complement=,
+  }
+  t[#t + 1] = handedness
+  t.head = r(head_key)
+  -- TODO: fallback: "object I can't remember"
+  return ps_xp(t)
+end
+
 --[[
 Gets a constituent for an utterance.
 
@@ -2795,7 +2846,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
                     complement=ps_xp{
                       head=k'at',
                       complement=ps_xp{
-                        head={cc('us', 'possessive_pronoun')},
+                        head=cc('us', 'possessive_pronoun'),
                         complement=ps_xp{head=k'disposal'},
                       },
                     },
@@ -2815,7 +2866,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
             subject=cc('it', 'pronoun'),
             copula='predicational',
             object=ps_xp{
-              head={cc('speaker', 'possessive_pronoun')},
+              head=cc('speaker', 'possessive_pronoun'),
               complement=ps_xp{head=k'problem'},
             },
           }
@@ -3318,6 +3369,20 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     -- "Drop the "
     -- topic1: item key
     -- "!"
+    context.item = topic1
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          mood=k'IMPERATIVE',
+          subject=cc('hearers', 'pronoun'),
+          verb=k'drop',
+          object=ps_xp{
+            head=k'the',
+            complement=cc('item', 'item'),
+          },
+        },
+      }
   elseif topic == df.talk_choice_type.AgreeComplyDemand then
     ----
     -- "Okay!  I'll do it."
@@ -3327,6 +3392,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.AskLocationObject then
     -- "Where is the "
     -- topic1: item key
+    -- / "object I can't remember"
     -- "?"
   elseif topic == df.talk_choice_type.DemandTribute then
     -- topic1: historical_entity key
@@ -4861,6 +4927,7 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'by',
   'disposal',
   'do',
+  'drop',
   'fighting',
   'goodbye',
   'happen',
@@ -4868,16 +4935,21 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'inevitable',
   'it',
   'know',
+  'left-hand',
+  'made by entity',
+  'made of material',
   'means',
   'must',
   'not',
   'passive',
   'pointless',
   'problem',
+  'right-hand',
   'stop',
   'terrible',
   'terrific',
   'terrifying',
+  'the',
   'thing',
   'this',
   'what',
@@ -4930,12 +5002,15 @@ Args:
   _1: Ignored.
   _2: Ignored.
   word_id: The ID of the new word.
-  noun_sing: The singular noun form of the word in English, or '' or
-    'n/a' if this word cannot be used as a singular noun.
-  noun_plur: The pural noun form of the word in English, or '' or 'NP'
-    if this word cannot be used as a plural noun.
-  adj: The adjective form of the word in English, or '' or 'n/a' if this
-    word cannot be used as an adjective.
+  noun_sing: The singular noun form of the word in English, or nil, '',
+    or 'n/a' if this word cannot be used as a singular noun.
+  noun_plur: The plural noun form of the word in English, or 'STP' if
+    the plural form is `noun_sing .. 's'`, or nil, '', or 'NP' if this
+    word cannot be used as a plural noun.
+  adj: The adjective form of the word in English, or nil, '', or 'n/a'
+    if this word cannot be used as an adjective.
+  of_noun_sing: Whether the singular noun works in English as the object
+    of the preposition "of" without a determiner.
 ]]
 local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   local words = df.global.world.raws.language.words
@@ -4945,10 +5020,10 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   local has_noun_sing = false
   local has_noun_plur = false
   local noun_str
-  if noun_sing ~= '' and noun_sing ~= 'n/a' then
+  if noun_sing and noun_sing ~= '' and noun_sing ~= 'n/a' then
     has_noun_sing = true
   end
-  if noun_plur ~= '' and noun_plur ~= 'NP' then
+  if noun_plur and noun_plur ~= '' and noun_plur ~= 'NP' then
     has_noun_plur = true
   end
   if has_noun_sing or has_noun_plur then
@@ -4961,14 +5036,19 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
     word.flags.rear_compound_noun_sing = true
     word.flags.the_noun_sing = true
     word.flags.the_compound_noun_sing = true
-    word.flags.of_noun_sing = true
     str:insert('#', {new=true, value='[FRONT_COMPOUND_NOUN_SING]'})
     str:insert('#', {new=true, value='[REAR_COMPOUND_NOUN_SING]'})
     str:insert('#', {new=true, value='[THE_NOUN_SING]'})
     str:insert('#', {new=true, value='[THE_COMPOUND_NOUN_SING]'})
-    str:insert('#', {new=true, value='[OF_NOUN_SING]'})
+    if of_noun_sing then
+      word.flags.of_noun_sing = true
+      str:insert('#', {new=true, value='[OF_NOUN_SING]'})
+    end
   end
   if has_noun_plur then
+    if noun_plur == 'STP' then
+      noun_plur = noun_sing .. 's'
+    end
     noun_str = noun_str .. ':' .. noun_plur
     word.forms.NounPlural = noun_plur
     word.flags.front_compound_noun_plur = true
@@ -4985,7 +5065,7 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   if noun_str then
     str:insert('#', {new=true, value=noun_str .. ']'})
   end
-  if adj ~= '' and adj ~= 'n/a' then
+  if adj and adj ~= '' and adj ~= 'n/a' then
     word.forms.Adjective = adj
     word.flags.front_compound_adj = true
     word.flags.rear_compound_adj = true
@@ -5018,7 +5098,7 @@ local function add_word_to_lect(lect, resource_id, resource_functions, word_id)
   for _, f in ipairs(resource_functions) do
     if utils.linear_index(f(lect.community), resource_id) then
       local _, _, lemma = random_word(lect, word_id)
-      print('civ ' .. lect.community.id, resource_id, lemma)
+      print('civ ' .. lect.community.id, resource_id, word_id, lemma)
       lect.lemmas.words[utils.linear_index(
         df.global.world.raws.language.words, word_id, 'word')].value =
         escape(lemma)
@@ -5038,191 +5118,219 @@ Args:
     noun_sing: See `create_word`.
     noun_plur: Ditto.
     adj: Ditto.
+    of_noun_sing: Ditto.
     Any of these arguments can be ignored.
 ]]
 local function expand_lexicons(f)
   local raws = df.global.world.raws
+  local universal = {function(civ) return {0} end}
   for _, topic in pairs(DEFAULT_CONSTITUENT_KEYS) do
-    f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. topic, '', '', '')
+    f(0, universal, WORD_ID_CHAR .. topic)
   end
   --[[
   for _, topic in ipairs(df.talk_choice_type) do
     if topic then
-      f(0, {function(civ) return {0} end}, WORD_ID_CHAR .. topic, '', '', '')
+      f(0, universal, WORD_ID_CHAR .. topic)
     end
   end
   ]]
+  for _, item_type in ipairs(df.item_type) do
+    -- This overgenerates but is necessary for items without subtypes.
+    -- TODO: Use is_rawable, if reliable, to decide which ones need this.
+    local classname = df.item_type.attrs[item_type].classname
+    if classname then
+      f(0, universal, 'ITEM_TYPE' .. WORD_ID_CHAR .. classname)
+    end
+  end
+  for _, slab_type in ipairs(df.slab_engraving_type) do
+    f(0, universal, 'item_slabst' .. WORD_ID_CHAR .. slab_type)
+  end
   for i, inorganic in ipairs(raws.inorganics) do
     f(i,
-      {function(civ) return civ.resources.metals end,
-       function(civ) return civ.resources.stones end,
-       function(civ) return civ.resources.gems end},
+      {
+        function(civ) return civ.resources.metals end,
+        function(civ) return civ.resources.stones end,
+        function(civ) return civ.resources.gems end,
+      },
       'INORGANIC' .. WORD_ID_CHAR .. inorganic.id,
+      -- TODO: Get the words at room temperature.
       inorganic.material.state_name.Solid,
-      '',
-      inorganic.material.state_adj.Solid)
+      nil,
+      inorganic.material.state_adj.Solid,
+      true)
   end
   for _, plant in ipairs(raws.plants.all) do
     f(plant.anon_1,
-      {function(civ) return civ.resources.tree_fruit_plants end,
-       function(civ) return civ.resources.shrub_fruit_plants end},
+      {
+        function(civ) return civ.resources.tree_fruit_plants end,
+        function(civ) return civ.resources.shrub_fruit_plants end,
+        function(civ) return civ.resources.discovered_plants end,
+      },
       'PLANT' .. WORD_ID_CHAR .. plant.id,
       plant.name,
       plant.name_plural,
       plant.adj)
   end
-  --[[
   for _, tissue in ipairs(raws.tissue_templates) do
-    f(?, ?,
+    f(0,
+      universal,
       'TISSUE_TEMPLATE' .. WORD_ID_CHAR .. tissue.id,
       tissue.tissue_name_singular,
       tissue.tissue_name_plural,
-      '')
+      nil,
+      tissue.tissue_name_plural ~= 'NP')
   end
-  ]]
   for i, creature in ipairs(raws.creatures.all) do
     f(i,
-      {function(civ) return {civ.race} end,
-       function(civ) return civ.resources.fish_races end,
-       function(civ) return civ.resources.fish_races end,
-       function(civ) return civ.resources.egg_races end,
-       function(civ) return civ.resources.animals.pet_races end,
-       function(civ) return civ.resources.animals.wagon_races end,
-       function(civ) return civ.resources.animals.pack_animal_races end,
-       function(civ) return civ.resources.animals.wagon_puller_races end,
-       function(civ) return civ.resources.animals.mount_races end,
-       function(civ) return civ.resources.animals.minion_races end,
-       function(civ) return civ.resources.animals.exotic_pet_races end},
+      {
+        function(civ) return {civ.race} end,
+        function(civ) return civ.resources.fish_races end,
+        function(civ) return civ.resources.fish_races end,
+        function(civ) return civ.resources.egg_races end,
+        function(civ) return civ.resources.animals.pet_races end,
+        function(civ) return civ.resources.animals.wagon_races end,
+        function(civ) return civ.resources.animals.pack_animal_races end,
+        function(civ) return civ.resources.animals.wagon_puller_races end,
+        function(civ) return civ.resources.animals.mount_races end,
+        function(civ) return civ.resources.animals.minion_races end,
+        function(civ) return civ.resources.animals.exotic_pet_races end,
+        function(civ) return civ.resources.discovered_creatures end,
+      },
       'CREATURE' .. WORD_ID_CHAR .. creature.creature_id,
       creature.name[0],
       creature.name[1],
       creature.name[2])
+  end
+  --[[
+  for _, food in ipairs(raws.itemdefs.food) do
+    f(?, ?, 'item_foodst' .. WORD_ID_CHAR .. food.id, food.name, '', '')
+  end
+  ]]
+  for _, instrument in ipairs(raws.itemdefs.instruments) do
+    f(instrument.subtype,
+      {function(civ) return civ.resources.instrument_type end},
+      'item_instrumentst' .. WORD_ID_CHAR .. instrument.id,
+      instrument.name,
+      instrument.name_plural)
+  end
+  for _, toy in ipairs(raws.itemdefs.toys) do
+    f(toy.subtype,
+      {function(civ) return civ.resources.toy_type end},
+      'item_toyst' .. WORD_ID_CHAR .. toy.id,
+      toy.name,
+      toy.name_plural)
+  end
+  for _, armor in ipairs(raws.itemdefs.armor) do
+    f(armor.subtype,
+      {function(civ) return civ.resources.armor_type end},
+      'item_armorst' .. WORD_ID_CHAR .. armor.id,
+      armor.name,
+      armor.name_plural)
+  end
+  for _, shoe in ipairs(raws.itemdefs.shoes) do
+    f(shoe.subtype,
+      {function(civ) return civ.resources.shoes_type end},
+      'item_shoesst' .. WORD_ID_CHAR .. shoe.id,
+      shoe.name,
+      shoe.name_plural)
+  end
+  for _, shield in ipairs(raws.itemdefs.shields) do
+    f(shield.subtype,
+      {function(civ) return civ.resources.shield_type end},
+      'item_shieldst' .. WORD_ID_CHAR .. shield.id,
+      shield.name,
+      shield.name_plural)
+  end
+  for _, helm in ipairs(raws.itemdefs.helms) do
+    f(helm.subtype,
+      {function(civ) return civ.resources.helm_type end},
+      'item_helmst' .. WORD_ID_CHAR .. helm.id,
+      helm.name,
+      helm.name_plural)
+  end
+  for _, glove in ipairs(raws.itemdefs.gloves) do
+    f(glove.subtype,
+      {function(civ) return civ.resources.gloves_type end},
+      'item_glovesst' .. WORD_ID_CHAR .. glove.id,
+      glove.name,
+      glove.name_plural)
+  end
+  for _, pants in ipairs(raws.itemdefs.pants) do
+    f(pants.subtype,
+      {function(civ) return civ.resources.helm_type end},
+      'item_pantsst' .. WORD_ID_CHAR .. pants.id,
+      pants.name,
+      pants.name_plural)
+  end
+  for _, siege_ammo in ipairs(raws.itemdefs.siege_ammo) do
+    f(siege_ammo.subtype,
+      {function(civ) return civ.resources.siegeammo_type end},
+      'item_siegeammost' .. WORD_ID_CHAR .. siege_ammo.id,
+      siege_ammo.name,
+      siege_ammo.name_plural)
   end
   for _, weapon in ipairs(raws.itemdefs.weapons) do
     f(weapon.subtype,
       {function(civ) return civ.resources.digger_type end,
        function(civ) return civ.resources.weapon_type end,
        function(civ) return civ.resources.training_weapon_type end},
-      'ITEM_WEAPON' .. WORD_ID_CHAR .. weapon.id,
+      'item_weaponst' .. WORD_ID_CHAR .. weapon.id,
       weapon.name,
-      weapon.name_plural,
-      '')
-  end
-  for _, trapcomp in ipairs(raws.itemdefs.trapcomps) do
-    f(trapcomp.subtype,
-      {function(civ) return civ.resources.trapcomp_type end},
-      'ITEM_TRAPCOMP' .. WORD_ID_CHAR .. trapcomp.id,
-       trapcomp.name,
-       trapcomp.name_plural,
-       '')
-  end
-  for _, toy in ipairs(raws.itemdefs.toys) do
-    f(toy.subtype,
-      {function(civ) return civ.resources.toy_type end},
-      'ITEM_TOY' .. WORD_ID_CHAR .. toy.id,
-      toy.name,
-      toy.name_plural,
-      '')
-  end
-  for _, tool in ipairs(raws.itemdefs.tools) do
-    f(tool.subtype,
-      {function(civ) return civ.resources.toy_type end},
-      'ITEM_TOOL' .. WORD_ID_CHAR .. tool.id,
-      tool.name,
-      tool.name_plural,
-      '')
-  end
-  for _, instrument in ipairs(raws.itemdefs.instruments) do
-    f(instrument.subtype,
-      {function(civ) return civ.resources.instrument_type end},
-      'ITEM_INSTRUMENT' .. WORD_ID_CHAR .. instrument.id,
-      instrument.name,
-      instrument.name_plural,
-      '')
-  end
-  for _, armor in ipairs(raws.itemdefs.armor) do
-    f(armor.subtype,
-      {function(civ) return civ.resources.armor_type end},
-      'ITEM_ARMOR' .. WORD_ID_CHAR .. armor.id,
-      armor.name,
-      armor.name_plural,
-      '')
+      weapon.name_plural)
   end
   for _, ammo in ipairs(raws.itemdefs.ammo) do
     f(ammo.subtype,
       {function(civ) return civ.resources.ammo_type end},
-      'ITEM_AMMO' .. WORD_ID_CHAR .. ammo.id,
+      'item_ammost' .. WORD_ID_CHAR .. ammo.id,
       ammo.name,
-      ammo.name_plural,
-      '')
+      ammo.name_plural)
   end
-  for _, siege_ammo in ipairs(raws.itemdefs.siege_ammo) do
-    f(siege_ammo.subtype,
-      {function(civ) return civ.resources.siegeammo_type end},
-      'ITEM_SIEGEAMMO' .. WORD_ID_CHAR .. siege_ammo.id,
-      siege_ammo.name,
-      siege_ammo.name_plural,
-      '')
+  for _, trapcomp in ipairs(raws.itemdefs.trapcomps) do
+    f(trapcomp.subtype,
+      {function(civ) return civ.resources.trapcomp_type end},
+      'item_trapcompst' .. WORD_ID_CHAR .. trapcomp.id,
+       trapcomp.name,
+       trapcomp.name_plural)
   end
-  for _, glove in ipairs(raws.itemdefs.gloves) do
-    f(glove.subtype,
-      {function(civ) return civ.resources.gloves_type end},
-      'ITEM_GLOVES' .. WORD_ID_CHAR .. glove.id,
-      glove.name,
-      glove.name_plural,
-      '')
+  for _, tool in ipairs(raws.itemdefs.tools) do
+    f(tool.subtype,
+      {function(civ) return civ.resources.toy_type end},
+      'item_toolst' .. WORD_ID_CHAR .. tool.id,
+      tool.name,
+      tool.name_plural)
   end
-  for _, shoe in ipairs(raws.itemdefs.shoes) do
-    f(shoe.subtype,
-      {function(civ) return civ.resources.shoes_type end},
-      'ITEM_SHOES' .. WORD_ID_CHAR .. shoe.id,
-      shoe.name,
-      shoe.name_plural,
-      '')
+  for i, shape in ipairs(raws.language.shapes) do
+    local is_gem = #utils.list_bitfield_flags(shape.gems_use) ~= 0
+    local gem_prefix = is_gem and
+      (shape.gems_use.adj or shape.gems_use.adj_noun) and
+      #shape.adj > 0 and shape.adj[0].value .. ' ' or ''
+    f(i,
+      {
+        function(civ) return is_gem and {} or {i} end,
+        function(civ) return civ.entity_raw.gem_shapes end,
+        function(civ) return civ.entity_raw.stone_shapes end,
+      },
+      'SHAPE' .. WORD_ID_CHAR .. shape.id,
+      gem_prefix .. shape.name,
+      gem_prefix .. shape.name_plural)
   end
-  for _, shield in ipairs(raws.itemdefs.shields) do
-    f(shield.subtype,
-      {function(civ) return civ.resources.shield_type end},
-      'ITEM_SHIELD' .. WORD_ID_CHAR .. shield.id,
-      shield.name,
-      shield.name_plural,
-      '')
-  end
-  for _, helm in ipairs(raws.itemdefs.helms) do
-    f(helm.subtype,
-      {function(civ) return civ.resources.helm_type end},
-      'ITEM_HELM' .. WORD_ID_CHAR .. helm.id,
-      helm.name,
-      helm.name_plural,
-      '')
-  end
-  for _, pants in ipairs(raws.itemdefs.pants) do
-    f(pants.subtype,
-      {function(civ) return civ.resources.helm_type end},
-      'ITEM_PANTS' .. WORD_ID_CHAR .. pants.id,
-      pants.name,
-      pants.name_plural,
-      '')
+  for _, entity in ipairs(df.global.world.entities.all) do
+    f(0, universal, 'ENTITY' .. WORD_ID_CHAR .. entity.id)
   end
   --[[
-  for _, food in ipairs(raws.itemdefs.food) do
-    f(?, ?, 'ITEM_FOOD' .. WORD_ID_CHAR .. food.id, food.name, '', '')
-  end
   for _, building in ipairs(raws.buildings.all) do
-    f(?, ?, 'BUILDING' .. WORD_ID_CHAR .. building.id, building.name, '', '')
+    f(?, ?, 'BUILDING' .. WORD_ID_CHAR .. building.id, building.name)
   end
   for _, builtin in ipairs(raws.mat_table.builtin) do
     if builtin then
       f(?, ?, 'BUILTIN' .. WORD_ID_CHAR .. builtin.id,
-        builtin.state_name.Solid, '', builtin.state_adj.Solid)
+        builtin.state_name.Solid, nil, builtin.state_adj.Solid)
     end
   end
   for _, syndrome in ipairs(raws.syndromes.all) do
-    f(?, ?, 'SYNDROME' .. WORD_ID_CHAR .. syndrome.id, syndrome.syn_name,
-      '', '')
+    f(?, ?, 'SYNDROME' .. WORD_ID_CHAR .. syndrome.id, syndrome.syn_name)
   end
   ]]
-  -- TODO: descriptors
 end
 
 --[[
@@ -6373,17 +6481,17 @@ local function loan_words(dst_civ_id, src_civ_id, loans)
 end
 
 local GENERAL = {
-  {prefix='ITEM_GLOVES;', type=df.itemdef_glovesst, id='id',
+  {prefix='item_glovesst' .. WORD_ID_CHAR, type=df.itemdef_glovesst, id='id',
    get=function(civ) return civ.resources.gloves_type end},
-  {prefix='ITEM_SHOES;', type=df.itemdef_shoesst, id='id',
+  {prefix='item_shoesst' .. WORD_ID_CHAR, type=df.itemdef_shoesst, id='id',
    get=function(civ) return civ.resources.shoes_type end},
-  {prefix='ITEM_PANTS;', type=df.itemdef_pantsst, id='id',
+  {prefix='item_pantsst' .. WORD_ID_CHAR, type=df.itemdef_pantsst, id='id',
    get=function(civ) return civ.resources.pants_type end},
-  {prefix='ITEM_TOY;', type=df.itemdef_toyst, id='id',
+  {prefix='item_toyst' .. WORD_ID_CHAR, type=df.itemdef_toyst, id='id',
    get=function(civ) return civ.resources.toy_type end},
-  {prefix='ITEM_INSTRUMENT;', type=df.itemdef_instrumentst, id='id',
+  {prefix='item_instrumentst' .. WORD_ID_CHAR, type=df.itemdef_instrumentst, id='id',
    get=function(civ) return civ.resources.instrument_type end},
-  {prefix='ITEM_TOOL;', type=df.itemdef_toolst, id='id',
+  {prefix='item_toolst' .. WORD_ID_CHAR, type=df.itemdef_toolst, id='id',
    get=function(civ) return civ.resources.tool_type end},
   {prefix='PLANT;', type=df.plant_raw, id='id',
    get=function(civ) return civ.resources.tree_fruit_plants end},
@@ -6396,21 +6504,21 @@ local GENERAL = {
 }
 
 local TRADE = {
-  {prefix='ITEM_WEAPON;', type=df.itemdef_weaponst, id='id',
+  {prefix='item_weaponst' .. WORD_ID_CHAR, type=df.itemdef_weaponst, id='id',
    get=function(civ) return civ.resources.digger_type end},
-  {prefix='ITEM_WEAPON;', type=df.itemdef_weaponst, id='id',
+  {prefix='item_weaponst' .. WORD_ID_CHAR, type=df.itemdef_weaponst, id='id',
    get=function(civ) return civ.resources.training_weapon_type end},
-  {prefix='ITEM_GLOVES;', type=df.itemdef_glovesst, id='id',
+  {prefix='item_glovesst' .. WORD_ID_CHAR, type=df.itemdef_glovesst, id='id',
    get=function(civ) return civ.resources.gloves_type end},
-  {prefix='ITEM_SHOES;', type=df.itemdef_shoesst, id='id',
+  {prefix='item_shoesst' .. WORD_ID_CHAR, type=df.itemdef_shoesst, id='id',
    get=function(civ) return civ.resources.shoes_type end},
-  {prefix='ITEM_PANTS;', type=df.itemdef_pantsst, id='id',
+  {prefix='item_pantsst' .. WORD_ID_CHAR, type=df.itemdef_pantsst, id='id',
    get=function(civ) return civ.resources.pants_type end},
-  {prefix='ITEM_TOY;', type=df.itemdef_toyst, id='id',
+  {prefix='item_toyst' .. WORD_ID_CHAR, type=df.itemdef_toyst, id='id',
    get=function(civ) return civ.resources.toy_type end},
-  {prefix='ITEM_INSTRUMENT;', type=df.itemdef_instrumentst, id='id',
-   get=function(civ) return civ.resources.instrument_type end},
-  {prefix='ITEM_TOOL;', type=df.itemdef_toolst, id='id',
+  {prefix='item_instrumentst' .. WORD_ID_CHAR, type=df.itemdef_instrumentst,
+   id='id', get=function(civ) return civ.resources.instrument_type end},
+  {prefix='item_toolst' .. WORD_ID_CHAR, type=df.itemdef_toolst, id='id',
    get=function(civ) return civ.resources.tool_type end},
   {prefix='INORGANIC;', type=df.inorganic_raw, id='id',
    get=function(civ) return civ.resources.metals end},
@@ -6437,18 +6545,18 @@ local TRADE = {
 }
 
 local WAR = {
-  {prefix='ITEM_WEAPON;', type=df.itemdef_weaponst, id='id',
+  {prefix='item_weaponst' .. WORD_ID_CHAR, type=df.itemdef_weaponst, id='id',
    get=function(civ) return civ.resources.weapon_type end},
-  {prefix='ITEM_ARMOR;', type=df.itemdef_armorst, id='id',
+  {prefix='item_armorst' .. WORD_ID_CHAR, type=df.itemdef_armorst, id='id',
    get=function(civ) return civ.resources.armor_type end},
-  {prefix='ITEM_AMMO;', type=df.itemdef_ammost, id='id',
+  {prefix='item_ammost' .. WORD_ID_CHAR, type=df.itemdef_ammost, id='id',
    get=function(civ) return civ.resources.ammo_type end},
-  {prefix='ITEM_HELM;', type=df.itemdef_helmst, id='id',
+  {prefix='item_helmst' .. WORD_ID_CHAR, type=df.itemdef_helmst, id='id',
    get=function(civ) return civ.resources.helm_type end},
-  {prefix='ITEM_SHIELD;', type=df.itemdef_shieldst, id='id',
+  {prefix='item_shieldst' .. WORD_ID_CHAR, type=df.itemdef_shieldst, id='id',
    get=function(civ) return civ.resources.shield_type end},
-  {prefix='ITEM_SIEGEAMMO;', type=df.itemdef_siegeammost, id='id',
-   get=function(civ) return civ.resources.siegeammo_type end},
+  {prefix='item_siegeammost' .. WORD_ID_CHAR, type=df.itemdef_siegeammost,
+   id='id', get=function(civ) return civ.resources.siegeammo_type end},
   {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
    get=function(civ) return {civ.race} end},
   {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
