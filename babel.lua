@@ -2666,7 +2666,14 @@ function cc.item(c)
     }
     -- TODO: coin_ruler = df.historical_figure.find(coin_batch.ruler)
   end
-  local material = dfhack.matinfo.decode(item).material
+  local matinfo = dfhack.matinfo.decode(item)
+  local material = matinfo.mode
+  if material == 'creature' then
+    material = material .. WORD_ID_CHAR .. matinfo[material].creature_id
+  elseif matinfo[material] then
+    material = material .. WORD_ID_CHAR .. matinfo[material].id
+  end
+  material = material .. WORD_ID_CHAR .. matinfo.material.id
   local handedness
   if item._type == df.item_glovesst then
     if item.handedness[0] then
@@ -2691,7 +2698,7 @@ function cc.item(c)
   t[#t + 1] = coin_ruler
   t[#t + 1] = ps_xp{
     head=k'made of material',
-    -- TODO: complement=,
+    complement=r(material),
   }
   t[#t + 1] = handedness
   t.head = r(head_key)
@@ -4447,8 +4454,9 @@ local function do_syntax(constituent, lexicon, parameters)
         end
         return do_syntax(replacement, depth, sfis, maximal)
       elseif constituent.ref then
-        dfhack.color(COLOR_YELLOW); printall(lexicon)
-        qerror('No constituent with ID ' .. constituent.ref)
+        dfhack.color(COLOR_YELLOW)
+        print('No constituent with ID ' .. constituent.ref)
+        dfhack.color()
       elseif not constituent.text then
         constituent.maximal = maximal
         for _, morpheme in ipairs(constituent.morphemes) do
@@ -5005,12 +5013,12 @@ Args:
   _2: Ignored.
   word_id: The ID of the new word.
   noun_sing: The singular noun form of the word in English, or nil, '',
-    or 'n/a' if this word cannot be used as a singular noun.
+    'n/a', or 'none' if this word cannot be used as a singular noun.
   noun_plur: The plural noun form of the word in English, or 'STP' if
     the plural form is `noun_sing .. 's'`, or nil, '', or 'NP' if this
     word cannot be used as a plural noun.
-  adj: The adjective form of the word in English, or nil, '', or 'n/a'
-    if this word cannot be used as an adjective.
+  adj: The adjective form of the word in English, or nil, '', 'n/a', or
+    'none' if this word cannot be used as an adjective.
   of_noun_sing: Whether the singular noun works in English as the object
     of the preposition "of" without a determiner.
 ]]
@@ -5022,7 +5030,9 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   local has_noun_sing = false
   local has_noun_plur = false
   local noun_str
-  if noun_sing and noun_sing ~= '' and noun_sing ~= 'n/a' then
+  if noun_sing and noun_sing ~= '' and noun_sing ~= 'n/a' and
+    noun_sing ~= 'none'
+  then
     has_noun_sing = true
   end
   if noun_plur and noun_plur ~= '' and noun_plur ~= 'NP' then
@@ -5067,7 +5077,7 @@ local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
   if noun_str then
     str:insert('#', {new=true, value=noun_str .. ']'})
   end
-  if adj and adj ~= '' and adj ~= 'n/a' then
+  if adj and adj ~= '' and adj ~= 'n/a' and adj ~= 'none' then
     word.forms.Adjective = adj
     word.flags.front_compound_adj = true
     word.flags.rear_compound_adj = true
@@ -5122,9 +5132,9 @@ local function get_state_at_usual_temperature(material)
   local melting_point = material.heat.melting_point
   local boiling_point = material.heat.boiling_point
   if melting_point == NO_TEMPERATURE or boiling_point == NO_TEMPERATURE then
-    if not material.state_name.Solid:find('^frozen ') then
+    if not material.state_name.Solid:find('%f[^\0 ]frozen ') then
       return df.matter_state.Solid
-    elseif not material.state_name.Gas:find('^boiling ') then
+    elseif not material.state_name.Gas:find('%f[^\0 ]boiling ') then
       return df.matter_state.Gas
     end
     return df.matter_state.Liquid
@@ -5179,6 +5189,18 @@ local function expand_lexicons(f)
   for _, slab_type in ipairs(df.slab_engraving_type) do
     f(0, universal, 'item_slabst' .. WORD_ID_CHAR .. slab_type)
   end
+  for i, builtin in ipairs(df.builtin_mats) do
+    -- TODO: coke vs charcoal
+    local material = raws.mat_table.builtin[i]
+    local state = get_state_at_usual_temperature(material)
+    f(0,
+      universal,
+      'builtin' .. WORD_ID_CHAR .. builtin,
+      material.state_name[state],
+      nil,
+      material.state_adj[state],
+      true)
+  end
   for i, inorganic in ipairs(raws.inorganics) do
     local state = get_state_at_usual_temperature(inorganic.material)
     f(i,
@@ -5187,24 +5209,41 @@ local function expand_lexicons(f)
         function(civ) return civ.resources.stones end,
         function(civ) return civ.resources.gems end,
       },
-      'INORGANIC' .. WORD_ID_CHAR .. inorganic.id,
+      'inorganic' .. WORD_ID_CHAR .. inorganic.id .. WORD_ID_CHAR,
       inorganic.material.state_name[state],
       nil,
       inorganic.material.state_adj[state],
       true)
   end
+  local plant_resource_functions = {
+    function(civ) return civ.resources.tree_fruit_plants end,
+    function(civ) return civ.resources.shrub_fruit_plants end,
+    function(civ) return civ.resources.discovered_plants end,
+  }
   for _, plant in ipairs(raws.plants.all) do
     f(plant.anon_1,
-      {
-        function(civ) return civ.resources.tree_fruit_plants end,
-        function(civ) return civ.resources.shrub_fruit_plants end,
-        function(civ) return civ.resources.discovered_plants end,
-      },
-      'PLANT' .. WORD_ID_CHAR .. plant.id,
+      plant_resource_functions,
+      'plant' .. WORD_ID_CHAR .. plant.id,
       plant.name,
       plant.name_plural,
       plant.adj)
+    for _, material in ipairs(plant.material) do
+      local state = get_state_at_usual_temperature(material)
+      local prefix = material.prefix
+      if prefix ~= '' then
+        prefix = prefix .. ' '
+      end
+      f(plant.anon_1,
+        plant_resource_functions,
+        -- TODO: What if plant.id contains WORD_ID_CHAR? Ditto creatures m.m.
+        'plant' .. WORD_ID_CHAR .. plant.id .. WORD_ID_CHAR .. material.id,
+        prefix .. material.state_name[state],
+        nil,
+        prefix .. material.state_adj[state],
+        true)
+    end
   end
+  --[[
   for _, tissue in ipairs(raws.tissue_templates) do
     f(0,
       universal,
@@ -5214,26 +5253,43 @@ local function expand_lexicons(f)
       nil,
       tissue.tissue_name_plural ~= 'NP')
   end
+  ]]
+  local creature_resource_functions = {
+    function(civ) return {civ.race} end,
+    function(civ) return civ.resources.fish_races end,
+    function(civ) return civ.resources.fish_races end,
+    function(civ) return civ.resources.egg_races end,
+    function(civ) return civ.resources.animals.pet_races end,
+    function(civ) return civ.resources.animals.wagon_races end,
+    function(civ) return civ.resources.animals.pack_animal_races end,
+    function(civ) return civ.resources.animals.wagon_puller_races end,
+    function(civ) return civ.resources.animals.mount_races end,
+    function(civ) return civ.resources.animals.minion_races end,
+    function(civ) return civ.resources.animals.exotic_pet_races end,
+    function(civ) return civ.resources.discovered_creatures end,
+  }
   for i, creature in ipairs(raws.creatures.all) do
     f(i,
-      {
-        function(civ) return {civ.race} end,
-        function(civ) return civ.resources.fish_races end,
-        function(civ) return civ.resources.fish_races end,
-        function(civ) return civ.resources.egg_races end,
-        function(civ) return civ.resources.animals.pet_races end,
-        function(civ) return civ.resources.animals.wagon_races end,
-        function(civ) return civ.resources.animals.pack_animal_races end,
-        function(civ) return civ.resources.animals.wagon_puller_races end,
-        function(civ) return civ.resources.animals.mount_races end,
-        function(civ) return civ.resources.animals.minion_races end,
-        function(civ) return civ.resources.animals.exotic_pet_races end,
-        function(civ) return civ.resources.discovered_creatures end,
-      },
-      'CREATURE' .. WORD_ID_CHAR .. creature.creature_id,
+      creature_resource_functions,
+      'creature' .. WORD_ID_CHAR .. creature.creature_id,
       creature.name[0],
       creature.name[1],
       creature.name[2])
+    for _, material in ipairs(creature.material) do
+      local state = get_state_at_usual_temperature(material)
+      local prefix = material.prefix
+      if prefix ~= '' then
+        prefix = prefix .. ' '
+      end
+      f(i,
+        creature_resource_functions,
+        'creature' .. WORD_ID_CHAR .. creature.creature_id .. WORD_ID_CHAR ..
+        material.id,
+        prefix .. material.state_name[state],
+        nil,
+        prefix .. material.state_adj[state],
+        true)
+    end
   end
   --[[
   for _, food in ipairs(raws.itemdefs.food) do
@@ -6527,13 +6583,13 @@ local GENERAL = {
    get=function(civ) return civ.resources.instrument_type end},
   {prefix='item_toolst' .. WORD_ID_CHAR, type=df.itemdef_toolst, id='id',
    get=function(civ) return civ.resources.tool_type end},
-  {prefix='PLANT;', type=df.plant_raw, id='id',
+  {prefix='plant' .. WORD_ID_CHAR, type=df.plant_raw, id='id',
    get=function(civ) return civ.resources.tree_fruit_plants end},
-  {prefix='PLANT;', type=df.plant_raw, id='id',
+  {prefix='plant' .. WORD_ID_CHAR, type=df.plant_raw, id='id',
    get=function(civ) return civ.resources.shrub_fruit_plants end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.pet_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.mount_races end}
 }
 
@@ -6554,27 +6610,27 @@ local TRADE = {
    id='id', get=function(civ) return civ.resources.instrument_type end},
   {prefix='item_toolst' .. WORD_ID_CHAR, type=df.itemdef_toolst, id='id',
    get=function(civ) return civ.resources.tool_type end},
-  {prefix='INORGANIC;', type=df.inorganic_raw, id='id',
+  {prefix='inorganic' .. WORD_ID_CHAR, type=df.inorganic_raw, id='id',
    get=function(civ) return civ.resources.metals end},
-  {prefix='INORGANIC;', type=df.inorganic_raw, id='id',
+  {prefix='inorganic' .. WORD_ID_CHAR, type=df.inorganic_raw, id='id',
    get=function(civ) return civ.resources.stones end},
-  {prefix='INORGANIC;', type=df.inorganic_raw, id='id',
+  {prefix='inorganic' .. WORD_ID_CHAR, type=df.inorganic_raw, id='id',
    get=function(civ) return civ.resources.gems end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.fish_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.egg_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.pet_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.wagon_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.pack_animal_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.wagon_puller_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.mount_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.exotic_pet_races end}
 }
 
@@ -6591,11 +6647,11 @@ local WAR = {
    get=function(civ) return civ.resources.shield_type end},
   {prefix='item_siegeammost' .. WORD_ID_CHAR, type=df.itemdef_siegeammost,
    id='id', get=function(civ) return civ.resources.siegeammo_type end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return {civ.race} end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.mount_races end},
-  {prefix='CREATURE;', type=df.creature_raw, id='creature_id',
+  {prefix='creature' .. WORD_ID_CHAR, type=df.creature_raw, id='creature_id',
    get=function(civ) return civ.resources.animals.minion_races end}
 }
 
