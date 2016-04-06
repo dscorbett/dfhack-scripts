@@ -2292,6 +2292,9 @@ Randomly chooses dimension values from a dimension without replacement.
 Args:
   rng! A random number generator.
   dimension: A dimension.
+
+Returns:
+  A set of dimension values from the given dimension.
 ]]
 local function get_dimension_values(rng, dimension)
   if dimension.d1 then
@@ -2463,6 +2466,40 @@ local function xp(c)
 end
 
 --[[
+Randomly chooses dimension values from a phonology without replacement.
+
+The difference between this and `get_dimension_values`, besides the
+types of the inputs, is that the former tries to generate a
+self-consistent inventory, whereas the latter picks values purely at
+random from the list of phonetic symbols. Symbols are meant to be a
+part of the UI, not part of the world, which is why this is hacky.
+
+Args:
+  rng! A random number generator.
+  phonology: A phonology.
+  size: A target inventory size.
+
+Returns:
+  A set of dimension values from the given phonology.
+]]
+local function random_hacky_inventory(rng, phonology, size)
+  local inventory = {}
+  for i, symbol in ipairs(shuffle(phonology.symbols, rng)) do
+    if i > size then
+      break
+    end
+    local dv = {}
+    for n = 1, #phonology.nodes do
+      if symbol.features[n] then
+        dv[#dv + 1] = n
+      end
+    end
+    inventory[#inventory + 1] = dv
+  end
+  return inventory
+end
+
+--[[
 Randomly generates a language parameter table.
 
 Args:
@@ -2478,8 +2515,8 @@ local function random_parameters(phonology, seed, creature)
   local rng = dfhack.random.new(seed)
   -- TODO: normal distribution of inventory sizes
   local size = 10 + rng:random(21)
-  local inventory =
-    get_dimension_values(rng, get_dimension(rng, phonology, creature))
+  local inventory = random_hacky_inventory(rng, phonology, size)
+    --get_dimension_values(rng, get_dimension(rng, phonology, creature))
   size = #inventory -- TODO: Don't assume!
   local parameters = {max_sonority=0, min_sonority=math.huge, inventory={},
                       constraints=shuffle(copyall(phonology.constraints), rng)}
@@ -2518,7 +2555,7 @@ local function get_parameters(lect)
     lect.parameters = random_parameters(
       lect.phonology, lect.seed, df.creature_raw.find(lect.community.race))
   end
-  cached_parameters = lect.parameters
+  --cached_parameters = lect.parameters
   return lect.parameters
 end
 
