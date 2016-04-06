@@ -73,6 +73,7 @@ if enabled == nil then
   enabled = false
 end
 local dirty = true
+local timer
 
 --[[
 Data definitions:
@@ -2710,19 +2711,21 @@ end
 Gets a constituent for an utterance.
 
 Args:
-  force_goodbye: Whether to force a goodbye.
+  should_abort: Whether to abort the conversation.
   topic: A `talk_choice_type`.
   topic1: An integer whose exact interpretation depends on `topic`.
   topic2: Ditto.
   topic3: Ditto.
   topic4: Ditto.
   english: The English text of the utterance.
+  speakers: The speaker of the report as a unit.
+  hearers: The hearers of the report as a sequence of units.
 
 Returns:
   The constituent corresponding to the utterance.
   The context in which the utterance was produced.
 ]]
-local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
+local function get_constituent(should_abort, topic, topic1, topic2, topic3,
                                topic4, english, speaker, hearers)
   -- TODO: Double spaces may be collapsed when concatenating reports.
   -- TODO: [LISP]ing multiplies <s>es.
@@ -2734,7 +2737,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
     hearers=hearers,
     it={true},
   }
-  if force_goodbye then
+  if should_abort then
     ----
     constituent = k'goodbye'
   elseif topic == df.talk_choice_type.Greet then
@@ -2831,10 +2834,10 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
       -- / "They must be stopped by any means at our disposal."
       local this_or_they
       if english:find('This must') then
-        cc('it', 'pronoun')
+        this_or_they = cc('it', 'pronoun')
       else
         context.them = {true, true}
-        cc('them', 'pronoun')
+        this_or_they = cc('them', 'pronoun')
       end
       context.us = {speaker, true}
       constituent =
@@ -2934,6 +2937,22 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
       -- "I don't care one way or another."
     elseif topic1 == 9 then
       -- "I hate it." / "I hate them."
+      local it_or_them
+      if english:find('hate it') then
+        it_or_them = cc('it', 'pronoun')
+      else
+        context.them = {true, true}
+        it_or_them = cc('them', 'pronoun')
+      end
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            subject=cc('speaker', 'pronoun'),
+            verb=k'hate',
+            object=it_or_them,
+          },
+        }
     elseif topic1 == 10 then
       -- "I am afraid of it." / "I am afraid of them."
     elseif topic1 == 12 then
@@ -3060,7 +3079,7 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.AskCeaseHostilities then
     ----
     -- "Let us stop this pointless fighting!"
-    context.us = {speaker, hearer}
+    context.us = {speaker, hearers}
     constituent =
       ps_sentences{
         ps_infl{
@@ -3133,6 +3152,26 @@ local function get_constituent(force_goodbye, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.Yield then
     ----
     -- "I yield!  I yield!" / "We yield!  We yield!"
+    local i_or_we
+    if english:find('I yield') then
+      i_or_we = cc('speaker', 'pronoun')
+    else
+      context.us = {speaker, true}
+      i_or_we = cc('us', 'pronoun')
+    end
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          subject=i_or_we,
+          verb=k'yield',
+        },
+        ps_infl{
+          tense=k'PRESENT',
+          subject=i_or_we,
+          verb=k'yield',
+        },
+      }
   elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
     ----
     -- topic1: emotion_type
@@ -4875,25 +4914,27 @@ Translates an utterance into a lect.
 
 Args:
   lect: The lect to translate into, or nil to skip translation.
-  force_goodbye: Whether to force a goodbye.
+  should_abort: Whether to abort the conversation.
   topic: A `talk_choice_type`.
   topic1: An integer whose exact interpretation depends on `topic`.
   topic2: Ditto.
   topic3: Ditto.
   topic4: Ditto.
   english: The English text of the utterance.
+  speakers: The speaker of the report as a unit.
+  hearers: The hearers of the report as a sequence of units.
 
 Returns:
   The text of the translated utterance.
 ]]
-local function translate(lect, force_goodbye, topic, topic1, topic2, topic3,
+local function translate(lect, should_abort, topic, topic1, topic2, topic3,
                          topic4, english, speaker, hearers)
-  print('translate ' .. tostring(lect) .. ' ' .. tostring(force_goodbye) .. '/' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+  print('translate ' .. tostring(lect) .. ' ' .. tostring(should_abort) .. '/' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
   if not lect then
     return english
   end
   local constituent = contextualize(get_constituent(
-    force_goodbye, topic, topic1, topic2, topic3, topic4, english, speaker,
+    should_abort, topic, topic1, topic2, topic3, topic4, english, speaker,
     hearers))
   local utterables =
     make_utterance(constituent, lect.constituents, get_parameters(lect))
@@ -4941,6 +4982,7 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'fighting',
   'goodbye',
   'happen',
+  'hate',
   'help',
   'inevitable',
   'it',
@@ -7005,7 +7047,15 @@ local function update_fluency(acquirer, report_lect)
 end
 
 --[[
-TODO
+Gets the participants in a conversation.
+
+Args:
+  report: A report.
+  conversation: The conversation the report comes from.
+
+Returns:
+  The speaker of the report as a unit.
+  The hearers of the report as a sequence of units.
 ]]
 local function get_participants(report, conversation)
   local speaker_id = report.unk_v40_3
@@ -7020,12 +7070,25 @@ local function get_participants(report, conversation)
 end
 
 --[[
-TODO
+Gets a conversation's participants and whether to abort it.
+
+Args:
+  report: A report.
+  conversation: The conversation the report comes from.
+  adventurer: The adventurer as a unit.
+
+Returns:
+  The initial part of the text of the report saying who says the report
+    to whom.
+  The speaker of the report as a unit.
+  The hearers of the report as a sequence of units.
+  Whether to force the conversation to end because the participants are
+    not speaking the same language.
 ]]
-local function get_turn_preamble(report, conversation, adventurer)
+local function get_participant_preamble(report, conversation, adventurer)
   -- TODO: Invalid for goodbyes: the data has been deleted by then.
   local speaker, hearers = get_participants(report, conversation)
-  local force_goodbye = false
+  local should_abort = false
   local adventurer_is_hearer = utils.linear_index(hearers, adventurer)
   if adventurer_is_hearer or speaker == adventurer then
     -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
@@ -7034,18 +7097,18 @@ local function get_turn_preamble(report, conversation, adventurer)
     conversation.anon_2 = 7
     if adventurer_is_hearer then
       -- TODO: unless this is the first turn of the conversation
-      force_goodbye = true
+      should_abort = true
     end
   end
   -- TODO: What if the adventurer knows the participants' names?
-  local text = speaker == adventurer and 'You' or
+  local preamble = speaker == adventurer and 'You' or
     df.profession.attrs[speaker.profession].caption
   if speaker ~= adventurer and not adventurer_is_hearer then
-    text = text .. ' (to ' ..
+    preamble = preamble .. ' (to ' ..
       (hearers[1] and df.profession.attrs[hearers[1].profession].caption or '?')
       .. ')'
   end
-  return text .. ': ', force_goodbye, speaker, hearers
+  return preamble .. ': ', speaker, hearers, should_abort
 end
 
 --[[
@@ -7101,10 +7164,10 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   turn = turn[#turn - new_turn_counts[conversation_id]]
   new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
   local continuation = false
-  local preamble, force_goodbye, speaker, hearers =
-    get_turn_preamble(report, conversation, adventurer)
+  local preamble, speaker, hearers, should_abort =
+    get_participant_preamble(report, conversation, adventurer)
   for _, line in ipairs(line_break(REPORT_LINE_LENGTH, preamble .. translate(
-    report_lect, force_goodbye, turn.anon_3, turn.anon_11, turn.anon_12,
+    report_lect, should_abort, turn.anon_3, turn.anon_11, turn.anon_12,
     turn.anon_13, turn.unk_v4014_1, english, speaker, hearers)))
   do
     id_delta = id_delta + 1
@@ -7271,9 +7334,7 @@ if #args >= 1 then
     dfhack.with_suspend(main)
   elseif args[1] == 'stop' then
     enabled = false
-    if timer then
-      dfhack.timeout_active(timer)
-    end
+    dfhack.timeout_active(timer)
   elseif args[1] == 'test' then
     finalize()
     initialize()
