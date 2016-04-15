@@ -2764,10 +2764,9 @@ Returns:
 ]]
 local function get_constituent(should_abort, topic, topic1, topic2, topic3,
                                topic4, english, speaker, hearers)
-  -- TODO: Double spaces may be collapsed when concatenating reports.
-  -- TODO: [LISP]ing multiplies <s>es.
-  -- TODO: The first non-whitespace character of a sentence is capitalized.
-  -- TODO: So don't rely on the exact contents of `english`.
+  english = english:lower()  -- Normalize case. Assume English only uses ASCII.
+    :gsub('s+', 's')  -- Counteract [LISP].
+    :gsub(' +', ' ')  -- Double spaces are collapsed on report boundaries.
   local constituent
   local context = {
     speaker=speaker,
@@ -2775,10 +2774,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     it={true},
   }
   if should_abort then
-    ----
     constituent = k'goodbye'
   elseif topic == df.talk_choice_type.Greet then
-    ----
+    ----1
     -- "Hey" / "Hello" / "Greetings" / "Salutations"
     -- etc.
   elseif topic == df.talk_choice_type.Nevermind then
@@ -2790,7 +2788,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.AskSurroundings then
     -- "Tell me about this area."
   elseif topic == df.talk_choice_type.SayGoodbye then
-    ----
     -- "Goodbye."
     constituent = k'goodbye'
   elseif topic == df.talk_choice_type.AskStructure then
@@ -2810,7 +2807,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.SpreadRumor then
     -- ?
   elseif topic == df.talk_choice_type.ReplyGreeting then
-    ----
+    ----1
     -- "Hello"
     -- ".  It is good to see you."
     -- ?
@@ -2822,12 +2819,11 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "a divine being"
     -- ".  I know why you have come."
   elseif topic == df.talk_choice_type.BringUpIncident then
-    ----
+    ----1
     -- ?
   elseif topic == df.talk_choice_type.TellNothingChanged then
     -- "It has been the same as ever."
   elseif topic == df.talk_choice_type.Goodbye2 then
-    ----
     -- "Goodbye."
     constituent = k'goodbye'
   elseif topic == df.talk_choice_type.ReturnTopic then
@@ -2865,12 +2861,11 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "this poor soul"
     -- " back home!"
   elseif topic == df.talk_choice_type.StateOpinion then
-    ----
     if topic1 == 0 then
       -- "This must be stopped by any means at our disposal."
       -- / "They must be stopped by any means at our disposal."
       local this_or_they
-      if english:find('This must') then
+      if english:find('this must') then
         this_or_they = cc('it', 'pronoun')
       else
         context.them = {true, true}
@@ -2932,6 +2927,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           }
         }
     elseif topic1 == 3 then
+      ----2
       -- "This is the life for me."
     elseif topic1 == 4 then
       -- "It is terrifying."
@@ -2967,15 +2963,43 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           },
         }
     elseif topic1 == 6 then
+      ----2
       -- "We are in the right in all matters."
     elseif topic1 == 7 then
+      ----2
       -- "It's for the best."
     elseif topic1 == 8 then
       -- "I don't care one way or another."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            neg=k'not',
+            subject=cc('speaker', 'pronoun'),
+            verb=k'care',
+            pps={
+              ps_xp{
+                head=k'in way',
+                complement=ps_xp{
+                  specifier=ps_xp{
+                    specifier=k'one',
+                    head=k'way',
+                  },
+                  head=k'or',
+                  complement=ps_xp{
+                    specifier=k'the',
+                    k'other',
+                    head=k'way',
+                  },
+                },
+              },
+            },
+          }
+        }
     elseif topic1 == 9 then
       -- "I hate it." / "I hate them."
       local it_or_them
-      if english:find('hate it') then
+      if english:find('it%.$') then
         it_or_them = cc('it', 'pronoun')
       else
         context.them = {true, true}
@@ -2992,8 +3016,45 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         }
     elseif topic1 == 10 then
       -- "I am afraid of it." / "I am afraid of them."
+      local it_or_them
+      if english:find('it%.$') then
+        it_or_them = cc('it', 'pronoun')
+      else
+        context.them = {true, true}
+        it_or_them = cc('them', 'pronoun')
+      end
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            subject=cc('speaker', 'pronoun'),
+            verb=k'be afraid',
+            pps={
+              ps_xp{
+                head=k'of stimulus',
+                complement=it_or_them,
+              },
+            },
+          },
+        }
     elseif topic1 == 12 then
       -- "That is sad but not unexpected."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            subject=cc('it', 'pronoun'),
+            copula='predicational',
+            ps_xp{
+              specifier=k'sad',
+              head=k'but',
+              complement=ps_xp{
+                head=k'not',
+                complement=k'unexpected',
+              },
+            },
+          },
+        }
     elseif topic1 == 12 then
       -- "That is terrible."
       constituent =
@@ -3018,6 +3079,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           },
         }
     else
+      ----1
       -- ?
     end
   elseif topic == 27 then  -- respond to invitation to insurrection
@@ -3052,7 +3114,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- topic1: historical_figure key
     -- "."
   elseif topic == df.talk_choice_type.RequestSelfRescue then
-    ----
     -- "Please help me!"
     constituent =
       ps_sentences{
@@ -3061,7 +3122,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           tense=k'PRESENT',
           mood=k'IMPERATIVE',
           subject=cc('hearers', 'pronoun'),
-          verb=k'help',
+          verb=k'help (transitive)',
           object=cc('speaker', 'pronoun'),
         },
       }
@@ -3114,7 +3175,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.BypassGreeting then
     -- N/A
   elseif topic == df.talk_choice_type.AskCeaseHostilities then
-    ----
     -- "Let us stop this pointless fighting!"
     context.us = {speaker, hearers}
     constituent =
@@ -3134,19 +3194,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         },
       }
   elseif topic == df.talk_choice_type.DemandYield then
-    ----
     -- "You must yield!"
     constituent =
       ps_sentences{
         ps_infl{
           tense=k'PRESENT',
           mood=k'must',
-          subject=cc('speaker', 'pronoun'),
+          subject=cc('hearers', 'pronoun'),
           verb=k'yield',
         },
       }
   elseif topic == df.talk_choice_type.HawkWares then
-    ----
+    ----1
     -- "try" / "get your" / "your very own"
     -- "real" / "authentic"
     -- topic1: item key
@@ -3168,7 +3227,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- topic2: ?
     -- topic3: ?
   elseif topic == df.talk_choice_type.YieldTerror then
-    ----
     -- "Stop!  This isn't happening!"
     -- TODO: aspect
     constituent =
@@ -3187,10 +3245,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         },
       }
   elseif topic == df.talk_choice_type.Yield then
-    ----
     -- "I yield!  I yield!" / "We yield!  We yield!"
     local i_or_we
-    if english:find('I yield') then
+    if english:find('i yield') then
       i_or_we = cc('speaker', 'pronoun')
     else
       context.us = {speaker, true}
@@ -3210,41 +3267,63 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         },
       }
   elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
-    ----
+    ----1
     -- topic1: emotion_type
     -- topic2: unit_thought_type
     -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressGreatEmotion then
-    ----
+    ----1
     -- topic1: emotion_type
     -- topic2: unit_thought_type
     -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressEmotion then
-    ----
+    ----1
     -- topic1: emotion_type
     -- topic2: unit_thought_type
     -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressMinorEmotion then
-    ----
+    ----1
     -- topic1: emotion_type
     -- topic2: unit_thought_type
     -- topic3,4: various
   elseif topic == df.talk_choice_type.ExpressLackEmotion then
-    ----
+    ----1
     -- topic1: emotion_type
     -- topic2: unit_thought_type
     -- topic3,4: various
   elseif topic == df.talk_choice_type.OutburstFleeConflict then
-    ----
     -- "Help!  Save me!"
+    -- TODO: Does this utterances have any hearers?
+    constituent =
+      ps_sentence{
+        ps_infl{
+          mood=k'IMPERATIVE',
+          subject=cc('hearers', 'pronoun'),
+          verb=k'help (intransitive)',
+        },
+        ps_infl{
+          mood=k'IMPERATIVE',
+          subject=cc('hearers', 'pronoun'),
+          verb=k'save',
+          object=cc('speaker', 'pronoun'),
+        },
+      }
   elseif topic == df.talk_choice_type.StateFleeConflict then
-    ----
     -- "I must withdraw!"
+    constituent =
+      ps_sentences{
+        ps_infl{
+          tense=k'PRESENT',
+          mood=k'must',
+          subject=cc('speaker', 'pronoun'),
+          verb=k'withdraw',
+        },
+      }
   elseif topic == df.talk_choice_type.MentionJourney then
     -- "I've forgotten what I was going to say..."
     -- ?
   elseif topic == df.talk_choice_type.SummarizeTroubles then
-    ----
+    ----1
     -- "Well, let's see..."
     -- ?
     -- / incident summary
@@ -3403,10 +3482,10 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.CancelAgreement then
     -- "We can no longer travel together."
   elseif topic == df.talk_choice_type.SummarizeConflict then
-    ----
+    ----1
     -- ?
   elseif topic == df.talk_choice_type.SummarizeViews then
-    ----
+    ----1
     -- topic1: historical_figure key
     -- " rules "
     -- site
@@ -3450,7 +3529,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.RaiseAlarm then
     -- "Intruder!  Intruder!"
   elseif topic == df.talk_choice_type.DemandDropWeapon then
-    ----
     -- "Drop the "
     -- topic1: item key
     -- "!"
@@ -3469,11 +3547,20 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         },
       }
   elseif topic == df.talk_choice_type.AgreeComplyDemand then
-    ----
     -- "Okay!  I'll do it."
+    constituent =
+      ps_sentences{
+        k'okay',
+        ps_infl{
+          tense=k'FUTURE',
+          subject=cc('speaker', 'pronoun'),
+          verb=k'do',
+          object=cc('it', 'pronoun'),
+        },
+      }
   elseif topic == df.talk_choice_type.RefuseComplyDemand then
-    ----
     -- "Over my dead body!"
+    constituent = k'over my dead body'
   elseif topic == df.talk_choice_type.AskLocationObject then
     -- "Where is the "
     -- topic1: item key
@@ -3519,7 +3606,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ", is it really you?" / "!"
     -- / other strings for specific family members
   elseif topic == df.talk_choice_type.CommentWeather then
-    ----
+    ----1
     -- "It is scorching hot!"
     -- "It is freezing cold!"
     -- "Is that"
@@ -3553,7 +3640,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "  And what a wind!"
     -- "It is a nice temperature today."
   elseif topic == df.talk_choice_type.CommentNature then
-    ----
+    ----1
     -- "Look at the sky!  Are we in the Underworld?"
     -- "What an odd glow!"
     -- "At least it doesn't rain down here."
@@ -5012,7 +5099,10 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'about',
   'any',
   'at',
+  'be afraid',
+  'but',
   'by',
+  'care',
   'disposal',
   'do',
   'drop',
@@ -5020,7 +5110,9 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'goodbye',
   'happen',
   'hate',
-  'help',
+  'help (intransitive)',
+  'help (transitive)',
+  'in way',
   'inevitable',
   'it',
   'know',
@@ -5030,10 +5122,18 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'means',
   'must',
   'not',
+  'of stimulus',
+  'okay',
+  'one',
+  'or',
+  'other',
+  'over my dead body',
   'passive',
   'pointless',
   'problem',
   'right-hand',
+  'sad',
+  'save',
   'stop',
   'terrible',
   'terrific',
@@ -5041,7 +5141,10 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'the',
   'thing',
   'this',
+  'unexpected',
+  'way',
   'what',
+  'withdraw',
   'yield',
 }
 
