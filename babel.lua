@@ -69,6 +69,8 @@ local phonologies = nil
 local lects = nil
 local fluency_data = nil
 
+local context_callbacks = {}
+
 if enabled == nil then
   enabled = false
 end
@@ -344,9 +346,10 @@ A node in a syntax tree.
     `features` and `morphemes` must both be empty.
   context_key: A key to look up in a context. At most one of `n1`,
     `word`, `text`, and `context_key` can be non-nil.
-  context_callback: A function returning a constituent to replace
-    this one given `context[context_key]` and `context` where `context`
-    is a context. It is nil if and only if `context_key` is.
+  context_callback: A string key in `context_callbacks` whose value is a
+    function returning a constituent to replace this one given
+    `context[context_key]` and `context` where `context` is a context.
+    It is nil if and only if `context_key` is.
 
 Morpheme:
   id: A unique ID for this morpheme within its language.
@@ -2565,7 +2568,8 @@ TODO
 local function contextualize(constituent, context)
   local context_key = constituent.context_key
   if context_key then
-    return constituent.context_callback(context[context_key], context)
+    return context_callbacks[constituent.context_callback](
+      context[context_key], context)
   end
   return {
     n1=constituent.n1 and contextualize(constituent.n1, context),
@@ -2639,11 +2643,9 @@ local function ps_infl(ps)
   }
 end
 
-local cc = setmetatable({}, {
-    __call=function(self, key, callback_name)
-      return {context_key=key, context_callback=self[callback_name]}
-    end,
-  })
+local function cc(key, callback_name)
+  return {context_key=key, context_callback=callback_name}
+end
 
 --[[
 Gets a context-dependent possessive pronoun.
@@ -2658,7 +2660,7 @@ Args:
 Returns:
   The constituent for the possessive pronoun corresponding to `c`.
 ]]
-function cc.possessive_pronoun(c, context)
+function context_callbacks.possessive_pronoun(c, context)
   local first_person = false
   local second_person = false
   local third_person = false
@@ -2680,13 +2682,13 @@ function cc.possessive_pronoun(c, context)
   }'PRONOUN'
 end
 
-function cc.pronoun(c, context)
+function context_callbacks.pronoun(c, context)
   return ps_xp{  --DP
     head=cc.possessive_pronoun(c, context)
   }
 end
 
-function cc.item(c)
+function context_callbacks.item(c)
   --[[
   TODO:
   Memorial: memorial to $name
@@ -6307,6 +6309,10 @@ local function write_constituent(file, constituent, depth, id)
   if constituent.text then
     file:write(indent, '\t[TEXT:', escape(constituent.text), ']\n')
   end
+  if constituent.context_key then
+    file:write(indent, '\t[CONTEXT:', escape(constituent.context_key), ':',
+               escape(constituent.context_callback), ']\n')
+  end
   file:write(indent, '[END_CONSTITUENT]\n')
 end
 
@@ -6575,6 +6581,14 @@ local function load_lects()
               qerror('Wrong number of subtags: ' .. tag)
             end
             constituent_stack[#constituent_stack].text = subtags[2]
+          elseif subtags[1] == 'CONTEXT' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].context_key = subtags[2]
+            constituent_stack[#constituent_stack].context_callback = subtags[3]
           elseif subtags[1] == 'END_CONSTITUENT' then
             constituent_stack[#constituent_stack] = nil
           else
