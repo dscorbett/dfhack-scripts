@@ -82,6 +82,8 @@ Data definitions:
 
 Lect:
 A language or dialect.
+  parent: A lect to look constituents and morphemes up in if they are
+    not in this lect, or nil.
   seed: A random number generator seed for generating the lect's
     language parameter table.
   parameters: A language parameter table generated with `seed`, or nil
@@ -95,9 +97,9 @@ A language or dialect.
   constituents: A lexicon, i.e. a map of constituent IDs to constituents
     containing only the top-level constituents of this lect.
 All the IDs, features, and feature values of all morphemes and
-constituents in a lect must contain no characters invalid in raw tags.
-Morpheme IDs must be positive integers such that `morphemes` is a
-sequence, and the others must be strings.
+constituents in a lect must contain no characters invalid in raw
+subtags. Morpheme IDs must be positive integers such that `morphemes` is
+a sequence, and the others must be strings.
 
 Phonology:
   name: A name, for internal use.
@@ -4571,6 +4573,26 @@ if TEST then
 end
 
 --[[
+Looks up a constituent by key in the lexicon of a lect.
+
+If the constituent is not in the lexicon, it recursively looks it up in
+the lect's parent, if any.
+
+Args:
+  lect: A lect.
+  ref: A constituent key.
+
+Returns:
+  The constituent corresponding to the given key in the given lect, or
+    nil if there is none.
+]]
+local function resolve_lexeme(lect, ref)
+  if lect then
+    return lect.constituents[ref] or resolve_lexeme(lect.parent, ref)
+  end
+end
+
+--[[
 Does syntax, not including lowering or anything after.
 
 Syntax involves expanding references to items in the lexicon, checking
@@ -4578,13 +4600,13 @@ syntactic features, and merging constituents by raising.
 
 Args:
   constituent! A constituent.
-  lexicon: A lexicon.
+  lect: A lect.
   parameters: A language parameter table.
 
 Returns:
   `constituent`.
 ]]
-local function do_syntax(constituent, lexicon, parameters)
+local function do_syntax(constituent, lect, parameters)
   local do_syntax
   local function extend_sfis(constituent, n, depth, sfis, maximal)
     local sfis_n = {}
@@ -4611,7 +4633,7 @@ local function do_syntax(constituent, lexicon, parameters)
         sfis[#sfis + 1] = {depth=depth, head=constituent, feature=feature}
       end
     else
-      local replacement = lexicon[constituent.ref]
+      local replacement = resolve_lexeme(lect, constituent.ref)
       if replacement then
         replacement = copy_constituent(replacement)
         if constituent.features then
@@ -4826,16 +4848,16 @@ Converts a constituent to a sequence of mwords.
 
 Args:
   constituent! A constituent.
-  lexicon: A lexicon.
+  lect: A lect.
   parameters: A language parameter table.
 
 Returns:
   A sequence of utterables.
 ]]
-local function make_utterance(constituent, lexicon, parameters)
+local function make_utterance(constituent, lect, parameters)
   local utterables = {}
   for _, utterable in ipairs(linearize(do_lowering(
-    do_syntax(constituent, lexicon, parameters), parameters), parameters))
+    do_syntax(constituent, lect, parameters), parameters), parameters))
   do
     if type(utterable) == 'table' then
       local new_mword = utterable
@@ -4908,24 +4930,24 @@ if TEST then
     spell_utterance(make_utterance(
       {features={}, morphemes={{text='a', pword={}, fusion={}, features={}},
                                {text='b', pword={}, fusion={}, features={}}}},
-      {}, {strategies={}})),
+      {constituents={}}, {strategies={}})),
     'a-b ')
   assert_eq(
     spell_utterance(make_utterance(
       x{x{m={m{[2]='a'}}},
         x{m={m{[2]='b'}}}},
-      {}, {strategies={}})),
+      {constituents={}}, {strategies={}})),
     'a b ')
   assert_eq(
     spell_utterance(make_utterance(
        x{x{m={m{[2]='a'}}},
          x{m={m{[2]='b'}}}},
-      {}, {strategies={}, swap=true})),
+      {constituents={}}, {strategies={}, swap=true})),
     'b a ')
   assert_eq(
     spell_utterance(make_utterance(
       x{r'X', x{m={m{[2]='b'}}}},
-      {X=r'Y', Y=x{m={m{[2]='z'}}}},
+      {constituents={X=r'Y', Y=x{m={m{[2]='z'}}}}},
       {strategies={}})),
     'z b ')
   local n1 = x{f={f=1, g=2}, m={m{[2]='1'}, m{[2]='2'}}}
@@ -4933,9 +4955,10 @@ if TEST then
     x{n1,
       x{x{m={m{[2]='3'}}},
         x{f={g=2}, m={m{[2]='4'}}, moved_to=n1}}}
-  assert_eq(spell_utterance(make_utterance(constituent, {}, {strategies={}})),
+  assert_eq(spell_utterance(make_utterance(constituent, {constituents={}},
+                                           {strategies={}})),
             '1-2 3 ')
-  assert_eq(spell_utterance(make_utterance(constituent, {},
+  assert_eq(spell_utterance(make_utterance(constituent, {constituents={}},
                                            {strategies={}, overt_trace=true})),
             '1-2 3 4 ')
   local q_sent =
@@ -4949,9 +4972,14 @@ if TEST then
         }
       }
     }
-  local q_lex = {foo=x{m={m{'foo'}}}, bar=x{m={m{'bar'}}}, baz=x{m={m{'baz'}}}}
+  local q_lect = {constituents={
+      foo=x{m={m{'foo'}}},
+      bar=x{m={m{'bar'}}},
+      baz=x{m={m{'baz'}}}
+    },
+  }
   local q_params = {strategies={}}
-  assert_eq(spell_utterance(make_utterance(q_sent, q_lex, q_params)),
+  assert_eq(spell_utterance(make_utterance(q_sent, q_lect, q_params)),
             '[foo] [bar,Case=Nom] [baz,Case=Nom] ')
   local en_past = {features={}}
   local en_not = {
@@ -4974,19 +5002,20 @@ if TEST then
   local en_what = {features={}, morphemes={{id='what', text='what', pword={},
                                             features={wh=true}, fusion={}}}}
   local en_thing = {features={}, morphemes={m'thing'}}
-  local en_lexicon = {PAST=en_past, ['not']=en_not, walk=en_walk, you=en_you,
-                      what=en_what, thing=en_thing, ['do']=en_do}
+  local en_lect =
+    {constituents={PAST=en_past, ['not']=en_not, walk=en_walk, you=en_you,
+                   what=en_what, thing=en_thing, ['do']=en_do}}
   local en_parameters =
     {strategies={v={lower=true}, wh={pied_piping=true}, q={}, d={}}}
   local early_en_parameters = {strategies={v={}}}
   assert_eq(spell_utterance(make_utterance(xp{r'PAST', xp{x{r'walk'}}},
-                                           en_lexicon, en_parameters)),
+                                           en_lect, en_parameters)),
             'walk-ed ')
   local en_did_not_walk = xp{r'PAST', xp{r'not', xp{r'walk'}}}
-  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
+  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lect,
                                            en_parameters)),
             'did not walk ')
-  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lexicon,
+  assert_eq(spell_utterance(make_utterance(en_did_not_walk, en_lect,
                                            early_en_parameters)),
             'walk-ed not ')
   local en_what_thing_did_you_do =
@@ -4998,7 +5027,7 @@ if TEST then
                xp{r'what',
                   r'thing'}}}}}}
   assert_eq(spell_utterance(make_utterance(en_what_thing_did_you_do,
-                                           en_lexicon, en_parameters)),
+                                           en_lect, en_parameters)),
             'what thing did you do ')
   local en_you_did_thing =
     xp{
@@ -5016,13 +5045,14 @@ if TEST then
                 xp{
                    x{},
                    r'thing'}}}}}}}
-  assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lexicon,
+  assert_eq(spell_utterance(make_utterance(en_you_did_thing, en_lect,
                                            en_parameters)),
             'you did thing ')
-  local fr_lexicon = {
-    beau=x{f={gender=false}, m={m{'beau'}}},
-    vieux=x{f={gender=false}, m={m{'vieux'}}},
-    femme=x{f={gender='FEM'}, m={m{'femme'}}},
+  local fr_lect = {constituents={
+      beau=x{f={gender=false}, m={m{'beau'}}},
+      vieux=x{f={gender=false}, m={m{'vieux'}}},
+      femme=x{f={gender='FEM'}, m={m{'femme'}}},
+    },
   }
   local fr_parameters = {strategies={gender=nil}}
   local fr_belle_vieille_femme = ps_xp{
@@ -5030,7 +5060,7 @@ if TEST then
     r'vieux',
     head=r'femme',
   }
-  assert_eq(spell_utterance(make_utterance(fr_belle_vieille_femme, fr_lexicon,
+  assert_eq(spell_utterance(make_utterance(fr_belle_vieille_femme, fr_lect,
                                            fr_parameters)),
             '[beau,gender=FEM] [vieux,gender=FEM] [femme,gender=FEM] ')
 end
@@ -5062,8 +5092,7 @@ local function translate(lect, should_abort, topic, topic1, topic2, topic3,
   local constituent = contextualize(get_constituent(
     should_abort, topic, topic1, topic2, topic3, topic4, english, speaker,
     hearers))
-  local utterables =
-    make_utterance(constituent, lect.constituents, get_parameters(lect))
+  local utterables = make_utterance(constituent, lect, get_parameters(lect))
   return transcribe(utterables, lect.phonology)
 end
 
@@ -6325,6 +6354,7 @@ local function write_lect_files()
     local filename = 'lect_' .. string.format('%04d', i)
     local file = io.open(dir .. '/' .. filename .. '.txt', 'w')
     file:write(filename, '\n\n[OBJECT:LECT]\n\n[LECT]\n')
+    file:write('\t[PARENT:', utils.linear_index(lects, lect.parent), ']\n')
     file:write('\t[SEED:', lect.seed, ']\n')
     file:write('\t[LEMMAS:', lect.lemmas.name, ']\n')
     file:write('\t[COMMUNITY:', lect.community.id, ']\n')
@@ -6403,6 +6433,20 @@ local function load_lects()
             lects[#lects + 1] = current_lect
             current_morpheme = nil
             constituent_stack = {}
+          elseif subtags[1] == 'PARENT' then
+            if not current_lect then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 2 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            local parent_index = tonumber(subtags[2])
+            if (not parent_index or
+                parent_index < 1 or
+                parent_index >= #lects or
+                parent_index ~= math.floor(parent_index)) then
+              qerror('The parent must be a valid lect index: ' .. subtags[2])
+            end
+            current_lect.parent = lects[parent_index]
           elseif subtags[1] == 'SEED' then
             if not current_lect then
               qerror('Orphaned tag: ' .. tag)
@@ -6411,7 +6455,7 @@ local function load_lects()
             end
             current_lect.seed = tonumber(subtags[2])
             if not current_lect.seed then
-              qerror('The seed must be a number: ' .. current_lect.seed)
+              qerror('The seed must be a number: ' .. subtags[2])
             end
           elseif subtags[1] == 'LEMMAS' then
             if not current_lect then
