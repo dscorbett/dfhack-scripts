@@ -96,8 +96,8 @@ A language or dialect.
     morphemes.
   constituents: A lexicon, i.e. a map of constituent IDs to constituents
     containing only the top-level constituents of this lect.
-All the IDs, features, and feature values of all morphemes and
-constituents in a lect must contain no characters invalid in raw
+All the IDs, features, feature values, and theta roles of all morphemes
+and constituents in a lect must contain no characters invalid in raw
 subtags. Morpheme IDs must be positive integers such that `morphemes` is
 a sequence, and the others must be strings.
 
@@ -341,13 +341,18 @@ A node in a syntax tree.
     parents'.
   ref: The key of another constituent in the lexicon that this
     constituent is to be replaced with.
+  args: A mapping of theta role strings to constituents. It is nil if
+    `ref` is.
+  arg: A theta role string. A constituent with this key is meant to be
+    replaced from the `args` of another constituent; it does not make
+    sense for it to be present in the final output.
   maximal: The maximal projection of this constituent, or nil if none.
   moved_to: The constituent to which this constituent was moved, or nil
     if none.
   text: A string to use verbatim in the output. If this is non-nil, then
     `features` and `morphemes` must both be empty.
   context_key: A key to look up in a context. At most one of `n1`,
-    `word`, `text`, and `context_key` can be non-nil.
+    `word`, `text`, `arg`, and `context_key` can be non-nil.
   context_callback: A string key in `context_callbacks` whose value is a
     function returning a constituent to replace this one given
     `context[context_key]` and `context` where `context` is a context.
@@ -670,7 +675,7 @@ if TEST then
 end
 
 --[[
-Merge two sequences without duplicates sorted in increasing order.
+Merges two sequences without duplicates sorted in increasing order.
 
 Elements present in both input sequences are collapsed into one.
 
@@ -2419,6 +2424,29 @@ local function k(x)
 end
 
 --[[
+Constructs a constituent generator from its theta roles.
+
+Args:
+  key: A constituent key.
+
+Returns:
+  A function:
+    Constructs a constituent from a constituent key.
+    Args:
+      args: A mapping of theta role strings to constituents.
+    Returns:
+      A constituent using `args` as the arguments and `key` appended to
+      `WORD_ID_CHAR` as the constituent key.
+]]
+local function t(key)
+  return function(args)
+    local constituent = r(WORD_ID_CHAR .. key)
+    constituent.args = args
+    return constituent
+  end
+end
+
+--[[
 Constructs a morpheme.
 
 Args:
@@ -2622,17 +2650,12 @@ local function ps_sentences(ps)
 end
 
 local function ps_infl(ps)
-  -- TODO: keys: copula, mood, polite
+  -- TODO: keys: det, mood, polite, [1]
   -- TODO: more inflections: aspect, voice, AgrO, AgrIO...
   -- TODO: Make some levels optional; e.g. no vP => no AgrOP.
   -- TODO: Add features for Case etc. so movement will happen.
-  local small_vp = ps_xp{  -- vP
-    specifier=ps.subject,
-    complement=ps_xp{  -- VP
-      specifier=ps.object,
-      head=ps.verb,
-    },
-  }
+  local args = {a=ps.agent, e=ps.experiencer, s=ps.stimulus, t=ps.theme}
+  local small_vp = {ref=ps.verb.ref, next(args) and args}
   local negp = ps.neg and ps_xp{
     head=ps.neg,
     complement=small_vp,
@@ -2840,15 +2863,10 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       ps_sentences{
         ps_infl{
           tense=k'FUTURE',
-          subject=cc('speaker', 'pronoun'),
+          agent=cc('speaker', 'pronoun'),
           verb=k'do',
-          object=k'what',
-          pps={
-            ps_xp{
-              head=k'about',
-              complement=cc('it', 'pronoun'),
-            },
-          },
+          theme=k'what',
+          t'about'{t=cc('it', 'pronoun')}
         }
       }
   elseif topic == df.talk_choice_type.RequestSuggestAction then
@@ -2876,6 +2894,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         this_or_they = cc('them', 'pronoun')
       end
       context.us = {speaker, true}
+      -- TODO: passive
       constituent =
         ps_sentences{
           ps_infl{
@@ -2883,21 +2902,15 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
             mood=k'must',
             voice=k'passive',
             verb=k'stop',
-            object=this_or_they,
-            pps={
-              ps_xp{
-                head=k'by',
-                complement=ps_xp{
-                  head=k'any',
-                  complement=ps_xp{
-                    head=k'means',
-                    complement=ps_xp{
-                      head=k'at',
-                      complement=ps_xp{
-                        head=cc('us', 'possessive_pronoun'),
-                        complement=ps_xp{head=k'disposal'},
-                      },
-                    },
+            theme=this_or_they,
+            t'by'{
+              t=ps_xp{
+                head=k'any',
+                complement=k'means',
+                t'at'{
+                  t=ps_xp{
+                    head=cc('us', 'possessive_pronoun'),
+                    complement=k'disposal',
                   },
                 },
               },
@@ -2911,13 +2924,10 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           ps_infl{
             tense=k'PRESENT',
             neg=k'not',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            object=ps_xp{
-              head=cc('speaker', 'possessive_pronoun'),
-              complement=ps_xp{head=k'problem'},
-            },
-          }
+            theme=cc('it', 'pronoun'),
+            det=cc('speaker', 'possessive_pronoun'),
+            verb=k'problem',
+          },
         }
     elseif topic1 == 2 then
       -- "It was inevitable."
@@ -2925,23 +2935,31 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PAST',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            object=k'inevitable',
+            theme=cc('it', 'pronoun'),
+            verb=k'inevitable',
           }
         }
     elseif topic1 == 3 then
       ----2
       -- "This is the life for me."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            theme=cc('it', 'pronoun'),
+            det=k'the',
+            verb=k'life',
+            t'for'{t=cc('speaker', 'pronoun')},
+          },
+        }
     elseif topic1 == 4 then
       -- "It is terrifying."
       constituent =
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            object=k'terrifying',
+            stimulus=cc('it', 'pronoun'),
+            verb=k'terrifying',
           },
         }
     elseif topic1 == 5 then
@@ -2951,16 +2969,15 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           ps_infl{
             tense=k'PRESENT',
             neg=k'not',
-            subject=cc('speaker', 'pronoun'),
+            experiencer=cc('speaker', 'pronoun'),
             verb=k'know',
-            object=ps_xp{
+            stimulus=ps_xp{
               head=k'any',
               complement=ps_xp{
                 head=k'thing',
-                complement=ps_xp{
-                  head=k'about',
+                ps_xp{
                   -- TODO: that
-                  complement=cc('it', 'pronoun'),
+                  t'about'{t=cc('it', 'pronoun')},
                 },
               },
             },
@@ -2972,6 +2989,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     elseif topic1 == 7 then
       ----2
       -- "It's for the best."
+      constituent =
+        ps_sentences{
+          ps_infl{
+            tense=k'PRESENT',
+            theme=cc('it', 'pronoun'),
+            verb=k'for the best',
+          },
+        }
     elseif topic1 == 8 then
       -- "I don't care one way or another."
       constituent =
@@ -2979,26 +3004,10 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           ps_infl{
             tense=k'PRESENT',
             neg=k'not',
-            subject=cc('speaker', 'pronoun'),
+            experiencer=cc('speaker', 'pronoun'),
             verb=k'care',
-            pps={
-              ps_xp{
-                head=k'in way',
-                complement=ps_xp{
-                  specifier=ps_xp{
-                    specifier=k'one',
-                    head=k'way',
-                  },
-                  head=k'or',
-                  complement=ps_xp{
-                    specifier=k'the',
-                    k'other',
-                    head=k'way',
-                  },
-                },
-              },
-            },
-          }
+            t'in way'{t=k'one way or another'},
+          },
         }
     elseif topic1 == 9 then
       -- "I hate it." / "I hate them."
@@ -3013,9 +3022,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('speaker', 'pronoun'),
+            experiencer=cc('speaker', 'pronoun'),
             verb=k'hate',
-            object=it_or_them,
+            stimulus=it_or_them,
           },
         }
     elseif topic1 == 10 then
@@ -3031,14 +3040,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('speaker', 'pronoun'),
-            verb=k'be afraid',
-            pps={
-              ps_xp{
-                head=k'of stimulus',
-                complement=it_or_them,
-              },
-            },
+            experiencer=cc('speaker', 'pronoun'),
+            verb=k'fear',
+            stimulus=it_or_them,
           },
         }
     elseif topic1 == 12 then
@@ -3047,16 +3051,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            ps_xp{
-              specifier=k'sad',
-              head=k'but',
-              complement=ps_xp{
-                head=k'not',
-                complement=k'unexpected',
-              },
-            },
+            stimulus=cc('it', 'pronoun'),
+            -- TODO: conjunctions
+            verb=k'sad but not unexpected',
           },
         }
     elseif topic1 == 12 then
@@ -3065,9 +3062,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            object=k'terrible',
+            stimulus=cc('it', 'pronoun'),
+            verb=k'terrible',
           },
         }
     elseif topic1 == 13 then
@@ -3077,9 +3073,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_sentences{
           ps_infl{
             tense=k'PRESENT',
-            subject=cc('it', 'pronoun'),
-            copula='predicational',
-            object=k'terrific',
+            stimulus=cc('it', 'pronoun'),
+            verb=k'terrific',
           },
         }
     else
@@ -3125,9 +3120,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           polite=true,
           tense=k'PRESENT',
           mood=k'IMPERATIVE',
-          subject=cc('hearers', 'pronoun'),
-          verb=k'help (transitive)',
-          object=cc('speaker', 'pronoun'),
+          agent=cc('hearers', 'pronoun'),
+          verb=k'help',
+          stimulus=cc('speaker', 'pronoun'),
         },
       }
   elseif topic == df.talk_choice_type.AskWhatHappened then
@@ -3186,9 +3181,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_infl{
           tense=k'PRESENT',
           mood=k'HORTATIVE',
-          subject=cc('us', 'pronoun'),
+          agent=cc('us', 'pronoun'),
           verb=k'stop',
-          object=ps_xp{
+          theme=ps_xp{
             head=k'this',  -- TODO: more precise deixis
             complement=ps_xp{
               k'pointless',
@@ -3204,7 +3199,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_infl{
           tense=k'PRESENT',
           mood=k'must',
-          subject=cc('hearers', 'pronoun'),
+          agent=cc('hearers', 'pronoun'),
           verb=k'yield',
         },
       }
@@ -3238,13 +3233,15 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_infl{
           tense=k'PRESENT',
           mood=k'IMPERATIVE',
-          subject=cc('hearers', 'pronoun'),
+          -- TODO: The addressee might be the general situation, not a person.
+          agent=cc('hearers', 'pronoun'),
           verb=k'stop',
         },
         ps_infl{
+          -- TODO: progressive
           tense=k'PRESENT',
           neg=k'not',
-          subject=cc('it', 'pronoun'),
+          theme=cc('it', 'pronoun'),
           verb=k'happen',
         },
       }
@@ -3261,12 +3258,12 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       ps_sentences{
         ps_infl{
           tense=k'PRESENT',
-          subject=i_or_we,
+          agent=i_or_we,
           verb=k'yield',
         },
         ps_infl{
           tense=k'PRESENT',
-          subject=i_or_we,
+          agent=i_or_we,
           verb=k'yield',
         },
       }
@@ -3302,14 +3299,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       ps_sentence{
         ps_infl{
           mood=k'IMPERATIVE',
-          subject=cc('hearers', 'pronoun'),
-          verb=k'help (intransitive)',
+          agent=cc('hearers', 'pronoun'),
+          verb=k'help',
         },
         ps_infl{
           mood=k'IMPERATIVE',
-          subject=cc('hearers', 'pronoun'),
+          agent=cc('hearers', 'pronoun'),
           verb=k'save',
-          object=cc('speaker', 'pronoun'),
+          theme=cc('speaker', 'pronoun'),
         },
       }
   elseif topic == df.talk_choice_type.StateFleeConflict then
@@ -3319,7 +3316,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_infl{
           tense=k'PRESENT',
           mood=k'must',
-          subject=cc('speaker', 'pronoun'),
+          agent=cc('speaker', 'pronoun'),
           verb=k'withdraw',
         },
       }
@@ -3542,9 +3539,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         ps_infl{
           tense=k'PRESENT',
           mood=k'IMPERATIVE',
-          subject=cc('hearers', 'pronoun'),
+          agent=cc('hearers', 'pronoun'),
           verb=k'drop',
-          object=ps_xp{
+          theme=ps_xp{
             head=k'the',
             complement=cc('item', 'item'),
           },
@@ -3557,9 +3554,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         k'okay',
         ps_infl{
           tense=k'FUTURE',
-          subject=cc('speaker', 'pronoun'),
+          agent=cc('speaker', 'pronoun'),
           verb=k'do',
-          object=cc('it', 'pronoun'),
+          theme=cc('it', 'pronoun'),
         },
       }
   elseif topic == df.talk_choice_type.RefuseComplyDemand then
@@ -4061,7 +4058,7 @@ if TEST then
   local dummy = {id='z', pword={}, features={n=9}, fusion={}}
   local morpheme = {
     id='X', text='x', pword={}, affix='true', after=1, initial=-1,
-    features={f=1, g=2}, fusion={y=dummy}, dummy=dummy
+    features={f=1, g=2}, fusion={y=dummy}, dummy=dummy,
   }
   local new_morpheme = copy_morpheme(morpheme)
   assert_eq(new_morpheme, morpheme)
@@ -4072,13 +4069,22 @@ end
 --[[
 Copies a constituent deeply.
 
+If `args` is provided, constituents dominated by `constituent` which
+have `arg` keys are replaced with copies of the corresponding
+constituents from `args`. If `args` is nil or there is no corresponding
+constituent, it is just deleted; this allows for optional arguments.
+
 Args:
   constituent: A constituent.
+  args: An optional mapping of strings to constituents.
 
 Returns:
   A deep copy of the constituent.
 ]]
-local function copy_constituent(constituent)
+local function copy_constituent(constituent, args)
+  if constituent.arg then
+    return args and copy_constituent(args[constituent.arg])
+  end
   local morphemes = {}
   if constituent.morphemes then
     for i, morpheme in ipairs(constituent.morphemes) do
@@ -4086,13 +4092,14 @@ local function copy_constituent(constituent)
     end
   end
   return {
-    n1=constituent.n1 and copy_constituent(constituent.n1),
-    n2=constituent.n2 and copy_constituent(constituent.n2),
+    n1=constituent.n1 and copy_constituent(constituent.n1, args),
+    n2=constituent.n2 and copy_constituent(constituent.n2, args),
     features=copyall(constituent.features),
     morphemes=morphemes,
     is_phrase=constituent.is_phrase,
     depth=constituent.depth,
     ref=constituent.ref,
+    args=constituent.args,
     maximal=constituent.maximal,
     moved_to=constituent.moved_to,
     text=constituent.text,
@@ -4102,9 +4109,16 @@ local function copy_constituent(constituent)
 end
 
 if TEST then
-  local constituent = {n1={features={f=1, g=2}, morphemes={m'x', m'y'}},
-                       features={f=1, g=2}, morphemes={}, is_phrase=true}
-  assert_eq(copy_constituent(constituent), constituent)
+  local c1 = {
+    n1={features={f=1, g=2}, morphemes={m'x', m'y'}},
+    features={f=1, g=2}, morphemes={}, is_phrase=true,
+  }
+  assert_eq(copy_constituent(c1), c1)
+  c1.n2 = {arg='a', morphemes={}}
+  assert_eq(copy_constituent(c1).n2, nil)
+  local c2 = {ref='r', features={}, morphemes={},
+              args={t={ref='t', features={}, morphemes={}}}}
+  assert_eq(copy_constituent(c1, {a=c2}).n2, c2)
 end
 
 --[[
@@ -4384,7 +4398,7 @@ if TEST then
 end
 
 --[[
-Make two constituents agree in re a feature and maybe merge them.
+Makes two constituents agree in re a feature and maybe merge them.
 
 If the input SFIs are not nil, their constituents are made to agree.
 If their feature warrants it, and there is no structural impediment to
@@ -4635,7 +4649,7 @@ local function do_syntax(constituent, lect, parameters)
     else
       local replacement = resolve_lexeme(lect, constituent.ref)
       if replacement then
-        replacement = copy_constituent(replacement)
+        replacement = copy_constituent(replacement, constituent.args)
         if constituent.features then
           utils.fillTable(replacement.features, constituent.features)
         end
@@ -4722,7 +4736,7 @@ if TEST then
 end
 
 --[[
-Fuse two morphemes in a sequence.
+Fuses two morphemes in a sequence.
 
 It tries to fuse `morphemes[i]` and `morphemes[i + 1]`, where both of
 those indices are valid. If it fuses, both morphemes are replaced with
@@ -4996,7 +5010,7 @@ if TEST then
      features={}}
   en_past.morphemes = {{
     id='PAST', text='ed', pword={}, fusion={}, features={v=false, q=false},
-    affix=true, after=true, dummy=en_do.morphemes[1]
+    affix=true, after=true, dummy=en_do.morphemes[1],
   }}
   local en_you = {morphemes={m'you'}, features={}}
   local en_what = {features={}, morphemes={{id='what', text='what', pword={},
@@ -5130,40 +5144,37 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'about',
   'any',
   'at',
-  'be afraid',
-  'but',
   'by',
   'care',
   'disposal',
   'do',
   'drop',
+  'fear',
   'fighting',
+  'for the best',
+  'for',
   'goodbye',
   'happen',
   'hate',
-  'help (intransitive)',
-  'help (transitive)',
+  'help',
   'in way',
   'inevitable',
-  'it',
   'know',
   'left-hand',
+  'life',
   'made by entity',
   'made of material',
   'means',
   'must',
   'not',
-  'of stimulus',
   'okay',
-  'one',
-  'or',
-  'other',
+  'one way or another',
   'over my dead body',
   'passive',
   'pointless',
   'problem',
   'right-hand',
-  'sad',
+  'sad but not unexpected',
   'save',
   'stop',
   'terrible',
@@ -5172,8 +5183,6 @@ local DEFAULT_CONSTITUENT_KEYS = {
   'the',
   'thing',
   'this',
-  'unexpected',
-  'way',
   'what',
   'withdraw',
   'yield',
@@ -5192,10 +5201,10 @@ if TEST then
     local code = file:read('*all')
     file:close()
     local keys = {}
-    for key in code:gmatch("%f[%w]k[%s(]*('[^'\n]*')") do
+    for key in code:gmatch("%f[%w\\][kt][%s(]*('[^'\n]*')") do
       keys[key] = true
     end
-    for key in code:gmatch("%f[%w]k[%s(]*%b{}[%s(]*('[^'\n]*')") do
+    for key in code:gmatch("%f[%w\\][kt][%s(]*%b{}[%s(]*('[^'\n]*')") do
       keys[key] = true
     end
     local missing_keys = ''
@@ -5235,7 +5244,8 @@ Args:
   of_noun_sing: Whether the singular noun works in English as the object
     of the preposition "of" without a determiner.
 ]]
-local function create_word(_1, _2, word_id, noun_sing, noun_plur, adj)
+local function create_word(_1, _2,
+                           word_id, noun_sing, noun_plur, adj, of_noun_sing)
   local words = df.global.world.raws.language.words
   words:insert('#', {new=true, word=word_id})
   local word = words[#words - 1]
@@ -5844,7 +5854,7 @@ local function load_phonologies()
                     bitfield_set({}, #current_phonology.nodes - 1, 1),
                     current_parent - 1, 1),
                   values=bitfield_set({}, #current_phonology.nodes - 1, 1),
-                  scalar=0, strength=math.huge
+                  scalar=0, strength=math.huge,
                 })
             end
             current_parent = #current_phonology.nodes
@@ -6308,7 +6318,8 @@ Args:
   constituent: A constituent to write.
   depth: The depth of the constituent, where a top-level constituent's
     depth is 1 and any other's is one more than its parent's.
-  id: The constituent's ID, or nil if it is a top-level constituent.
+  id: The constituent's ID if it is a top-level constituent or an
+    argument, or nil.
 ]]
 local function write_constituent(file, constituent, depth, id)
   local indent = ('\t'):rep(depth)
@@ -6319,9 +6330,9 @@ local function write_constituent(file, constituent, depth, id)
   file:write(']\n')
   if constituent.n1 then
     write_constituent(file, constituent.n1, depth + 1)
-  end
-  if constituent.n2 then
-    write_constituent(file, constituent.n2, depth + 1)
+    if constituent.n2 then
+      write_constituent(file, constituent.n2, depth + 1)
+    end
   end
   for k, v in pairs(constituent.features or {}) do
     file:write(indent, '\t[C_FEATURE:', tostring(k), ':', tostring(v), ']\n')
@@ -6334,11 +6345,14 @@ local function write_constituent(file, constituent, depth, id)
   end
   if constituent.ref then
     file:write(indent, '\t[REF:', constituent.ref, ']\n')
-  end
-  if constituent.text then
+    for role, argument in pairs(constituent.args or {}) do
+      write_constituent(file, argument, depth + 1, role)
+    end
+  elseif constituent.arg then
+    file:write(indent, '\t[ARG:', constituent.arg, ']\n')
+  elseif constituent.text then
     file:write(indent, '\t[TEXT:', escape(constituent.text), ']\n')
-  end
-  if constituent.context_key then
+  elseif constituent.context_key then
     file:write(indent, '\t[CONTEXT:', escape(constituent.context_key), ':',
                escape(constituent.context_callback), ']\n')
   end
@@ -6563,15 +6577,23 @@ local function load_lects()
           elseif subtags[1] == 'CONSTITUENT' then
             if not current_lect then
               qerror('Orphaned tag: ' .. tag)
-            elseif next(constituent_stack) and #subtags ~= 1
-              or not next(constituent_stack) and #subtags ~= 2
+            elseif next(constituent_stack) and #subtags ~= 1 or #subtags ~= 2
             then
               qerror('Wrong number of subtags: ' .. tag)
             end
             local current_constituent = constituent_stack[#constituent_stack]
             local new_constituent = {features={}, morphemes={}}
+            local id = subtags[2]
             if current_constituent then
-              if current_constituent.n1 then
+              if id then
+                if current_constituent.ref then
+                  current_constituent.args = current_constituent.args or {}
+                  current_constituent.args[#current_constituent.args + 1] =
+                    new_constituent
+                else
+                  qerror('Argument without a predicate: ' .. id)
+                end
+              elseif current_constituent.n1 then
                 if current_constituent.n2 then
                   current_constituent.n2 = new_constituent
                 else
@@ -6582,8 +6604,8 @@ local function load_lects()
               end
             end
             constituent_stack[#constituent_stack + 1] = new_constituent
-            if subtags[2] then
-              current_lect.constituents[subtags[2]] = new_constituent
+            if id then
+              current_lect.constituents[id] = new_constituent
             end
           elseif subtags[1] == 'C_FEATURE' then
             if not next(constituent_stack) then
@@ -6618,6 +6640,13 @@ local function load_lects()
               qerror('Wrong number of subtags: ' .. tag)
             end
             constituent_stack[#constituent_stack].ref = subtags[2]
+          elseif subtags[1] == 'ARG' then
+            if not next(constituent_stack) then
+              qerror('Orphaned tag: ' .. tag)
+            elseif #subtags ~= 1 then
+              qerror('Wrong number of subtags: ' .. tag)
+            end
+            constituent_stack[#constituent_stack].arg = subtags[2]
           elseif subtags[1] == 'TEXT' then
             if not next(constituent_stack) then
               qerror('Orphaned tag: ' .. tag)
@@ -7113,7 +7142,7 @@ function total_handlers.get.events()
 end
 
 --[[
-Simulate the linguistic effects of a historical event.
+Simulates the linguistic effects of a historical event.
 
 This can modify anything related to translations or lects.
 
