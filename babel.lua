@@ -3731,6 +3731,58 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "How are you feeling right now?"
   elseif topic == 173 then  -- Say something about your emotions or thoughts
     -- ?
+  elseif topic == 174 then  -- Ask about available services, drinks, rooms, etc.
+  elseif topic == 175 then  -- List available services
+    -- "We have many drinks to choose from."
+    -- / "This is not that kind of establishment."
+  elseif topic == 176 then  -- Order drink
+  elseif topic == 177 then  -- Rent room
+  elseif topic == 178 then  -- Extend room rental
+  elseif topic == 179 then  -- Confirm service order
+    -- "I'll be back with your drink in a moment."
+    -- / "Your room is up the stairs, the first door on your right."
+    -- / "You'll have the room for another day. I'm glad you're enjoying your stay."
+  elseif topic == 180 then  -- Ask listener to join you as entertainer
+  elseif topic == 181 then  -- Respond to join request (entertainer)
+  elseif topic == 182 then  -- ask to join an existing troupe
+  elseif topic == 184 then  -- Refuse request to join your troupe
+  elseif topic == 185 then  -- Invite listener to join troupe
+  elseif topic == 186 then  -- Accept invitation to join troupe
+  elseif topic == 187 then  -- Refuse invitation to join troupe
+  elseif topic == 188 then  -- Kick listener out of troupe
+  elseif topic == 189 then  -- Create a performance troupe together (group naming menu)
+  elseif topic == 190 then  -- leave troupe
+  elseif topic == 192 then
+    -- "Please be patient. I'll have your order ready in a moment."
+  elseif topic == 193 then
+    -- "We don't offer any specific services here."
+  elseif topic == 194 then
+    -- "Yes, I can serve you when we're both there."
+  elseif topic == 195 then
+    -- "I don't work here."
+  elseif topic == 196 then  -- Express your emotions (new menu)
+    -- N/A
+  elseif topic == 197 then  -- State your values (new menu)
+    -- N/A
+  elseif topic == 198 then  -- state value/worthlessness/nuances
+  elseif topic == 199 then
+    -- "You haven't ordered anything. Would you like something?"
+  elseif topic == 200 then  -- Give directions to building
+  elseif topic == 201 then  -- Argue
+  elseif topic == 202 then  -- Flatter the listener
+  elseif topic == 203 then  -- Dismiss the listener's argument
+  elseif topic == 204 then  -- Respond passively
+  elseif topic == 205 then  -- Acquiesce (changes your values)
+  elseif topic == 206 then  -- Deride flattery
+  elseif topic == 207 then  -- Express outrage over dismissal
+  elseif topic == 208 then  -- Press the argument
+  elseif topic == 209 then  -- Agree to drop the argument
+  elseif topic == 210 then  -- ask for work for oneself
+  elseif topic == 211 then  -- ask for work for a group
+  elseif topic == 212 then  -- Grant listener work (one person)
+  elseif topic == 213 then  -- Refuse listener work (one person)
+  elseif topic == 214 then  -- Grant listener work (a group)
+  elseif topic == 215 then  -- Refuse listener work (a group)
   end
   if not constituent then
     -- TODO: This should never happen, once the above are all filled in.
@@ -7244,7 +7296,7 @@ function total_handlers.process_new.regions(region, i)
   region.name.nickname = 'Reg' .. i
 end
 
-local function get_new_turn_counts(reports, conversation_id)
+local function get_new_turn_counts(reports)
   local new_turn_counts = {}
   for i = next_report_index, #reports - 1 do
     print('r' .. i .. ': ' .. reports[i].text)
