@@ -29,6 +29,7 @@ TODO:
 ]]
 
 local TEST = true
+local HACK_FOR_QUICK_TEST = true
 
 local REPORT_LINE_LENGTH = 73
 local DEFAULT_NODE_PROBABILITY_GIVEN_PARENT = 0.5
@@ -2454,6 +2455,8 @@ Returns:
       `WORD_ID_CHAR` as the constituent key.
 ]]
 local function t(key)
+  -- TODO: map some keys to other keys
+  -- TODO: Ensure that `args[1] == nil`, which is currently sometimes false.
   return function(args)
     local constituent = r(WORD_ID_CHAR .. key)
     constituent.args = args
@@ -2631,95 +2634,581 @@ if TEST then
   -- TODO
 end
 
-local function ps_xp(ps)
-  local c = x{
-    ps.head or x{},
-    ps.complement or x{},
-  }
-  for i = #ps, 1, -1 do
-    c = x{ps[i], c}
-  end
-  return xp{ps.specifier or x{}, c}
+local function cc(callback_name, key)
+  return {context_key=key, context_callback=callback_name}
 end
 
-local function ps_clause(ps)
+local ps = {}
+
+--[[
+
+Args:
+  arg:
+  specifier or false
+  adjunct*
+  head+complement or false
+]]
+function ps.xp(arg)
+  local c = arg[#arg] or x{}
+  for i = #arg - 1, 2, -1 do
+    c = x{arg[i], c}
+  end
+  return xp{arg[1] or x{}, c}
+end
+
+--[[
+
+
+Args:
+  arg!
+  deg=
+  q=
+  adjunct*
+  adjective+arguments
+]]
+function ps.adj(arg)
+  table.insert(arg, 1, false)
+  return ps.adv(arg)
+end
+
+--[[
+
+
+Args:
+  arg!
+  false?
+  deg=
+  q=
+  adjunct*
+  adjective+arguments
+]]
+ps.adv = function(arg)
+  if arg[1] then
+    local deg = arg.deg
+    local q = arg.q
+    arg.deg = nil
+    arg.q = nil
+    return ps.xp{  -- DegP
+      false,  -- TODO: measure, e.g. "two years"
+      x{  -- Deg'
+        deg or k'POS',  -- TODO: measure Deg
+        ps.xp{  -- QP
+          false,
+          -- TODO: "than"
+          x{  -- Q'
+            q,
+            ps.xp{  -- AdvP
+              false,
+              x{  --Adv'
+                k'-ly',
+                ps.adj(arg),
+              },
+            },
+          },
+        },
+      },
+    }
+  else
+    return ps.xp{  -- DegP
+      false,  -- TODO: measure, e.g. "two years"
+      x{  -- Deg'
+        arg.deg or k'POS',  -- TODO: measure Deg
+        ps.xp{  -- QP
+          false,
+          -- TODO: "than"
+          x{  -- Q'
+            arg.q,
+            ps.xp(arg),  -- AP/AdvP
+          },
+        },
+      },
+    }
+    end
+end
+
+--[[
+
+
+Args:
+  arg:
+   x
+   conjunction
+   x
+]]
+function ps.conj(arg)
+  return ps.xp{arg[1], x{arg[2], arg[3]}}
+end
+
+--[[
+
+
+Args:
+  arg!
+    -- subject=
+    -- mood=
+    -- passive=
+    -- tense=
+    -- perfect=
+    -- progressive=
+    -- neg=
+    -- adjunct*
+    -- verb
+]]
+function ps.infl(arg)
+  -- TODO:
+  -- polite
+  -- aspect
+  -- sigma instead of neg
+  if arg.subject then
+    -- TODO: This is not how copulas work, though it works in a pinch.
+    arg[1] = t'be'{
+      agent=arg.subject,
+      theme=arg[1],
+    }
+    arg.subject = nil
+    return ps.infl(arg)
+  end
+  local rv
+  table.insert(arg, 1, false)
+  if arg.passive then
+    local args = arg[#arg].args
+    if args.theme then
+      if args.agent then
+        table.insert(arg, #arg - 2, t'by'{theme=args.agent})
+        args.agent = nil
+      end
+      rv = ps.xp{false, x{k'PASSIVE', ps.xp(arg)}}
+    else
+      -- TODO: "I've been rained on." vs. "It has rained on me."
+      -- What is "it" in those sentences? An expletive? A quasi-argument?
+      -- Use active voice for such confusing cases for now.
+    end
+  else
+    rv = ps.xp(arg)
+  end
+  if arg.progressive then
+    rv = ps.xp{false, x{k'PROGRESSIVE', rv}}
+  end
+  if arg.perfect then
+    rv = ps.xp{false, x{k'PERFECT', rv}}
+  end
+  if arg.mood then
+    rv = ps.xp{false, x{arg.mood, rv}}
+  end
+  if arg.neg then
+    rv = ps.xp{false, x{k'not', rv}}
+  end
+  -- TODO: Should k'INFINITIVE' create a different structure from +tense Ts?
+  rv = ps.xp{false, x{arg.tense or k'PRESENT', rv}}
+  return rv
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.ing(arg)
+  return ps.xp{
+    false,
+    x{
+      k'PRESENT_PARTICIPLE',
+      arg[1],
+    },
+  }
+end
+
+--[[
+
+
+Args:
+  arg!
+  -- amount=
+  -- det=
+  -- poss=
+  -- rel=
+  -- relative=
+  -- adjuncts*
+  -- noun/false
+  -- plural=
+]]
+function ps.np(arg)
+  -- TODO: What is the point of SpecNP if Det isn't in it?
+  table.insert(
+    arg, 1,
+    arg.amount or arg.det or arg.poss or arg.rel or arg.relative or k'0,D')
+  if arg.plural then
+    arg[1].features.number = math.huge
+  end
+  if not arg[#arg] then
+    arg[#arg] = k'0,N'
+  end
+  return ps.xp(arg)
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.past_participle(arg)
+  -- adverb?
+  -- verb
+  -- TODO: adverb
+  return ps.xp{
+    false,
+    x{
+      k'PAST_PARTICIPLE',
+      arg[#arg],
+    },
+  }
+end
+
+--[[
+
+
+Args:
+  arg!
+]]
+function ps.wh(arg)
   return xp{  -- CP
     x{f={wh=false}},
     x{
-      x{f={q=true}},
-      ps[1],
+      k'that,C',
+      ps.infl(arg),
     },
   }
 end
 
-local function ps_sentences(ps)
-  local rv
-  for i = #ps, 1, -1 do
-    local s = ps[i]
-    if type(s) == 'string' then
-      rv = ps_xp{
-        head=k(s),
-        complement=rv,
-      }
-    elseif rv and not rv.specifier then
-      rv.specifier = s
-    else
-      rv = rv and ps_xp{
-        specifier=s,
-        head=k'SENTENCE_SEPARATOR',
-        complement=rv,
-      } or ps[i]
+ps.wh_bound = ps.wh
+
+ps.wh_ever = ps.wh
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.fragment(arg)
+  -- any
+  return arg[1]
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.noise(arg)
+  -- The point of this function is to mark noises. It isn't particularly
+  -- useful on its own. Eventually there will be some way to ensure that
+  -- "rawr" always sounds like a roar and "ah" like a gasp, for example.
+  return arg
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.sentence(arg)
+  -- any
+  -- punct=
+  -- TODO:
+  -- vocative=
+  -- [2]
+  -- formality
+  return ps.xp{false, x{k(arg.punct or 'SENTENCE SEPARATOR'), arg[1]}}
+end
+
+--[[
+
+
+Args:
+  arg!
+]]
+function ps.simple(arg)
+  return ps.sentence{
+    vocative=arg.vocative,
+    ps.infl(arg),
+    punct=arg.punct,
+  }
+end
+
+--[[
+
+
+Args:
+  arg:
+  sentence+
+]]
+function ps.utterance(arg)
+  local c = arg[#arg]
+  for i = #arg - 2, 1, -1 do
+    c = ps.xp{arg[i], x{k'SENTENCE SEPARATOR', c}}
+  end
+  return c
+end
+
+--[[
+
+]]
+function ps.it()
+  return k'it'
+end
+
+--[[
+
+]]
+function ps.me(context)
+  context.me = {context.speaker}
+  return cc('pronoun', 'me')
+end
+
+--[[
+
+]]
+function ps.that()
+  return k'that'
+end
+
+--[[
+
+]]
+function ps.thee(context)
+  context.thee = {context.hearers[0]}
+  return cc('pronoun', 'thee')
+end
+
+--[[
+
+]]
+function ps.thee_inanimate(context)
+  -- TODO: differentiate
+  return ps.thee(context)
+end
+
+--[[
+
+]]
+function ps.them(context)
+  context.them = {true, true}
+  return cc('pronoun', 'them')
+end
+
+--[[
+
+]]
+function ps.this()
+  return k'this'
+end
+
+--[[
+
+]]
+function ps.us_inclusive(context)
+  context.us_inclusive = copyall(context.hearers)
+  context.us_inclusive[#context.us_inclusive + 1] = context.speaker
+  return cc('pronoun', 'us_inclusive')
+end
+
+--[[
+
+]]
+function ps.us_exclusive(context)
+  context.us_inclusive = copyall(context.hearers)
+  context.us_inclusive[#context.us_inclusive + 1] = true
+  return cc('pronoun', 'us_inclusive')
+end
+
+--[[
+
+]]
+function ps.you(context)
+  return cc('pronoun', 'hearers')
+end
+
+--[[
+
+
+Args:
+  arg!
+  verb
+]]
+function ps.lets(arg)
+  if not arg.args then
+    arg.args = {}
+  end
+  arg.args.agent = ps.us_inclusive(context)
+  return ps.simple{
+    mood=k'IMPERATIVE',
+    arg[1],
+  }
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.there_is(arg)
+  -- noun
+  -- punct=
+  return ps.simple{
+    t'be'{
+      theme=arg[0],
+    },
+    punct=arg.punct,
+  }
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.artifact_name(arg)
+  -- artifact_record ID
+  return {text='\xae' ..
+          dfhack.TranslateName(df.artifact_record.find(arg).name) .. '\xaf'}
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.building_type_name(arg)
+  -- building_type
+  return r('building_type' .. WORD_ID_CHAR .. df.building_type[arg])
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.hf_name(arg)
+  -- historical_figure ID
+  return {text='\xae' ..
+          dfhack.TranslateName(df.artifact_record.find(arg).name) .. '\xaf'}
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.item(arg)
+  -- item ID
+  --[[
+  TODO:
+  Memorial: memorial to $name
+  item_liquidst: water vs lye
+  item_threadst: web vs non-web
+  ]]
+  local item = df.item.find(arg)
+  local coin_entity, coin_ruler
+  if item._type == df.item_coinst then
+    local coin_batch = df.coin_batch.find(item.coin_batch)
+    coin_entity = t'made by entity'{
+      theme=r('ENTITY' .. WORD_ID_CHAR ..
+              df.historical_entity.find(coin_batch.entity).id),
+    }
+    -- TODO: coin_ruler = df.historical_figure.find(coin_batch.ruler)
+  end
+  local matinfo = dfhack.matinfo.decode(item)
+  local material = matinfo.mode
+  if material == 'creature' then
+    material = material .. WORD_ID_CHAR .. matinfo[material].creature_id
+  elseif matinfo[material] then
+    material = material .. WORD_ID_CHAR .. matinfo[material].id
+  end
+  material = material .. WORD_ID_CHAR .. matinfo.material.id
+  local handedness
+  if item._type == df.item_glovesst then
+    if item.handedness[0] then
+      handedness = ps.adj{k'right-hand'}
+    elseif item.handedness[1] then
+      handedness = ps.adj{k'left-hand'}
     end
   end
-  return rv
-end
-
-local function ps_infl(ps)
-  -- TODO: keys: det, mood, polite, [1]
-  -- TODO: more inflections: aspect, voice, AgrO, AgrIO...
-  -- TODO: no tense => infinitive
-  -- TODO: Make some levels optional; e.g. no vP => no AgrOP.
-  -- TODO: Add features for Case etc. so movement will happen.
-  local args = {
-    a=ps.agent,
-    e=ps.experiencer,
-    g=ps.goal,
-    s=ps.stimulus,
-    t=ps.theme,
-  }
-  local small_vp = {
-    ref=ps.verb.ref,
-    args=next(args) and args,
-    features=ps.verb.features,
-  }
-  local negp = ps.neg and ps_xp{
-    head=ps.neg,
-    complement=small_vp,
-  } or small_vp
-  return ps_xp{  -- AgrSP
-    complement=ps_xp{  -- TP
-      head=ps.tense,
-      complement=negp,
-    },
-  }
-end
-
-local function ps_np(ps)
-  local rv = ps_xp{
-    head=ps.det,
-    complement=ps_xp{
-      head=ps.poss,
-      complement=ps.n,
-    },
-  }
-  for k, v in ipairs(ps) do
-    rv.complement[k] = v
+  local item_type = tostring(item._type):match('^<type: (.*)>$')
+  local head_key = item_type .. WORD_ID_CHAR
+  if item._type == df.item_slabst then
+    head_key = head_key .. df.slab_engraving_type[item.engraving_type]
+  else
+    local no_error, subtype = dfhack.pcall(function() return item.subtype end)
+    if no_error then
+      head_key = head_key .. subtype.id
+    else
+      head_key = 'ITEM_TYPE' .. WORD_ID_CHAR .. item_type
+    end
   end
-  return rv
+  local t = {false}
+  t[#t + 1] = coin_entity
+  t[#t + 1] = coin_ruler
+  t[#t + 1] = t'made of material'{theme=r(material)}
+  t[#t + 1] = handedness
+  t[#t + 1] = r(head_key)
+  -- TODO: fallback: "object I can't remember"
+  return ps.xp(t)
 end
 
-local function cc(key, callback_name)
-  return {context_key=key, context_callback=callback_name}
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.job_skill(arg)
+  -- job_skill
+  return r('job_skill' .. WORD_ID_CHAR .. df.job_skill[arg])
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.my_relationship_type_name(arg)
+  -- unit_relationship_type
+  return ps.np{
+    t([[unit_relationship_type]] .. WORD_ID_CHAR ..
+      df.unit_relationship_type[arg])
+      {relative=ps.thee(context)}
+  }
+end
+
+--[[
+
+
+Args:
+  arg:
+]]
+function ps.relationship_type_name(arg)
+  -- unit_relationship_type
+  return r('unit_relationship_type' .. WORD_ID_CHAR ..
+           df.unit_relationship_type[arg])
+end
+
+--[[
+
+]]
+function ps.world_name()
+  return {text='\xae' ..
+          dfhack.TranslateName(df.global.world.world_data.name) .. '\xaf'}
 end
 
 --[[
@@ -2727,9 +3216,9 @@ Gets a context-dependent possessive pronoun.
 
 Args:
   c: A sequence of objects. The number of elements determines the
-    number of the pronoun. Whether `context.speaker` or an element in
-    `context.hearers` is in the sequence determines the person of the
-    pronoun.
+    number of the pronoun. Whether `context.speaker`, and whether an
+    element in `context.hearers`, is in the sequence determines the
+    person of the pronoun.
   context: The full context.
 
 Returns:
@@ -2749,76 +3238,21 @@ function context_callbacks.possessive_pronoun(c, context)
     end
   end
   -- TODO: gender, distance, formality, social status, bystanderness
-  return k{
-    first_person=first_person,
-    second_person=second_person,
-    third_person=third_person,
-    number=#c,
-  }'PRONOUN'
+  return xp{
+    false,
+    k{
+      first_person=first_person,
+      second_person=second_person,
+      third_person=third_person,
+      number=#c,
+    }'PRONOUN',
+  }
 end
 
 function context_callbacks.pronoun(c, context)
-  return ps_xp{  --DP
-    head=cc.possessive_pronoun(c, context)
+  return ps.xp{  --DP
+    x{cc.possessive_pronoun(c, context)},
   }
-end
-
-function context_callbacks.item(c)
-  --[[
-  TODO:
-  Memorial: memorial to $name
-  item_liquidst: water vs lye
-  item_threadst: web vs non-web
-  ]]
-  local item = df.item.find(c)
-  local coin_entity, coin_ruler
-  if item._type == df.item_coinst then
-    local coin_batch = df.coin_batch.find(item.coin_batch)
-    coin_entity = ps_xp{
-      head=k'made by entity',
-      complement=r('ENTITY' .. WORD_ID_CHAR ..
-                   df.historical_entity.find(coin_batch.entity).id),
-    }
-    -- TODO: coin_ruler = df.historical_figure.find(coin_batch.ruler)
-  end
-  local matinfo = dfhack.matinfo.decode(item)
-  local material = matinfo.mode
-  if material == 'creature' then
-    material = material .. WORD_ID_CHAR .. matinfo[material].creature_id
-  elseif matinfo[material] then
-    material = material .. WORD_ID_CHAR .. matinfo[material].id
-  end
-  material = material .. WORD_ID_CHAR .. matinfo.material.id
-  local handedness
-  if item._type == df.item_glovesst then
-    if item.handedness[0] then
-      handedness = ps_xp{head=k'right-hand'}
-    elseif item.handedness[1] then
-      handedness = ps_xp{head=k'left-hand'}
-    end
-  end
-  local item_type = tostring(item._type):match('^<type: (.*)>$')
-  local head_key = item_type .. WORD_ID_CHAR
-  if item._type == df.item_slabst then
-    head_key = head_key .. df.slab_engraving_type[item.engraving_type]
-  else
-    local no_error, subtype = dfhack.pcall(function() return item.subtype end)
-    if no_error then
-      head_key = head_key .. subtype.id
-    else
-      head_key = 'ITEM_TYPE' .. WORD_ID_CHAR .. item_type
-    end
-  end
-  local t = {coin_entity}
-  t[#t + 1] = coin_ruler
-  t[#t + 1] = ps_xp{
-    head=k'made of material',
-    complement=r(material),
-  }
-  t[#t + 1] = handedness
-  t.head = r(head_key)
-  -- TODO: fallback: "object I can't remember"
-  return ps_xp(t)
 end
 
 --[[
@@ -2848,19 +3282,9 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   local context = {
     speaker=speaker,
     hearers=hearers,
-    it={true},
   }
   -- TODO: announcement_type TRAVEL_COMPLAINT
-  -- name ' says, "'
-  -- "We should have made it there by now."
-  -- "We should be making better progress."
-  -- "We are going the wrong way."
-  -- "We haven't performed for some time."
-  -- "We have arrived at our destination."
-  -- "The oppressor has been overthrown!"
-  -- "We must not abandon "
-  -- "We must go back."
-  -- '"'
+  -- name ' says, "' ComplainAgreement '"'
   if should_abort then
     constituent = k'goodbye'
   elseif (topic == df.talk_choice_type.Greet or
@@ -2904,9 +3328,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       end
     end
     if english:find('%. it is good to see you%.') then
-      sentences[#sentences + 1] = ps_infl{
-        -- TODO
-      }
+      -- TODO
     end
     if english:find(' is dumbstruck for a moment%.') then
       local name  -- TODO
@@ -2914,27 +3336,34 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         {text='[' .. name .. ' is dumbstruck for a moment.]'}
     end
     if english:find(' a legend%? here%? i can scarcely believe it%.') then
-      -- TODO: questions
-      sentences[#sentences + 1] = ps_np{det=k'a', n=k'legend'}
-      -- TODO: split 'here' into 'this place'?
-      sentences[#sentences + 1] = k'here'
-      sentences[#sentences + 1] = ps_infl{
-        tense=k'PRESENT',
-        mood=k'can',
-        -- TODO: scarcely
-        agent=cc('speaker', 'pronoun'),
-        verb=k'believe',
-        theme=cc('it', 'pronoun'),
+      sentences[#sentences + 1] = ps.sentence{
+        ps.fragment{ps.np{det=k'a', k'legend'}},
+        punct='??',
+      }
+      sentences[#sentences + 1] = ps.sentence{
+        -- TODO: split 'here' into 'this place'?
+        ps.fragment{k'here'},
+        punct='??',
+      }
+      sentences[#sentences + 1] = ps.sentence{
+        ps.infl{
+          mood=k'can',
+          k'scarcely',
+          t'believe'{
+            agent=ps.me(context),
+            theme=ps.it(),
+          },
+        },
       }
     end
     if english:find(' i am honored to be in your presence%.') then
     end
     if english:find(' it is an honor%.') then
-      sentences[#sentences + 1] = ps_infl{
-        tense=k'PRESENT',
-        agent=cc('it', 'pronoun'),
-        det=k'a',
-        verb=k'honor',
+      sentences[#sentences + 1] = ps.sentence{
+        ps.infl{
+          subject=ps.it(),
+          ps.np{det='a', k'honor'},
+        },
       }
     end
     if english:find(' your name precedes you%. thank you for all that you have done%.') then
@@ -2985,11 +3414,13 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     elseif english:find(' only a fool would travel alone at night! take shelter or the bogeyman will get you%.') then
     end
     if english:find(' i hate you%.') then
-      sentences[#sentences + 1] = ps_infl{
-        tense=k'PRESENT',
-        experiencer=cc('speaker', 'pronoun'),
-        verb=k'hate',
-        stimulus=cc('hearers', 'pronoun'),
+      sentences[#sentences + 1] = ps.sentence{
+        ps.infl{
+          t'hate'{
+            experiencer=ps.me(context),
+            stimulus=ps.thee(context),
+          },
+        },
       }
     elseif english:find(' vile creature!') then
     elseif english:find(' the enemy!') then
@@ -2999,72 +3430,119 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     elseif english:find(' ahhh...') then
     elseif english:find(" don't talk to me%.") then
     end
-    constitent = ps_sentences(sentences)
-  elseif topic == df.talk_choice_type.Nevermind then
-    -- N/A
+    constitent = ps.utterance(sentences)
+  -- Nevermind: N/A
   elseif topic == df.talk_choice_type.Trade then
     -- "Let's trade."
-    context.us = {speaker, hearers}
+    constituent = ps.lets{k'trade,V'}
+  -- AskJoin: N/A
+  elseif (topic == df.talk_choice_type.AskSurroundings or
+          topic == df.talk_choice_type.AskFamily or
+          topic == df.talk_choice_type.AskStructure) then
+    -- "Tell me about this area."
+    -- "Tell me about your family."
+    -- "Tell me about this hall/keep/temple/library."
+    local theme
+    if topic == df.talk_choice_type.AskFamily then
+      theme = ps.np{t'family'{relative=ps.thee(context)}}
+    else
+      local n
+      if topic == df.talk_choice_type.AskSurroundings then
+        n = k'area'
+      elseif english:find('hall') then
+        n = k'hall'
+      elseif english:find('keep') then
+        n = k'keep,N'
+      elseif english:find('library') then
+        n = k'library'
+      elseif english:find('temple') then
+        n = k'temple'
+      end
+      theme = ps.np{det=k'this', n}
+    end
     constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'HORTATIVE',
-          agent=cc('us', 'pronoun'),
-          verb=k'trade',
+      ps.simple{
+        mood=k'IMPERATIVE',
+        t'tell about'{
+          agent=ps.thee(context),
+          experiencer=ps.me(context),
+          theme=theme,
         },
       }
-  elseif topic == df.talk_choice_type.AskJoin then
-    -- N/A
-  elseif topic == df.talk_choice_type.AskSurroundings then
-    -- "Tell me about this area."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'tell about',
-          experiencer=cc('speaker', 'pronoun'),
-          theme=ps_np{
-            det=k'this',
-            n=k'area',
-          },
-        }
-      }
-  elseif topic == df.talk_choice_type.SayGoodbye then
+  elseif (topic == df.talk_choice_type.SayGoodbye or
+          topic == df.talk_choice_type.Goodbye2) then
     -- "Goodbye."
     constituent = k'goodbye'
-  elseif topic == df.talk_choice_type.AskStructure then
-    -- "Tell me about "
-    -- "this hall"
-    -- / "this keep"
-    -- / "this temple"
-    -- / "this library"
-    -- "."
-  elseif topic == df.talk_choice_type.AskFamily then
-    -- "Tell me about your family."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'tell about',
-          experiencer=cc('speaker', 'pronoun'),
-          theme=ps_np{
-            n=t'family'{t=cc('hearers', 'pronoun')},
-          },
-        }
-      }
+  -- AskStructure: see AskSurroundings
+  -- AskFamily: see AskSurroundings
   elseif topic == df.talk_choice_type.AskProfession then
     -- "You look like a mighty warrior indeed."
+    constituent =
+      ps.simple{
+        k'indeed',
+        t'look like'{
+          stimulus=ps.thee(context),
+          theme=ps.np{det=k'a', k'mighty', k'warrior'},
+        },
+      }
   elseif topic == df.talk_choice_type.AskPermissionSleep then
     -- crash!
   elseif topic == df.talk_choice_type.AccuseNightCreature then
     -- "Whosoever would blight the world, preying on the helpless, fear me!  I call you a child of the night and will slay you where you stand."
+    constituent =
+      ps.utterance{
+        ps.sentence{
+          vocative=ps.wh_ever{
+            mood=k'would',
+            ps.ing{
+              t'prey'{theme=ps.np{det=k'the', k'helpless', false}},
+            },
+            t'blight'{
+              agent=k'who',
+              theme=ps.np{det=k'the', k'world'},
+            },
+          },
+          ps.infl{
+            mood=k'IMPERATIVE',
+            t'fear,V'{
+              experiencer=ps.thee(context),
+              stimulus=ps.me(context),
+            },
+          },
+          punct='!',
+        },
+        -- TODO: factoring out the common part, in this case "I"
+        ps.sentence{
+          ps.conj{
+            ps.infl{
+              t'call'{
+                agent=ps.me(context),
+                theme=ps.thee(context),
+                theme2=ps.np{det=k'a', k'child of the night'},
+              },
+            },
+            k'and',
+            ps.infl{
+              tense=k'FUTURE',
+              ps.wh{
+                t'stand'{
+                  theme=ps.thee(context),
+                  location=k'where',
+                },
+              },
+              t'slay'{
+                agent=ps.me(context),
+                theme=ps.thee(context),
+              },
+            },
+          },
+        },
+      }
   elseif topic == df.talk_choice_type.AskTroubles then
     -- "How have things been?" / "How's life here?"
+    if english:find('^how have things been%?$') then
+    elseif english:find("^how's life here%?$") then
+    end
   elseif topic == df.talk_choice_type.BringUpEvent then
     -- ?
   elseif topic == df.talk_choice_type.SpreadRumor then
@@ -3074,46 +3552,79 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "You are my neighbor."
     -- ?
   elseif topic == df.talk_choice_type.ReplyImpersonate then
-    -- "Behold mortal.  I am "
-    -- "a divine being"
-    -- ".  I know why you have come."
+    -- "Behold mortal.  I am a divine being.  I know why you have come."
+    constituent =
+      ps.utterance{
+        ps.sentence{
+          vocative=ps.np{k'mortal,N'},
+          ps.infl{
+            mood=k'IMPERATIVE',
+            t'behold'{experiencer=ps.thee(context)},
+          },
+        },
+        ps.sentence{
+          ps.infl{
+            subject=ps.me(context),
+            ps.np{det=k'a', k'divine', k'being'},
+          },
+        },
+        ps.sentence{
+          ps.infl{
+            t'know'{
+              experiencer=ps.me(context),
+              stimulus=ps.wh{
+                perfect=true,
+                k'why',
+                t'come'{agent=ps.thee(context)},
+              },
+            },
+          },
+        },
+      }
   elseif topic == df.talk_choice_type.BringUpIncident then
     ----1
     -- ?
   elseif topic == df.talk_choice_type.TellNothingChanged then
     -- "It has been the same as ever."
-  elseif topic == df.talk_choice_type.Goodbye2 then
-    -- "Goodbye."
-    constituent = k'goodbye'
+    consituent = ps.simple{
+      perfect=true,
+      subject=ps.it(),
+      ps.np{
+        det=k'the',
+        ps.adj{
+          t'as'{theme=k'ever'},
+          k'same',
+        },
+        false,
+      },
+    }
+  -- Goodbye2: see SayGoodbye
   elseif topic == df.talk_choice_type.ReturnTopic then
     -- N/A
   elseif topic == df.talk_choice_type.ChangeSubject then
     -- N/A
   elseif topic == df.talk_choice_type.AskTargetAction then
     -- "What will you do about it?"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'FUTURE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'do',
-          theme=k'what',
-          t'about'{t=cc('it', 'pronoun')}
-        }
-      }
+    constituent = ps.simple{
+      tense=k'FUTURE',
+      t'about'{t=ps.it()},
+      t'do'{
+        agent=ps.thee(context),
+        theme=k'what',
+      },
+      punct='?',
+    }
   elseif topic == df.talk_choice_type.RequestSuggestAction then
     -- "What should I do about it?"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'should',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'do',
-          theme=k'what',
-          t'about'{t=cc('it', 'pronoun')}
-        },
-      }
+    constituent = ps.simple{
+      mood=k'should',
+      t'about'{t=ps.it()},
+      t'do'{
+        agent=ps.me(context),
+        theme=k'what',
+      },
+      punct='?',
+    }
   elseif topic == df.talk_choice_type.AskJoinInsurrection then
     -- "Join me and we can shake off the yoke of "
     -- "the oppressors"
@@ -3121,25 +3632,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "the weary shoulders of the people of "
     -- "this place"
     -- " forever!"
-    --[[
-    context.us = {speaker, hearers}
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'join',
-          theme=cc('speaker', 'pronoun')
-        },
-        _'and if so then',
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'can',
-          agent=cc('us', 'pronoun'),
-        },
-      }
-    ]]
   elseif topic == df.talk_choice_type.AskJoinRescue then
     -- "Join me and we'll bring "
     -- "this poor soul"
@@ -3150,11 +3642,47 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
           topic == df.talk_choice_type.ExpressEmotion or
           topic == df.talk_choice_type.ExpressMinorEmotion or
           topic == df.talk_choice_type.ExpressLackEmotion) then
+    local topic_sentence, focus_sentence
     if topic2 == df.unit_thought_type.Conflict then
       -- "This is a fight!"
       -- / "Has the tide turned?"
       -- / "The battle rages..."
       -- / "In the midst of conflict..."
+      if english:find('^this is a fight! ') then
+        topic_sentence = ps.simple{
+          subject=ps.this(),
+          ps.np{det=k'a', k'fight'},
+          punct='!',
+        }
+      elseif english:find('^has the tide turned%? ') then
+        topic_sentence = ps.simple{
+          -- idiom
+          perfect=true,
+          t'turn,V'{
+            theme=ps.np{det=k'the', k'tide'},
+          },
+          punct='?',
+        }
+      elseif english:find('^the battle rages%.%.%. ') then
+        topic_sentence = ps.simple{
+          t'rage,V'{
+            theme=ps.np{det=k'the', k'battle'},
+          },
+          punct='...',
+        }
+      elseif english:find('^in the midst of conflict%.%.%. ') then
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            t'in'{
+              theme=ps.np{
+                det=k'the',
+                t'midst'{theme=k'conflict'},
+              },
+            },
+          },
+          punct='...',
+        }
+      end
     elseif topic2 == df.unit_thought_type.Trauma then
       -- "Gruesome wounds!"
       -- / "So easily broken..."
@@ -3163,42 +3691,251 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- / "Our time in " world name " is so brief..."
       -- / "How fleeting life is..."
       -- / "How fragile we are..."
+      if english:find('^gruesome wounds! ') then
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{k'gruesome', k'wound', plural=true},
+          },
+          punct='!',
+        }
+      elseif english:find('^so easily broken%.%.%. ') then
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.past_participle{
+              ps.adv{deg=k'so', k'easy'},
+              k'break,V',
+            },
+          },
+          punct='...',
+        }
+      elseif english:find('^those injuries%.%.%. ') then
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{det=k'this', k'injury', plural=true},
+          },
+        }
+      elseif english:find('^can it all end so quickly%? ') then
+        topic_sentence = ps.simple{
+          mood=k'can,X',
+          ps.adv{deg=k'so', k'quick'},
+          t'end,V'{
+            theme=ps.np{k'all', ps.it()},
+          },
+          punct='?',
+        }
+      elseif english:find('^our time in .* is so brief%.%.%. ') then
+        topic_sentence = ps.simple{
+          subject=ps.np{
+            poss=ps.us_inclusive(context),
+            ps.np{
+              t'in'{location=ps.world_name()},
+              k'time (delimited)',
+            },
+          },
+          ps.adj{deg=k'so', k'brief'},
+        }
+      elseif english:find('^how fleeting life is%.%.%. ') then
+        topic_sentence = ps.simple{
+          subject=k'life (in general)',
+          ps.adj{deg=k'how', k'fleeting'},
+          punct='...',
+        }
+      else
+        topic_sentence = ps.simple{
+          subject=k'we (in general)',
+          ps.adj{deg=k'how', k'fragile'},
+          punct='...',
+        }
+      end
     elseif topic2 == df.unit_thought_type.WitnessDeath then
       -- "Death is all around us."
       -- / "Death..."
+      if english:find('^death is all around us%. ') then
+        topic_sentence = ps.simple{
+          subject=k'death',
+          t'all around'{location=ps.us_inclusive(context)},
+        }
+      else
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            k'death',
+          },
+          punct='...',
+        }
+      end
     elseif topic2 == df.unit_thought_type.UnexpectedDeath then
       -- historical_figure " is dead?"
       -- / "I can't believe " historical_figure " is dead."
+      if english:find("^i can't believe .* is dead%. ") then
+        topic_sentence = ps.simple{
+          subject=ps.hf_name(topic3),
+          k'dead',
+          punct='??',
+        }
+      else
+        topic_sentence = ps.simple{
+          mood=k'can,X',
+          neg=true,
+          t'believe'{
+            experiencer=ps.me(context),
+            stimulus=ps.simple{
+              subject=ps.hf_name(topic3),
+              k'dead',
+            },
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.Death then
       -- historical_figure " is really dead."
       -- historical_figure " is dead."
+      if english:find(' is really dead%. ') then
+        topic_sentence = ps.simple{
+          subject=ps.hf_name(topic3),
+          ps.adj{deg=k'really', k'dead'},
+        }
+      else
+        topic_sentence = ps.simple{
+          subject=ps.hf_name(topic3),
+          k'dead',
+        }
+      end
     elseif topic2 == df.unit_thought_type.Kill then
       -- "Slayer."
-      -- TODO: 413: "_ killed _."
+      -- / historical_figure ", slayer."
+      -- / historical_figure ", slayer of " historical_figure "."
+      -- / historical_figure " killed " historical_figure "."
     elseif topic2 == df.unit_thought_type.LoveSeparated then
       -- "Oh, where is " historical_figure "?"
       -- / "I am separated from " historical_figure "."
+      if english:find('^oh, where is ') then
+        topic_sentence = ps.simple{
+          -- TODO: oh
+          subject=ps.hf_name(topic3),
+          k'where',
+          punct='?',
+        }
+      else
+        topic_sentence = ps.simple{
+          passive=true,  -- TODO: Can this be automatically detected?
+          t'separate'{
+            theme=ps.me(context),
+            goal=ps.hf_name(topic3),
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.LoveReunited then
       -- "I am reunited with my " historical_figure "."
       -- / "I am together with my " historical_figure "."
+      if english:find('^i am reunited with my ') then
+        topic_sentence = ps.simple{
+          passive=true,
+          t'reunite'{
+            theme=ps.me(context),
+            goal=ps.np{rel=ps.me(context), ps.hf_name()},
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          subject=ps.me(context),
+          t'together with'{
+            theme=ps.np{rel=ps.me(context), ps.hf_name()},
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.JoinConflict then
       -- "I have a part in this."
       -- / "I cannot just stand by."
+      if english:find('^i have a part in this%. ') then
+        topic_sentence = ps.simple{
+          t'have'{
+            possessor=ps.me(context),
+            theme=ps.np{det=k'a', t'in'{theme=ps.this()}, k'part'},
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          -- TODO: "cannot" vs "can not"
+          mood=k'can,X',
+          neg=true,
+          k'just',
+          t'stand by'{agent=ps.me(context)},
+        }
+      end
     elseif topic2 == df.unit_thought_type.MakeMasterwork then
       -- "This is a masterpiece."
+      topic_sentence = ps.simple{
+        subject=ps.this(),
+        ps.np{det=k'a', k'masterpiece'},
+      }
     elseif topic2 == df.unit_thought_type.MadeArtifact then
       -- "I shall name you " artifact_record "."
+      topic_sentence = ps.simple{
+        mood=k'shall',
+        t'name,V'{
+          agent=ps.me(context),
+          theme=ps.thee_inanimate(context),
+          theme2=ps.artifact_name(topic3),
+        },
+      }
     elseif topic2 == df.unit_thought_type.MasterSkill then
       -- "I have mastered " job_skill "."
+      topic_sentence = ps.simple{
+        perfect=true,
+        t'master,V'{
+          agent=ps.me(context),
+          theme=ps.job_skill(topic3),
+        },
+      }
     elseif topic2 == df.unit_thought_type.NewRomance then
       -- "I have fallen for " historical_figure "."
       -- / "Oh, " historical_figure "..."
+      if english:find('^i have fallen for ') then
+        topic_sentence = ps.simple{
+          perfect=true,
+          t'fall for'{
+            agent=ps.hf_name(topic3),
+            theme=ps.me(context),
+          },
+        }
+      else
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.noise{k'oh'},
+          },
+          ps.hf_name(topic3),
+        }
+      end
     elseif topic2 == df.unit_thought_type.BecomeParent then
       -- "I am a parent."
       -- / "Children."
+      if english:find('^i am a parent%. ') then
+        topic_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.np{det=k'a', k'parent'},
+        }
+      else
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{k'child', plural=true},
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.NearConflict then
       -- "There's fighting!"
       -- / "A battle!"
+      if english:find("^there's fighting! ") then
+        topic_sentence = ps.there_is{
+          k'fighting',
+          punct='!',
+        }
+      else
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{det=k'a', k'battle'},
+          },
+          punct='!',
+        }
+      end
     elseif topic2 == df.unit_thought_type.CancelAgreement then
       -- N/A
     elseif topic2 == df.unit_thought_type.JoinTravel then
@@ -3216,58 +3953,272 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     elseif topic2 == df.unit_thought_type.StrangerWeapon then
       -- "Is that a weapon?"
       -- / "Is this an attack?"
+      if english:find('^is that a weapon%? ') then
+        topic_sentence = ps.simple{
+          subject=ps.that(),  -- TODO: specific item
+          ps.np{det=k'a', k'weapon'},
+          punct='?',
+        }
+      else
+        topic_sentence = ps.simple{
+          subject=ps.this(),
+          ps.np{det=k'a', k'attack'},
+          punct='?',
+        }
+      end
     elseif topic2 == df.unit_thought_type.StrangerSneaking then
       -- "Somebody up to no good..."
       -- / "Who's skulking around there?"
+      if english:find('^somebody up to no good%.%.%. ') then
+        topic_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{
+              t'up to'{
+                theme=ps.np{det=k'no,DET', k'good,MN'}
+              },
+              k'somebody',
+            },
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          progressive=true,
+          k'there',
+          t'skulk'{
+            agent=k'who',
+          },
+          punct='?',
+        }
+      end
     elseif topic2 == df.unit_thought_type.SawDrinkBlood then
       -- "It is drinking the blood of the living."
       -- / "It feeds on blood."
+      if english:find('^it is drinking the blood of the living%. ') then
+        topic_sentence = ps.simple{
+          progressive=true,
+          t'drink,V'{
+            agent=ps.it(),  -- TODO: specific hf
+            theme=ps.np{
+              det=k'the',
+              t'of'{
+                theme=ps.np{det=k'the', k'living', false},
+              },
+              k'blood',
+            },
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          t'feed'{
+            agent=ps.it(),
+            theme=k'blood',
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.Complained then
       -- N/A
     elseif topic2 == df.unit_thought_type.ReceivedComplaint then
       -- N/A
     elseif topic2 == df.unit_thought_type.AdmireBuilding then
       -- "I was near to a " building_type "."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        subject=ps.me(context),
+        t'near'{
+          theme=ps.np{det=k'a', ps.building_type_name(topic3)},
+        },
+      }
     elseif topic2 == df.unit_thought_type.AdmireOwnBuilding then
       -- "I was near to my own " building_type "."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        subject=ps.me(context),
+        t'near'{
+          theme=ps.np{
+            poss=ps.me(context),
+            k'own',
+            ps.building_type_name(topic3),
+          },
+        },
+      }
     elseif topic2 == df.unit_thought_type.AdmireArrangedBuilding then
       -- "I was near to a arranged " building_type "." [sic]
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        subject=ps.me(context),
+        t'near'{
+          theme=ps.np{det=k'a', k'arranged', ps.building_type_name(topic3)},
+        },
+      }
     elseif topic2 == df.unit_thought_type.AdmireOwnArrangedBuilding then
       -- "I was near to my own arranged " building_type "."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        subject=ps.me(context),
+        t'near'{
+          theme=ps.np{
+            poss=ps.me(context),
+            k'own',
+            k'arranged',
+            ps.building_type_name(topic3),
+          },
+        },
+      }
     elseif topic2 == df.unit_thought_type.LostPet then
       -- "I lost a pet."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        k'lose'{
+          agent=ps.me(context),
+          theme=ps.np{det=k'a', k'pet'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.ThrownStuff then
       -- "I threw something."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'throw'{
+          agent=ps.me(context),
+          theme=k'something',
+        },
+      }
     elseif topic2 == df.unit_thought_type.JailReleased then
       -- "I was released from confinement."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        passive=true,
+        t'release'{
+          theme=ps.me(context),
+          location=k'confinement',
+        },
+      }
     elseif topic2 == df.unit_thought_type.Miscarriage then
       -- "I lost the baby."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'lose'{
+          agent=ps.me(context),
+          theme=ps.np{k'the', k'baby'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.SpouseMiscarriage then
       -- "My spouse lost the baby."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'lose'{
+          agent=ps.np{relative=ps.me(context), k'spouse'},  -- TODO: specific hf
+          theme=ps.np{k'the', k'baby'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.OldClothing then
       -- "I am wearing old clothes."
+      topic_sentence = ps.simple{
+        progressive=true,
+        t'wear'{
+          agent=ps.me(context),
+          theme=ps.np{k'old', k'clothing'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.TatteredClothing then
       -- "My clothes are in tatters."
+      topic_sentence = ps.simple{
+        subject=ps.np{poss=ps.me(context), k'clothing'},
+        k'in tatters',
+      }
     elseif topic2 == df.unit_thought_type.RottedClothing then
       -- "My clothes actually rotted right off my body."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        k'actually',
+        k'right',
+        t'off'{
+          theme=ps.np{rel=ps.me(context), k'body'},
+        },
+        t'rot,V'{
+          agent=ps.np{poss=ps.me(context), k'clothing'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.GhostNightmare then
       -- "I had a nightmare about "
       -- "my deceased " unit_relationship_type
       -- / "the dead"
       -- "."
+      local the_dead
+      if english:find(' my deceased ') then
+        the_dead = ps.np{
+          relative=ps.me(context),
+          k'deceased',
+          ps.relationship_type_name(topic3),
+        }
+      else
+        the_dead = ps{det=k'the', k'dead', false}
+      end
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'have (experience)'{
+          experiencer=ps.me(context),
+          stimulus=the_dead
+        },
+      }
     elseif topic2 == df.unit_thought_type.GhostHaunt then
       -- "I was "
       -- topic4: "haunted" / "tormented" / "possessed" / "tortured"
       -- " by the ghost of "
       -- topic3: unit_relationship_type
+      local haunt
+      if english:find(' haunted ') then
+        haunt = 'haunt'
+      elseif english:find(' tormented ') then
+        haunt = 'torment'
+      elseif english:find(' possessed ') then
+        haunt = 'possess'
+      else
+        haunt = 'torture'
+      end
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        passive=true,
+        t(haunt){
+          agent=ps.np{
+            det=k'the',
+            t'of'{
+              theme=ps.my_relationship_type_name(topic3),
+            },
+            k'ghost',
+          },
+          theme=ps.me(context),
+        },
+      }
     elseif topic2 == df.unit_thought_type.Spar then
       -- "I had a sparring session."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'have (experience)'{
+          experiencer=ps.me(context),
+          stimulus=ps.np{det=k'a', t'session'{theme=k'sparring'}},
+        },
+      }
     elseif topic2 == df.unit_thought_type.UnableComplain then
       -- N/A
     elseif topic2 == df.unit_thought_type.LongPatrol then
       -- "I've been on a long patrol."
+      topic_sentence = ps.simple{
+        perfect=true,
+        subject=ps.me(context),
+        t'on'{
+          theme=ps.np{det=k'a', k'long', k'patrol'},
+        },
+      }
     elseif topic2 == df.unit_thought_type.SunNausea then
       -- "I was nauseated by the sun."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        passive=true,
+        t'nauseate'{
+          agent=ps.np{det=k'the', k'sun'},
+          theme=ps.me(context),
+        },
+      }
     elseif topic2 == df.unit_thought_type.SunIrritated then
       -- "I've been out in the sunshine again after a long time away."
     elseif topic2 == df.unit_thought_type.Drowsy then
@@ -3284,8 +4235,23 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "I'm starving."
     elseif topic2 == df.unit_thought_type.MajorInjuries then
       -- "I've been injured badly."
+      topic_sentence = ps.simple{
+        passive=true,
+        perfect=true,
+        ps.adv{k'grave,J'},
+        t'injure'{
+          theme=ps.me(context),
+        },
+      }
     elseif topic2 == df.unit_thought_type.MinorInjuries then
       -- "I've been wounded."
+      topic_sentence = ps.simple{
+        passive=true,
+        perfect=true,
+        t'wound,V'{
+          theme=ps.me(context),
+        },
+      }
     elseif topic2 == df.unit_thought_type.SleepNoise then
       -- N/A
     elseif topic2 == df.unit_thought_type.Rest then
@@ -3296,10 +4262,60 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "I was out in the rain."
       -- / "It was raining on me."
       -- / "I've been rained on."
+      if english:find('^i was out in the rain%. ') then
+        topic_sentence = ps.simple{
+          tense=k'PAST',
+          subject=ps.me(context),
+          t'out in'{
+            theme=ps.np{det=k'the', k'rain,N'},
+          },
+        }
+      elseif english:find('^it was raining on me%. ') then
+        topic_sentence = ps.simple{
+          tense=k'PAST',
+          progressive=true,
+          t'rain,V'{
+            t'on'{theme=ps.me(context)},
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          perfect=true,
+          passive=true,
+          t'rain,V'{
+            t'on'{theme=ps.me(context)},
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.SnowStorm then
       -- "I was out in a blizzard."
       -- / "It was snowing on me."
       -- / "I was in a snow storm."
+      if english:find('^i was out in a blizzard%. ') then
+        topic_sentence = ps.simple{
+          tense=k'PAST',
+          subject=ps.me(context),
+          t'out in'{
+            theme=ps.np{det=k'a', k'blizzard'},
+          },
+        }
+      elseif english:find('^it was snowing on me%. ') then
+        topic_sentence = ps.simple{
+          tense=k'PAST',
+          progressive=true,
+          t'snow,V'{
+            t'on'{theme=ps.me(context)},
+          },
+        }
+      else
+        topic_sentence = ps.simple{
+          tense=k'PAST',
+          subject=ps.me(context),
+          t'in'{
+            theme={det=k'a', k'snow storm'},
+          },
+        }
+      end
     elseif topic2 == df.unit_thought_type.Miasma then
       -- "I got caught in a miasma."
     elseif topic2 == df.unit_thought_type.Smoke then
@@ -3513,6 +4529,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "I have a new sibling."
       -- / "I have new siblings."
       -- / "I have become a parent."
+      -- TODO: What about "I got married."?
     elseif topic2 == df.unit_thought_type.ReceivedWater then
       -- "I received water."
     elseif topic2 == df.unit_thought_type.GaveWater then
@@ -3739,6 +4756,19 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "I got into an argument with "
       -- topic3: historical_figure
       -- "."
+      topic_sentence = ps.simple{
+        tense=k'PAST',
+        t'get into situation'{
+          agent=ps.me(context),
+          theme=ps.np{
+            det=k'a',
+            t'with'{
+              theme=ps.hf_name(topic3),
+            },
+            k'argument',
+          },
+        },
+      }
     elseif topic2 == df.unit_thought_type.CombatDrills then
       -- "I did my combat drills."
     elseif topic2 == df.unit_thought_type.ArcheryPractice then
@@ -3746,6 +4776,16 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     elseif topic2 == df.unit_thought_type.ImproveSkill then
       -- "I have improved my "
       -- topic3: job_skill
+      topic_sentence = ps.simple{
+        perfect=true,
+        t'improve'{
+          agent=ps.me(context),
+          theme=ps.np{
+            rel=ps.me(context),
+            ps.job_skill(topic3),
+          },
+        },
+      }
     elseif topic2 == df.unit_thought_type.WearItem then
       -- "I put on a "
       -- "truly splendid"
@@ -3760,19 +4800,42 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- " of "
       -- topic3: value_type
       -- "."
+      local realization
+      if english:find(' the value ') then
+        realization = ps.np{det=k'the', k'value'}
+      elseif english:find(' the worthlessness') then
+        realization = ps.np{det=k'the', k'worthlessness'}
+      else
+        realization = ps.np{det=k'the', k'nuance', plural=true}
+      end
+      topic_sentence = ps.simple{
+        perfect=true,
+        passive=true,  -- TODO: not really, but "I am X-en" ~ "I've been X-en"
+        t'to'{realization},
+        t'awake'{
+          theme=ps.me(context),
+        },
+      }
     elseif topic2 == df.unit_thought_type.OpinionStoryteller then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionRecitation then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionInstrumentSimulation then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionInstrumentPlayer then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionSinger then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionChanter then
+      ----1
       -- TODO
     elseif topic2 == df.unit_thought_type.OpinionDancer then
+      ----1
       -- TODO
     end
     if topic == df.talk_choice_type.StateOpinion then
@@ -3780,188 +4843,152 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This must be stopped by any means at our disposal."
         -- / "They must be stopped by any means at our disposal."
         local this_or_they
-        if english:find('this must') then
-          this_or_they = cc('it', 'pronoun')
+        if english:find(' this must be stopped by any means at our disposal%.') then
+          this_or_they = ps.it()
         else
-          context.them = {true, true}
-          this_or_they = cc('them', 'pronoun')
+          this_or_they = ps.them(context)
         end
-        context.us = {speaker, true}
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              mood=k'must',
-              voice=k'passive',
-              verb=k'stop',
-              theme=this_or_they,
-              agent=ps_np{
-                det=k'any',
-                n=k'means',
-                t'at'{
-                  t=ps_np{
-                    t=t'disposal'{a=cc('us', 'possessive_pronoun')},
-                  },
+        focus_sentence = ps.simple{
+          mood=k'must',
+          passive=true,
+          t'stop'{
+            agent=ps.np{
+              det=k'any',
+              t'at'{
+                theme=ps.np{
+                  t'disposal'{agent=ps.us_inclusive(context)},
                 },
               },
+              k'means',
             },
-          }
+            theme=this_or_they,
+          },
+        }
       elseif topic1 == 1 then
         -- "It's not my problem."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              neg=k'not',
-              theme=cc('it', 'pronoun'),
-              det=cc('speaker', 'possessive_pronoun'),
-              verb=k'problem',
-            },
-          }
+        focus_sentence = ps.simple{
+          neg=true,
+          subject=ps.it(),
+          ps.np{rel=ps.me(context), k'problem'},
+        }
       elseif topic1 == 2 then
         -- "It was inevitable."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PAST',
-              theme=cc('it', 'pronoun'),
-              verb=k'inevitable',
-            }
-          }
+        focus_sentence = ps.simple{
+          tense=k'PAST',
+          subject=ps.it(),
+          k'inevitable',
+        }
       elseif topic1 == 3 then
         ----2
         -- "This is the life for me."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              theme=cc('it', 'pronoun'),
-              det=k'the',
-              verb=k'life',
-              t'for'{t=cc('speaker', 'pronoun')},
-            },
-          }
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          ps.np{
+            det=k'the',
+            t'for'{theme=ps.me(context)},
+            k'life',
+          },
+        }
       elseif topic1 == 4 then
         -- "It is terrifying."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              stimulus=cc('it', 'pronoun'),
-              verb=k'terrifying',
-            },
-          }
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          k'terrifying',
+        }
       elseif topic1 == 5 then
         -- "I don't know anything about that."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              neg=k'not',
-              experiencer=cc('speaker', 'pronoun'),
-              verb=k'know',
-              stimulus=ps_np{
-                det=k'any',  -- TODO: negative polarity items
-                n=k'thing',
-                -- TODO: that
-                t'about'{t=cc('it', 'pronoun')},
-              },
+        focus_sentence = ps.simple{
+          neg=true,
+          t'know'{
+            experiencer=ps.me(context),
+            stimulus=ps.np{
+              det=k'any',  -- TODO: negative polarity items
+              t'about'{theme=ps.it()},  -- TODO: 'that'
+              'thing',
             },
-          }
+          },
+        }
       elseif topic1 == 6 then
         ----2
         -- "We are in the right in all matters."
       elseif topic1 == 7 then
         ----2
         -- "It's for the best."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              theme=cc('it', 'pronoun'),
-              verb=k'for the best',
-            },
-          }
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          t'for'{
+            theme=ps.np{det=k'the', k'best', false},
+          },
+        }
       elseif topic1 == 8 then
         -- "I don't care one way or another."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              neg=k'not',
-              experiencer=cc('speaker', 'pronoun'),
-              verb=k'care',
-              t'in way'{t=k'one way or another'},
+        focus_sentence = ps.simple{
+          neg=true,
+          t'care'{
+            experiencer=ps.me(context),
+            t'in way'{
+              theme=ps.conj{
+                ps.np{det=k'a', k'way'},
+                k'or',
+                ps.np{det=k'a', k'other', k'way'},  -- TODO: omit repeated word
+              },
             },
-          }
+          },
+        }
       elseif topic1 == 9 then
         -- "I hate it." / "I hate them."
         local it_or_them
         if english:find('it%.$') then
-          it_or_them = cc('it', 'pronoun')
+          it_or_them = ps.it()
         else
-          context.them = {true, true}
-          it_or_them = cc('them', 'pronoun')
+          it_or_them = ps.them(context)
         end
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              experiencer=cc('speaker', 'pronoun'),
-              verb=k'hate',
-              stimulus=it_or_them,
-            },
-          }
+        focus_sentence = ps.simple{
+          t'hate'{
+            experiencer=ps.me(context),
+            stimulus=it_or_them,
+          },
+        }
       elseif topic1 == 10 then
         -- "I am afraid of it." / "I am afraid of them."
         local it_or_them
         if english:find('it%.$') then
-          it_or_them = cc('it', 'pronoun')
+          it_or_them = ps.it()
         else
-          context.them = {true, true}
-          it_or_them = cc('them', 'pronoun')
+          it_or_them = ps.them(context)
         end
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              experiencer=cc('speaker', 'pronoun'),
-              verb=k'fear',
-              stimulus=it_or_them,
-            },
-          }
+        focus_sentence = ps.simple{
+          t'fear'{
+            experiencer=ps.me(context),
+            stimulus=it_or_them,
+          },
+        }
       elseif topic1 == 11 then
         -- "That is sad but not unexpected."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              stimulus=cc('it', 'pronoun'),
-              -- TODO: conjunctions
-              verb=k'sad but not unexpected',
+        focus_sentence = ps.simple{
+          ps.it(),
+          ps.conj{
+            k'sad',
+            k'but',
+            ps.adj{
+              k'not',
+              k'unexpected',
             },
-          }
+          },
+        }
       elseif topic1 == 12 then
         -- "That is terrible."
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              stimulus=cc('it', 'pronoun'),
-              verb=k'terrible',
-            },
-          }
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          k'terrible',
+        }
       elseif topic1 == 13 then
         -- "That's terrific!"
-        -- TODO: '!'
-        constituent =
-          ps_sentences{
-            ps_infl{
-              tense=k'PRESENT',
-              stimulus=cc('it', 'pronoun'),
-              verb=k'terrific',
-            },
-          }
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          k'terrific',
+          punct='!',
+        }
       elseif topic1 == 14 then
         -- "I enjoyed performing."
       elseif topic1 == 15 then
@@ -3974,13 +5001,49 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "It was good."
       elseif topic1 == 19 then
         -- "It was okay."
-      elseif topic1 == 20 then  -- Agree completely
+      elseif topic1 == 20 then
         -- "I agree completely."
         -- / "So true, so true."
         -- / "No doubt."
         -- / "Truly."
         -- / "I concur!"
+        if english == 'so true, so true.' then
+          focus_sentence = ps.utterance{
+            ps.sentence{ps.fragment{ps.adj{deg=k'so', k'true'}}},
+            ps.sentence{ps.fragment{ps.adj{deg=k'so', k'true'}}},
+          }
+        elseif english == 'no doubt.' then
+          focus_sentence = ps.sentence{
+            ps.fragment{
+              ps.np{
+                amount=k'none',
+                k'doubt',
+              },
+            },
+          }
+        elseif english == 'truly.' then
+          focus_sentence = ps.sentence{
+            ps.fragment{
+              ps.adv{k'true'},
+            },
+          }
+        elseif english == 'i concur!' then
+          focus_sentence = ps.simple{
+            t'concur'{
+              agent=ps.me(context),
+            },
+            punct='!',
+          }
+        else
+          focus_sentence = ps.simple{
+            ps.adv{k'complete'},
+            t'agree'{
+              agent=ps.me(context),
+            },
+          }
+        end
       elseif topic1 == 21 then
+        ----1
         -- "This "
         -- TODO: subject
         -- "is fantastic!"
@@ -3991,12 +5054,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- / "is legendary."
         -- / "! Amazing ability."
       elseif topic1 == 22 then
+        ----1
         -- "This "
         -- subject
         -- "is great."
         -- / "is really quite good!"
         -- / "shows such talent."
       elseif topic1 == 23 then
+        ----1
         -- "This "
         -- subject
         -- "is good."
@@ -4004,6 +5069,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- / "is alright!"
         -- / "has promise."
       elseif topic1 == 24 then
+        ----1
         -- "This "
         -- subject
         -- "is okay."
@@ -4013,6 +5079,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- / "could be worse."
         -- / "is middling."
       elseif topic1 == 25 then
+        ----1
         -- "This "
         -- subject
         -- "is no good."
@@ -4122,320 +5189,664 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "The defenseless are safer from outlaws."
       end
     elseif topic == df.talk_choice_type.ExpressOverwhelmingEmotion then
-      if topic1 == df.emotion_type.ACCEPTANCE then
-      elseif topic1 == df.emotion_type.ADORATION then
-      elseif topic1 == df.emotion_type.AFFECTION then
-      elseif topic1 == df.emotion_type.AGITATION then
-      elseif topic1 == df.emotion_type.AGGRAVATION then
-      elseif topic1 == df.emotion_type.AGONY then
+      if (topic1 == df.emotion_type.AGONY or
+          topic1 == df.emotion_type.ANGUISH) then
         -- "The pain!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{det=k'the', k'pain'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ALARM then
         -- "Somebody help!"
-      elseif topic1 == df.emotion_type.ALIENATION then
-      elseif topic1 == df.emotion_type.AMAZEMENT then
-      elseif topic1 == df.emotion_type.AMBIVALENCE then
-      elseif topic1 == df.emotion_type.AMUSEMENT then
-      elseif topic1 == df.emotion_type.ANGER then
+        focus_sentence = ps.simple{
+          mood=k'IMPERATIVE',
+          t'help'{
+            agent=k'somebody',
+            -- TODO: implicit theme "me"
+          },
+          punct='!',
+        }
+      -- ANGUISH: see AGONY
       elseif topic1 == df.emotion_type.ANGST then
         -- "What is the meaning of it all?!"
-      elseif topic1 == df.emotion_type.ANGUISH then
         -- "The pain!"
-      elseif topic1 == df.emotion_type.ANNOYANCE then
-      -- 15: N/A
-      elseif topic1 == df.emotion_type.ANXIETY then
-      elseif topic1 == df.emotion_type.APATHY then
-      -- 18: N/A
-      elseif topic1 == df.emotion_type.AROUSAL then
-      elseif topic1 == df.emotion_type.ASTONISHMENT then
-      -- 21: N/A
-      elseif topic1 == df.emotion_type.AVERSION then
-      elseif topic1 == df.emotion_type.AWE then
-      elseif topic1 == df.emotion_type.BITTERNESS then
+        -- TODO: Check "The pain!"
       elseif topic1 == df.emotion_type.BLISS then
         -- "Such sweet bliss!"
-      elseif topic1 == df.emotion_type.BOREDOM then
-      elseif topic1 == df.emotion_type.CARING then
-      -- 28: N/A
-      elseif topic1 == df.emotion_type.CONFUSION then
-      elseif topic1 == df.emotion_type.CONTEMPT then
-      elseif topic1 == df.emotion_type.CONTENTMENT then
-      -- 32: N/A
-      -- 33: N/A
-      elseif topic1 == df.emotion_type.DEFEAT then
-      elseif topic1 == df.emotion_type.DEJECTION then
-      elseif topic1 == df.emotion_type.DELIGHT then
-      -- 37: N/A
-      -- 38: N/A
-      elseif topic1 == df.emotion_type.DESPAIR then
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{k'such', k'sweet', k'bliss'},
+          },
+          punct='!',
+        }
+      elseif (topic1 == df.emotion_type.DESPAIR or
+              topic1 == df.emotion_type.GRIEF or
+              topic1 == df.emotion_type.MISERY or
+              topic1 == df.emotion_type.MORTIFICATION or
+              topic1 == df.emotion_type.SADNESS or
+              topic1 == df.emotion_type.SHAKEN) then
         -- "Waaaaa..."
-      elseif topic1 == df.emotion_type.DISAPPOINTMENT then
-      elseif topic1 == df.emotion_type.DISGUST then
-      elseif topic1 == df.emotion_type.DISILLUSIONMENT then
-      elseif topic1 == df.emotion_type.DISLIKE then
-      elseif topic1 == df.emotion_type.DISMAY then
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.noise{k'wa'},
+          },
+          punct='...',
+        }
+      elseif (topic1 == df.emotion_type.DISMAY or
+              topic1 == df.emotion_type.DISTRESS or
+              topic1 == df.emotion_type.FEAR or
+              topic1 == df.emotion_type.TERROR) then
         -- "Ahhhhhhh!  No!"
-      elseif topic1 == df.emotion_type.DISPLEASURE then
-      elseif topic1 == df.emotion_type.DISTRESS then
-        -- "Ahhhhhhh!  No!"
-      elseif topic1 == df.emotion_type.DOUBT then
-      -- 48: N/A
-      elseif topic1 == df.emotion_type.EAGERNESS then
-      -- 50: N/A
-      elseif topic1 == df.emotion_type.ELATION then
-      elseif topic1 == df.emotion_type.EMBARRASSMENT then
-      elseif topic1 == df.emotion_type.EMPATHY then
-      elseif topic1 == df.emotion_type.EMPTINESS then
-      elseif topic1 == df.emotion_type.ENJOYMENT then
-      -- 56: N/A
-      elseif topic1 == df.emotion_type.ENTHUSIASM then
-      -- 58: N/A
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.fragment{
+              ps.noise{k'ah (fear)'},
+            },
+            punct='!',
+          },
+          ps.sentence{
+            ps.fragment{
+              k'no',
+            },
+            punct='!',
+          },
+        }
+      -- DISTRESS: see DISMAY
       elseif topic1 == df.emotion_type.EUPHORIA then
         -- "I can't believe how great I feel!"
-      elseif topic1 == df.emotion_type.EXASPERATION then
-      elseif topic1 == df.emotion_type.EXCITEMENT then
-      elseif topic1 == df.emotion_type.EXHILARATION then
-      elseif topic1 == df.emotion_type.EXPECTANCY then
-      elseif topic1 == df.emotion_type.FEAR then
-        -- "Ahhhhhhh!  No!"
-      elseif topic1 == df.emotion_type.FEROCITY then
-      elseif topic1 == df.emotion_type.FONDNESS then
-      elseif topic1 == df.emotion_type.FREEDOM then
+        focus_sentence = ps.simple{
+          mood=k'can,X',
+          neg=true,
+          t'believe'{
+            experiencer=ps.me(context),
+            stimulus=ps.wh{
+              t'feel condition'{
+                experiencer=ps.me(context),
+                stimulus=ps.adj{
+                  deg=h'how',
+                  k'euphoric',
+                },
+              },
+            },
+          },
+        }
+      -- FEAR: see DISMAY
       elseif topic1 == df.emotion_type.FRIGHT then
         -- "Eek!"
-      elseif topic1 == df.emotion_type.FRUSTRATION then
-      -- 70: N/A
-      elseif topic1 == df.emotion_type.GAIETY then
-      -- 72: N/A
-      elseif topic1 == df.emotion_type.GLEE then
-      elseif topic1 == df.emotion_type.GLOOM then
-      elseif topic1 == df.emotion_type.GLUMNESS then
-      elseif topic1 == df.emotion_type.GRATITUDE then
-      -- 77: N/A
-      elseif topic1 == df.emotion_type.GRIEF then
-        -- "Waaaaa..."
-      elseif topic1 == df.emotion_type.GRIM_SATISFACTION then
-      elseif topic1 == df.emotion_type.GROUCHINESS then
-      elseif topic1 == df.emotion_type.GRUMPINESS then
-      elseif topic1 == df.emotion_type.GUILT then
-      elseif topic1 == df.emotion_type.HAPPINESS then
-      elseif topic1 == df.emotion_type.HATRED then
-      -- 85: N/A
-      elseif topic1 == df.emotion_type.HOPE then
-      elseif topic1 == df.emotion_type.HOPELESSNESS then
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.noise{k'eek'},
+          },
+          punct='!',
+        }
+      -- GRIEF: see DESPAIR
       elseif topic1 == df.emotion_type.HORROR then
         -- "The horror..."
-      -- 89: N/A
-      elseif topic1 == df.emotion_type.HUMILIATION then
-      -- 91: N/A
-      -- 92: N/A
-      -- 93: N/A
-      -- 94: N/A
-      elseif topic1 == df.emotion_type.INSULT then
-      elseif topic1 == df.emotion_type.INTEREST then
-      elseif topic1 == df.emotion_type.IRRITATION then
-      elseif topic1 == df.emotion_type.ISOLATION then
-      -- 99: N/A
-      elseif topic1 == df.emotion_type.JOLLINESS then
-      elseif topic1 == df.emotion_type.JOVIALITY then
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.np{det=k'the', k'horror'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.JOY then
         -- "Oh joyous occasion!"
-      elseif topic1 == df.emotion_type.JUBILATION then
-      -- 104: N/A
-      elseif topic1 == df.emotion_type.LOATHING then
-      elseif topic1 == df.emotion_type.LONELINESS then
-      -- 107: N/A
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.noise{k'oh'},
+            ps.np{k'joyous', k'occasion'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.LOVE then
         -- "The love overwhelms me!"
-      -- 109: N/A
-      elseif topic1 == df.emotion_type.LUST then
-      -- 111: N/A
-      elseif topic1 == df.emotion_type.MISERY then
-        -- "Waaaaa..."
-      elseif topic1 == df.emotion_type.MORTIFICATION then
-        -- "Waaaaa..."
-      -- 114: N/A
-      elseif topic1 == df.emotion_type.NERVOUSNESS then
-      elseif topic1 == df.emotion_type.NOSTALGIA then
-      elseif topic1 == df.emotion_type.OPTIMISM then
-      elseif topic1 == df.emotion_type.OUTRAGE then
-      elseif topic1 == df.emotion_type.PANIC then
-      elseif topic1 == df.emotion_type.PATIENCE then
-      elseif topic1 == df.emotion_type.PASSION then
-      elseif topic1 == df.emotion_type.PESSIMISM then
-      -- 123: N/A
-      elseif topic1 == df.emotion_type.PLEASURE then
-      elseif topic1 == df.emotion_type.PRIDE then
+        focus_sentence = ps.simple{
+          t'overwhelm'{
+            stimulus=ps.np{det=k'the', k'love,N'},
+            experiencer=ps.me(context),
+          },
+          punct='!',
+        }
+      -- MISERY: see DESPAIR
+      -- MORTIFICATION: see DESPAIR
       elseif topic1 == df.emotion_type.RAGE then
         -- "Rawr!!!"
-      elseif topic1 == df.emotion_type.RAPTURE then
-      elseif topic1 == df.emotion_type.REJECTION then
-      elseif topic1 == df.emotion_type.RELIEF then
-      elseif topic1 == df.emotion_type.REGRET then
-      elseif topic1 == df.emotion_type.REMORSE then
-      elseif topic1 == df.emotion_type.REPENTANCE then
-      elseif topic1 == df.emotion_type.RESENTMENT then
-      -- 134: N/A
-      elseif topic1 == df.emotion_type.RIGHTEOUS_INDIGNATION then
-      elseif topic1 == df.emotion_type.SADNESS then
-        -- "Waaaaa..."
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.noise{k'rawr'},
+          },
+          punct='!',
+        }
+      -- SADNESS: see DESPAIR
       elseif topic1 == df.emotion_type.SATISFACTION then
         -- "How incredibly satisfying!"
-      -- 138: N/A
-      elseif topic1 == df.emotion_type.SELF_PITY then
-      -- 140: N/A
-      elseif topic1 == df.emotion_type.SERVILE then
-      elseif topic1 == df.emotion_type.SHAKEN then
-        -- "Waaaaa..."
-      elseif topic1 == df.emotion_type.SHAME then
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', ps.adv{k'incredible'}, k'satisfying'},
+          },
+          punct='!',
+        }
+      -- SHAKEN: see DESPAIR
       elseif topic1 == df.emotion_type.SHOCK then
         -- "Ah...  uh..."
-      -- 145: N/A
-      -- 146: N/A
-      -- 147: N/A
-      -- 148: N/A
-      elseif topic1 == df.emotion_type.SUSPICION then
-      elseif topic1 == df.emotion_type.SYMPATHY then
-      elseif topic1 == df.emotion_type.TENDERNESS then
-      -- 152: N/A
-      elseif topic1 == df.emotion_type.TERROR then
-        -- "Ahhhhhhh!  No!"
-      elseif topic1 == df.emotion_type.THRILL then
-      -- 155: N/A
-      elseif topic1 == df.emotion_type.TRIUMPH then
-      elseif topic1 == df.emotion_type.UNEASINESS then
-      elseif topic1 == df.emotion_type.UNHAPPINESS then
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.fragment{
+              ps.noise{k'ah (shock)'},
+            },
+            punct='...',
+          },
+          ps.sentence{
+            ps.fragment{
+              ps.noise{k'uh (shock)'},
+            },
+            punct='...',
+          },
+        }
+      -- TERROR: see DISMAY
       elseif topic1 == df.emotion_type.VENGEFULNESS then
         -- "Every last one of you will pay with your lives!"
-      -- 160: N/A
-      elseif topic1 == df.emotion_type.WONDER then
-      elseif topic1 == df.emotion_type.WORRY then
-      elseif topic1 == df.emotion_type.WRATH then
-      elseif topic1 == df.emotion_type.ZEAL then
-      -- 165: N/A
-      -- 166: N/A
-      -- 167: N/A
-      elseif topic1 == df.emotion_type.RESTLESS then
-      elseif topic1 == df.emotion_type.ADMIRATION then
+        focus_sentence = ps.simple{
+          tense=k'FUTURE',
+          t'pay'{
+            agent=ps.np{
+              amount=k'all',  -- TODO: 'every last one'
+              ps.you(context),
+            },
+            theme=ps.np{
+              rel=ps.you(context),
+              k'life',
+              plural=true,
+            },
+          },
+        }
       end
     elseif topic == df.talk_choice_type.ExpressGreatEmotion then
+      ----1
       if topic1 == df.emotion_type.ACCEPTANCE then
         -- "I am in complete accord with this!"
+        focus_sentence = ps.simple{
+          t'agree'{
+            -- idiom
+            experiencer=ps.me(context),
+            stimulus=ps.this(),
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ADORATION then
         -- "Such adoration I feel!"
+        -- TODO: topic-fronting
+        focus_sentence = ps.simple{
+          t'feel emotion'{
+            experiencer=ps.me(context),
+            stimulus=ps.np{k'such', k'adoration'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.AFFECTION then
         -- "How affectionate I am!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.wh{
+              subject=ps.me(context),
+              ps.adj{
+                deg=k'how',
+                k'affectionate',
+              },
+            },
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.AGITATION then
         -- "How agitating!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'agitating'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.AGGRAVATION then
         -- "This is so aggravating!"
+        focus_sentence = ps.simple{
+          subject=ps.this(),
+          ps.adj{deg=k'so', 'aggravating'},
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.AGONY then
         -- "The agony is too much!"
+        focus_sentence = ps.simple{
+          subject=ps.np{det=k'the', k'agony'},
+          k'too much',
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ALARM then
         -- "What's going on?!"
+        focus_sentence = ps.simple{
+          progressive=true,
+          t'happen'{
+            theme=k'what',
+          },
+          punct='?!',
+        }
       elseif topic1 == df.emotion_type.ALIENATION then
         -- "I feel so alienated..."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'alienated'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.AMAZEMENT then
         -- "Wow!  That's amazing!"
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.fragment{
+              ps.noise{k'wow'},
+            },
+            punct='!',
+          },
+          ps.sentence{
+            ps.infl{
+              subject=ps.that(),
+              k'amazing',
+            },
+            punct='!',
+          },
+        }
       elseif topic1 == df.emotion_type.AMBIVALENCE then
         -- "I am so torn over this..."
+        focus_sentence = ps.simple{
+          passive=true,
+          t'tear'{
+            stimulus=ps.this(),
+            theme=ps.me(context),
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.AMUSEMENT then
         -- "Ha ha!  So amusing!"
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.fragment{
+              ps.noise{k'haha'},
+            },
+            punct='!',
+          },
+          ps.sentence{
+            ps.fragment{
+              ps.adj{deg=k'so', k'amusing'},
+            },
+            punct='!',
+          },
+        }
       elseif topic1 == df.emotion_type.ANGER then
         -- "I am so angry!"
+        consituent = ps.simple{
+          subject=ps.me(context),
+          ps.adj{deg=k'so', k'angry'},
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ANGST then
         -- "What am I even doing here?"
+        ----1
       elseif topic1 == df.emotion_type.ANGUISH then
         -- "The anguish is overwhelming..."
+        focus_sentence = ps.simple{
+          subject=ps.np{det=k'the', k'anguish'},
+          k'overwhelming',
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.ANNOYANCE then
         -- "How annoying!"
         -- / "It's annoying."
         -- / "I'm annoyed."
         -- / "That's annoying."
         -- / "So annoying!"
-      -- 15: N/A
+        if english:find('how annoying!') then
+          focus_sentence = ps.sentence{
+            ps.fragment{
+              ps.adj{deg=k'how', k'annoying'},
+            },
+            punct='!',
+          }
+        elseif english:find("it's annoying%.") then
+          focus_sentence = ps.simple{
+            subject=ps.it(),
+            k'annoying',
+          }
+        elseif english:find("that's annoying%.") then
+          focus_sentence = ps.simple{
+            subject=ps.that(),
+            k'annoying',
+          }
+        elseif english:find('so annoying!') then
+          focus_sentence = ps.sentence{
+            ps.fragment{
+              ps.adj{deg=k'so', k'annoying'},
+            },
+            punct='!',
+          }
+        else
+          focus_sentence = ps.simple{
+            subject=ps.me(context),
+            k'annoyed',
+          }
+        end
       elseif topic1 == df.emotion_type.ANXIETY then
         -- "I'm so anxious!"
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.adj{deg=k'so', k'anxious'},
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.APATHY then
         -- "I could not care less."
-      -- 18: N/A
+        focus_sentence = ps.simple{
+          mood=k'could',
+          neg=true,
+          k'less',
+          t'care'{
+            experiencer=ps.me(context),
+          },
+        }
       elseif topic1 == df.emotion_type.AROUSAL then
         -- "I am very aroused!"
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.adj{q=k'very', k'aroused'},
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ASTONISHMENT then
         -- "Astonishing!"
-      -- 21: N/A
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            k'astonishing',
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.AVERSION then
         -- "I really need to get away from this."
+        focus_sentence = ps.simple{
+          k'really',
+          t'need'{
+            experiencer=ps.me(context),
+            stimulus=ps.infl{
+              tense=k'INFINITIVE',
+              t'get away from'{
+                agent=ps.me(context),  -- TODO: PRO?
+                theme=ps.this(),
+              },
+            },
+          },
+        }
       elseif topic1 == df.emotion_type.AWE then
         -- "I'm awe-struck!"
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          k'awe-struck',
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.BITTERNESS then
         -- "I'm terribly bitter about this..."
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.adj{
+            q=k'terribly',
+            t'about'{
+              theme=ps.this(),
+            },
+            k'bitter',
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.BLISS then
         -- "How blissful!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'blissful'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.BOREDOM then
         -- "This is so boring!"
+        focus_sentence = ps.simple{
+          subject=ps.this(),
+          ps.adj{deg=k'so', k'boring'},
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.CARING then
         -- "I care so much!"
-      -- 28: N/A
+        focus_sentence = ps.simple{
+          ps.adv{deg=k'so', false, k'much'},
+          t'care'{
+            experiencer=ps.me(context),
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.CONFUSION then
         -- "I'm so incredibly confused..."
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.adj{deg=k'so', ps.adv{k'incredible'}, k'confused'},
+        }
       elseif topic1 == df.emotion_type.CONTEMPT then
         -- "I can't describe the contempt I feel..."
+        focus_sentence = ps.simple{
+          mood=k'can,X',
+          neg=true,
+          t'describe'{
+            agent=ps.me(context),
+            theme=ps.np{
+              det=k'the',
+              ps.wh_bound{
+                t'feel emotion'{
+                  experiencer=ps.me(context),
+                  stimulus=k'which',
+                },
+              },
+              k'contempt',
+            },
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.CONTENTMENT then
         -- "I am so content about this."
-      -- 32: N/A
-      -- 33: N/A
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          ps.adj{
+            deg=k'so',
+            t'about'{theme=ps.this()},
+            k'content',
+          },
+        }
       elseif topic1 == df.emotion_type.DEFEAT then
         -- "I feel so defeated..."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'defeated'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.DEJECTION then
         -- "I feel so dejected..."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'dejected'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.DELIGHT then
         -- "How very delightful!"
-      -- 37: N/A
-      -- 38: N/A
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', q=k'very', k'delightful'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.DESPAIR then
         -- "I despair at this!"
+        focus_sentence = ps.simple{
+          t'despair'{
+            agent=ps.me(context),
+            theme=ps.this(),
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.DISAPPOINTMENT then
         -- "My disappointment is palpable!"
+        focus_sentence = ps.simple{
+          subject=ps.np{
+            t'disappointment'{
+              experiencer=ps.me(context),
+            },
+          },
+          k'palpable',
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.DISGUST then
         -- "How disgusting!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'disgusting'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.DISILLUSIONMENT then
         -- "How naive I was...  this strikes me to the core."
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.fragment{
+              ps.wh{
+                tense=k'PAST',
+                subject=ps.me(context),
+                ps.adj{
+                  deg=k'how',
+                  k'naive',
+                },
+              },
+            },
+            punct='...',
+          },
+          ps.sentence{
+            ps.infl{
+              t'to'{
+                theme=ps.np{k'the', k'core'},
+                -- TODO: Some languages might explicitly say "my core".
+              },
+              t'strike'{
+                agent=ps.this(),
+                theme=ps.me(context),
+              },
+            },
+          },
+        }
       elseif topic1 == df.emotion_type.DISLIKE then
         -- "I feel such an intense dislike..."
+        focus_sentence = ps.simple{
+          t'feel emotion'{
+            experiencer=ps.me(context),
+            stimulus=ps.np{det=k'a', k'such', k'intense', k'dislike'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.DISMAY then
         -- "Everything is coming apart!"
+        focus_sentence = ps.simple{
+          progressive=true,
+          t'come apart'{
+            agent=k'everything',
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.DISPLEASURE then
         -- "I am very, very displeased."
+        focus_sentence = ps.simple{
+          subject=ps.me(context),
+          -- TODO: double Q
+          ps.adj{q=k'very', q=k'very', k'displeased'},
+        }
       elseif topic1 == df.emotion_type.DISTRESS then
         -- "What shall I do?  This is a disaster!"
+        focus_sentence = ps.utterance{
+          ps.sentence{
+            ps.infl{
+              mood=k'shall',
+              t'do'{
+                agent=ps.me(context),
+                theme=k'what',
+              },
+            },
+            punct='?',
+          },
+          ps.sentence{
+            ps.infl{
+              subject=ps.this(),
+              ps.np{det=k'a', k'disaster'},
+            },
+            punct='!',
+          },
+        }
       elseif topic1 == df.emotion_type.DOUBT then
         -- "I am wracked by doubts!"
-      -- 48: N/A
+        focus_sentence = ps.simple{
+          passive=true,
+          t'wrack'{
+            agent=ps.np{k'doubt', plural=true},
+            theme=ps.me(context),
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.EAGERNESS then
         -- "I can't wait to get to it!"
-      -- 50: N/A
       elseif topic1 == df.emotion_type.ELATION then
         -- "Such elation I feel!"
       elseif topic1 == df.emotion_type.EMBARRASSMENT then
         -- "How embarrassing!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'embarrassing'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.EMPATHY then
         -- "I feel such empathy!"
       elseif topic1 == df.emotion_type.EMPTINESS then
         -- "I feel so empty inside..."
       elseif topic1 == df.emotion_type.ENJOYMENT then
         -- "How enjoyable!"
-      -- 56: N/A
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'enjoyable'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ENTHUSIASM then
         -- "Let's go!"
-      -- 58: N/A
       elseif topic1 == df.emotion_type.EUPHORIA then
         -- "I feel so good!"
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'good'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.EXASPERATION then
         -- "So exasperating!"
       elseif topic1 == df.emotion_type.EXCITEMENT then
         -- "This is so exciting!"
       elseif topic1 == df.emotion_type.EXHILARATION then
         -- "How exhilarating!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'exhilarating'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.EXPECTANCY then
         -- "I know it will come to pass!"
       elseif topic1 == df.emotion_type.FEAR then
@@ -4450,10 +5861,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "Such a fright!"
       elseif topic1 == df.emotion_type.FRUSTRATION then
         -- "How frustrating!"
-      -- 70: N/A
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'frustrating'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.GAIETY then
         -- "Such gaiety!"
-      -- 72: N/A
       elseif topic1 == df.emotion_type.GLEE then
         -- "Glee!"
       elseif topic1 == df.emotion_type.GLOOM then
@@ -4462,7 +5877,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "How glum I am..."
       elseif topic1 == df.emotion_type.GRATITUDE then
         -- "I am so grateful!"
-      -- 77: N/A
       elseif topic1 == df.emotion_type.GRIEF then
         -- "I cannot be overwhelmed by grief!"
       elseif topic1 == df.emotion_type.GRIM_SATISFACTION then
@@ -4477,29 +5891,41 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "Such happiness!"
       elseif topic1 == df.emotion_type.HATRED then
         -- "I am consumed by hatred."
-      -- 85: N/A
       elseif topic1 == df.emotion_type.HOPE then
         -- "I am filled with such hope!"
       elseif topic1 == df.emotion_type.HOPELESSNESS then
         -- "There is no hope!"
       elseif topic1 == df.emotion_type.HORROR then
         -- "The horror consumes me!"
-      -- 89: N/A
       elseif topic1 == df.emotion_type.HUMILIATION then
         -- "The humiliation!"
-      -- 91: N/A
-      -- 92: N/A
-      -- 93: N/A
-      -- 94: N/A
       elseif topic1 == df.emotion_type.INSULT then
         -- "Such an offense!"
       elseif topic1 == df.emotion_type.INTEREST then
         -- "How incredibly interesting!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', ps.adv{k'incredible'}, k'interesting'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.IRRITATION then
         -- "How irritating!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'irritating'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ISOLATION then
         -- "I feel so isolated!"
-      -- 99: N/A
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'isolated'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.JOLLINESS then
         -- "Such a jolly time!"
       elseif topic1 == df.emotion_type.JOVIALITY then
@@ -4508,23 +5934,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am so happy!"
       elseif topic1 == df.emotion_type.JUBILATION then
         -- "Such jubilation I feel!"
-      -- 104: N/A
       elseif topic1 == df.emotion_type.LOATHING then
         -- "I crawl with such unbearable loathing!"
       elseif topic1 == df.emotion_type.LONELINESS then
         -- "I'm so terribly lonely!"
-      -- 107: N/A
       elseif topic1 == df.emotion_type.LOVE then
         -- "I feel such love!"
-      -- 109: N/A
       elseif topic1 == df.emotion_type.LUST then
         -- "I'm overcome by lust!"
-      -- 111: N/A
       elseif topic1 == df.emotion_type.MISERY then
         -- "Such misery!"
       elseif topic1 == df.emotion_type.MORTIFICATION then
         -- "The mortification overwhelms me!"
-      -- 114: N/A
       elseif topic1 == df.emotion_type.NERVOUSNESS then
         -- "I am so nervous!"
       elseif topic1 == df.emotion_type.NOSTALGIA then
@@ -4541,9 +5962,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I burn with such passion!"
       elseif topic1 == df.emotion_type.PESSIMISM then
         -- "This cannot possibly end well..."
-      -- 123: N/A
       elseif topic1 == df.emotion_type.PLEASURE then
         -- "How pleasurable!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'pleasurable'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.PRIDE then
         -- "I am so proud!"
       elseif topic1 == df.emotion_type.RAGE then
@@ -4562,17 +5988,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I repent!  I repent!"
       elseif topic1 == df.emotion_type.RESENTMENT then
         -- "I am overcome by such resentment..."
-      -- 134: N/A
       elseif topic1 == df.emotion_type.RIGHTEOUS_INDIGNATION then
         -- "I have been so wronged!"
       elseif topic1 == df.emotion_type.SADNESS then
         -- "I feel such unbearable sadness..."
       elseif topic1 == df.emotion_type.SATISFACTION then
         -- "That was very satisfying!"
-      -- 138: N/A
       elseif topic1 == df.emotion_type.SELF_PITY then
         -- "Why does it keep happening to me?  Why me?!"
-      -- 140: N/A
       elseif topic1 == df.emotion_type.SERVILE then
         -- "I live to serve...  my dear master..."
       elseif topic1 == df.emotion_type.SHAKEN then
@@ -4581,31 +6004,31 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am so ashamed!"
       elseif topic1 == df.emotion_type.SHOCK then
         -- "What's that?!"
-      -- 145: N/A
-      -- 146: N/A
-      -- 147: N/A
-      -- 148: N/A
       elseif topic1 == df.emotion_type.SUSPICION then
         -- "That's incredibly suspicious!"
       elseif topic1 == df.emotion_type.SYMPATHY then
         -- "I feel such sympathy!"
       elseif topic1 == df.emotion_type.TENDERNESS then
         -- "The tenderness I feel!"
-      -- 152: N/A
       elseif topic1 == df.emotion_type.TERROR then
         -- "I must press on!"
       elseif topic1 == df.emotion_type.THRILL then
         -- "It's so thrilling!"
-      -- 155: N/A
       elseif topic1 == df.emotion_type.TRIUMPH then
         -- "Fantastic!"
       elseif topic1 == df.emotion_type.UNEASINESS then
         -- "I feel so uneasy!"
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'uneasy'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.UNHAPPINESS then
         -- "Such unhappiness!"
       elseif topic1 == df.emotion_type.VENGEFULNESS then
         -- "I will take revenge!"
-      -- 160: N/A
       elseif topic1 == df.emotion_type.WONDER then
         -- "The wonder!"
       elseif topic1 == df.emotion_type.WORRY then
@@ -4614,15 +6037,26 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am filled with such wrath!"
       elseif topic1 == df.emotion_type.ZEAL then
         -- "Nothing shall stand in my way!"
-      -- 165: N/A
-      -- 166: N/A
-      -- 167: N/A
       elseif topic1 == df.emotion_type.RESTLESS then
         -- "I feel so restless!"
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'restless'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ADMIRATION then
         -- "How admirable!"
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'admirable'},
+          },
+          punct='!',
+        }
       end
     elseif topic == df.talk_choice_type.ExpressEmotion then
+      ----1
       if topic1 == df.emotion_type.ACCEPTANCE then
         -- "I accept this."
       elseif topic1 == df.emotion_type.ADORATION then
@@ -4651,19 +6085,23 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "What is the meaning of life..."
       elseif topic1 == df.emotion_type.ANGUISH then
         -- "I feel so anguished..."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'anguished'},
+          },
+          punct='!',
+        }
       elseif topic1 == df.emotion_type.ANNOYANCE then
         -- "That's very annoying."
-      -- 15: N/A
       elseif topic1 == df.emotion_type.ANXIETY then
         -- "It makes me very anxious."
       elseif topic1 == df.emotion_type.APATHY then
         -- "It would be hard to care less."
-      -- 18: N/A
       elseif topic1 == df.emotion_type.AROUSAL then
         -- "I'm aroused!"
       elseif topic1 == df.emotion_type.ASTONISHMENT then
         -- "It's quite astonishing."
-      -- 21: N/A
       elseif topic1 == df.emotion_type.AVERSION then
         -- "I'm very averse to this."
       elseif topic1 == df.emotion_type.AWE then
@@ -4676,23 +6114,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "It's really boring."
       elseif topic1 == df.emotion_type.CARING then
         -- "I really care."
-      -- 28: N/A
       elseif topic1 == df.emotion_type.CONFUSION then
         -- "I'm so confused."
       elseif topic1 == df.emotion_type.CONTEMPT then
         -- "Contemptible!"
       elseif topic1 == df.emotion_type.CONTENTMENT then
         -- "I'm very content."
-      -- 32: N/A
-      -- 33: N/A
       elseif topic1 == df.emotion_type.DEFEAT then
         -- "I've been defeated."
       elseif topic1 == df.emotion_type.DEJECTION then
         -- "I'm feeling very dejected."
       elseif topic1 == df.emotion_type.DELIGHT then
         -- "This is delightful!"
-      -- 37: N/A
-      -- 38: N/A
       elseif topic1 == df.emotion_type.DESPAIR then
         -- "I feel such despair..."
       elseif topic1 == df.emotion_type.DISAPPOINTMENT then
@@ -4711,10 +6144,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm so distressed about this!"
       elseif topic1 == df.emotion_type.DOUBT then
         -- "I'm very doubtful."
-      -- 48: N/A
       elseif topic1 == df.emotion_type.EAGERNESS then
         -- "I'm very eager to get started."
-      -- 50: N/A
       elseif topic1 == df.emotion_type.ELATION then
         -- "I'm so elated."
       elseif topic1 == df.emotion_type.EMBARRASSMENT then
@@ -4725,10 +6156,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I feel such emptiness."
       elseif topic1 == df.emotion_type.ENJOYMENT then
         -- "I really enjoyed that!"
-      -- 56: N/A
       elseif topic1 == df.emotion_type.ENTHUSIASM then
         -- "I feel enthusiastic!"
-      -- 58: N/A
       elseif topic1 == df.emotion_type.EUPHORIA then
         -- "I'm feeling great!"
       elseif topic1 == df.emotion_type.EXASPERATION then
@@ -4747,23 +6176,32 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm very fond."
       elseif topic1 == df.emotion_type.FREEDOM then
         -- "I feel so free."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'free'},
+          },
+        }
       elseif topic1 == df.emotion_type.FRIGHT then
         -- "That was so frightful."
       elseif topic1 == df.emotion_type.FRUSTRATION then
         -- "This is very frustrating."
-      -- 70: N/A
       elseif topic1 == df.emotion_type.GAIETY then
         -- "The gaiety I'm feeling!"
-      -- 72: N/A
       elseif topic1 == df.emotion_type.GLEE then
         -- "I'm so gleeful."
       elseif topic1 == df.emotion_type.GLOOM then
         -- "It makes me so gloomy."
       elseif topic1 == df.emotion_type.GLUMNESS then
         -- "I feel so glum."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'glum'},
+          },
+        }
       elseif topic1 == df.emotion_type.GRATITUDE then
         -- "I'm very grateful."
-      -- 77: N/A
       elseif topic1 == df.emotion_type.GRIEF then
         -- "I am almost overcome by grief."
       elseif topic1 == df.emotion_type.GRIM_SATISFACTION then
@@ -4774,24 +6212,24 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "Harumph!"
       elseif topic1 == df.emotion_type.GUILT then
         -- "I feel so guilty."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'guilty'},
+          },
+        }
       elseif topic1 == df.emotion_type.HAPPINESS then
         -- "I am so happy."
       elseif topic1 == df.emotion_type.HATRED then
         -- "The hate burns within me."
-      -- 85: N/A
       elseif topic1 == df.emotion_type.HOPE then
         -- "I am very hopeful."
       elseif topic1 == df.emotion_type.HOPELESSNESS then
         -- "I feel hopeless."
       elseif topic1 == df.emotion_type.HORROR then
         -- "This is truly horrifying."
-      -- 89: N/A
       elseif topic1 == df.emotion_type.HUMILIATION then
         -- "This is so humiliating."
-      -- 91: N/A
-      -- 92: N/A
-      -- 93: N/A
-      -- 94: N/A
       elseif topic1 == df.emotion_type.INSULT then
         -- "I am very insulted."
       elseif topic1 == df.emotion_type.INTEREST then
@@ -4800,7 +6238,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm very irritated by this."
       elseif topic1 == df.emotion_type.ISOLATION then
         -- "I feel very isolated."
-      -- 99: N/A
       elseif topic1 == df.emotion_type.JOLLINESS then
         -- "I'm feeling so jolly."
       elseif topic1 == df.emotion_type.JOVIALITY then
@@ -4809,23 +6246,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This is a joyous time."
       elseif topic1 == df.emotion_type.JUBILATION then
         -- "I feel much jubilation."
-      -- 104: N/A
       elseif topic1 == df.emotion_type.LOATHING then
         -- "I feel so much loathing..."
       elseif topic1 == df.emotion_type.LONELINESS then
         -- "I'm very lonely."
-      -- 107: N/A
       elseif topic1 == df.emotion_type.LOVE then
         -- "This is love."
-      -- 109: N/A
       elseif topic1 == df.emotion_type.LUST then
         -- "I feel such lust."
-      -- 111: N/A
       elseif topic1 == df.emotion_type.MISERY then
         -- "I'm so miserable."
       elseif topic1 == df.emotion_type.MORTIFICATION then
         -- "I'm so mortified..."
-      -- 114: N/A
       elseif topic1 == df.emotion_type.NERVOUSNESS then
         -- "I'm very nervous."
       elseif topic1 == df.emotion_type.NOSTALGIA then
@@ -4842,7 +6274,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I feel such passion."
       elseif topic1 == df.emotion_type.PESSIMISM then
         -- "I really don't see this working out."
-      -- 123: N/A
       elseif topic1 == df.emotion_type.PLEASURE then
         -- "I'm very pleased."
       elseif topic1 == df.emotion_type.PRIDE then
@@ -4853,6 +6284,12 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am so spiritually moved!"
       elseif topic1 == df.emotion_type.REJECTION then
         -- "I feel so rejected."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'rejected'},
+          },
+        }
       elseif topic1 == df.emotion_type.RELIEF then
         -- "I'm so relieved."
       elseif topic1 == df.emotion_type.REGRET then
@@ -4863,17 +6300,20 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I must repent."
       elseif topic1 == df.emotion_type.RESENTMENT then
         -- "I'm very resentful."
-      -- 134: N/A
       elseif topic1 == df.emotion_type.RIGHTEOUS_INDIGNATION then
         -- "I feel so wronged."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{deg=k'so', k'wronged'},
+          },
+        }
       elseif topic1 == df.emotion_type.SADNESS then
         -- "I cannot give in to sadness."
       elseif topic1 == df.emotion_type.SATISFACTION then
         -- "I am very satisfied."
-      -- 138: N/A
       elseif topic1 == df.emotion_type.SELF_PITY then
         -- "This is such a hardship for me!"
-      -- 140: N/A
       elseif topic1 == df.emotion_type.SERVILE then
         -- "I live to serve."
       elseif topic1 == df.emotion_type.SHAKEN then
@@ -4882,22 +6322,16 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I feel such shame."
       elseif topic1 == df.emotion_type.SHOCK then
         -- "Most shocking!"
-      -- 145: N/A
-      -- 146: N/A
-      -- 147: N/A
-      -- 148: N/A
       elseif topic1 == df.emotion_type.SUSPICION then
         -- "That's suspicious!"
       elseif topic1 == df.emotion_type.SYMPATHY then
         -- "I'm very sympathetic."
       elseif topic1 == df.emotion_type.TENDERNESS then
         -- "I feel such tenderness."
-      -- 152: N/A
       elseif topic1 == df.emotion_type.TERROR then
         -- "I am not scared!"
       elseif topic1 == df.emotion_type.THRILL then
         -- "This is quite a thrill!"
-      -- 155: N/A
       elseif topic1 == df.emotion_type.TRIUMPH then
         -- "This is great!"
       elseif topic1 == df.emotion_type.UNEASINESS then
@@ -4906,7 +6340,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm very unhappy."
       elseif topic1 == df.emotion_type.VENGEFULNESS then
         -- "I will have my revenge."
-      -- 160: N/A
       elseif topic1 == df.emotion_type.WONDER then
         -- "I am filled with wonder."
       elseif topic1 == df.emotion_type.WORRY then
@@ -4915,15 +6348,13 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am wrathful."
       elseif topic1 == df.emotion_type.ZEAL then
         -- "I shall accomplish much!"
-      -- 165: N/A
-      -- 166: N/A
-      -- 167: N/A
       elseif topic1 == df.emotion_type.RESTLESS then
         -- "I'm really restless."
       elseif topic1 == df.emotion_type.ADMIRATION then
         -- "I admire this."
       end
     elseif topic == df.talk_choice_type.ExpressMinorEmotion then
+      ----1
       if topic1 == df.emotion_type.ACCEPTANCE then
         -- "I can accept this."
       elseif topic1 == df.emotion_type.ADORATION then
@@ -4940,6 +6371,12 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "That was alarming."
       elseif topic1 == df.emotion_type.ALIENATION then
         -- "I feel somewhat alienated."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{q=k'somewhat', k'alienated'},
+          },
+        }
       elseif topic1 == df.emotion_type.AMAZEMENT then
         -- "That is amazing."
       elseif topic1 == df.emotion_type.AMBIVALENCE then
@@ -4954,17 +6391,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm anguished."
       elseif topic1 == df.emotion_type.ANNOYANCE then
         -- "It's annoying."
-      -- 15: N/A
+        focus_sentence = ps.simple{
+          subject=ps.it(),
+          k'annoying',
+        }
       elseif topic1 == df.emotion_type.ANXIETY then
         -- "I'm anxious."
       elseif topic1 == df.emotion_type.APATHY then
         -- "Who cares?"
-      -- 18: N/A
       elseif topic1 == df.emotion_type.AROUSAL then
         -- "Arousing..."
       elseif topic1 == df.emotion_type.ASTONISHMENT then
         -- "It's astonishing, really."
-      -- 21: N/A
       elseif topic1 == df.emotion_type.AVERSION then
         -- "I'd like to get away from it."
       elseif topic1 == df.emotion_type.AWE then
@@ -4977,23 +6415,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "It's boring."
       elseif topic1 == df.emotion_type.CARING then
         -- "I care."
-      -- 28: N/A
       elseif topic1 == df.emotion_type.CONFUSION then
         -- "This is confusing."
       elseif topic1 == df.emotion_type.CONTEMPT then
         -- "I feel only contempt."
       elseif topic1 == df.emotion_type.CONTENTMENT then
         -- "I'm content."
-      -- 32: N/A
-      -- 33: N/A
       elseif topic1 == df.emotion_type.DEFEAT then
         -- "I'm beat."
       elseif topic1 == df.emotion_type.DEJECTION then
         -- "I'm dejected."
       elseif topic1 == df.emotion_type.DELIGHT then
         -- "I feel some delight."
-      -- 37: N/A
-      -- 38: N/A
       elseif topic1 == df.emotion_type.DESPAIR then
         -- "I feel despair."
       elseif topic1 == df.emotion_type.DISAPPOINTMENT then
@@ -5012,10 +6445,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This is distressing."
       elseif topic1 == df.emotion_type.DOUBT then
         -- "I have my doubts."
-      -- 48: N/A
       elseif topic1 == df.emotion_type.EAGERNESS then
         -- "I'm eager to go."
-      -- 50: N/A
       elseif topic1 == df.emotion_type.ELATION then
         -- "I'm elated."
       elseif topic1 == df.emotion_type.EMBARRASSMENT then
@@ -5026,10 +6457,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I feel empty."
       elseif topic1 == df.emotion_type.ENJOYMENT then
         -- "I enjoyed that."
-      -- 56: N/A
       elseif topic1 == df.emotion_type.ENTHUSIASM then
         -- "Let's do this."
-      -- 58: N/A
       elseif topic1 == df.emotion_type.EUPHORIA then
         -- "I feel pretty good."
       elseif topic1 == df.emotion_type.EXASPERATION then
@@ -5052,10 +6481,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "That was frightening."
       elseif topic1 == df.emotion_type.FRUSTRATION then
         -- "It's frustrating."
-      -- 70: N/A
       elseif topic1 == df.emotion_type.GAIETY then
         -- "This is gaiety."
-      -- 72: N/A
       elseif topic1 == df.emotion_type.GLEE then
         -- "There's some glee here!"
       elseif topic1 == df.emotion_type.GLOOM then
@@ -5064,7 +6491,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm glum."
       elseif topic1 == df.emotion_type.GRATITUDE then
         -- "I'm grateful."
-      -- 77: N/A
       elseif topic1 == df.emotion_type.GRIEF then
         -- "I must let grief pass me by."
       elseif topic1 == df.emotion_type.GRIM_SATISFACTION then
@@ -5079,20 +6505,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm happy."
       elseif topic1 == df.emotion_type.HATRED then
         -- "I feel hate."
-      -- 85: N/A
       elseif topic1 == df.emotion_type.HOPE then
         -- "I have hope."
       elseif topic1 == df.emotion_type.HOPELESSNESS then
         -- "I cannot find hope."
       elseif topic1 == df.emotion_type.HORROR then
         -- "This cannot horrify me."
-      -- 89: N/A
       elseif topic1 == df.emotion_type.HUMILIATION then
         -- "This is humiliating."
-      -- 91: N/A
-      -- 92: N/A
-      -- 93: N/A
-      -- 94: N/A
       elseif topic1 == df.emotion_type.INSULT then
         -- "I take offense."
       elseif topic1 == df.emotion_type.INTEREST then
@@ -5101,7 +6521,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "It's irritating."
       elseif topic1 == df.emotion_type.ISOLATION then
         -- "I feel isolated."
-      -- 99: N/A
       elseif topic1 == df.emotion_type.JOLLINESS then
         -- "It makes me jolly."
       elseif topic1 == df.emotion_type.JOVIALITY then
@@ -5110,23 +6529,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This is nice."
       elseif topic1 == df.emotion_type.JUBILATION then
         -- "I feel jubilation."
-      -- 104: N/A
       elseif topic1 == df.emotion_type.LOATHING then
         -- "I feel loathing."
       elseif topic1 == df.emotion_type.LONELINESS then
-      -- 107: N/A
         -- "I'm lonely."
       elseif topic1 == df.emotion_type.LOVE then
         -- "Is this love?"
-      -- 109: N/A
       elseif topic1 == df.emotion_type.LUST then
         -- "I'm lustful."
-      -- 111: N/A
       elseif topic1 == df.emotion_type.MISERY then
         -- "I feel miserable."
       elseif topic1 == df.emotion_type.MORTIFICATION then
         -- "This is mortifying."
-      -- 114: N/A
       elseif topic1 == df.emotion_type.NERVOUSNESS then
         -- "I'm nervous."
       elseif topic1 == df.emotion_type.NOSTALGIA then
@@ -5143,7 +6557,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I feel passion."
       elseif topic1 == df.emotion_type.PESSIMISM then
         -- "Things usually don't work out" [sic]
-      -- 123: N/A
       elseif topic1 == df.emotion_type.PLEASURE then
         -- "It pleases me."
       elseif topic1 == df.emotion_type.PRIDE then
@@ -5164,17 +6577,20 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I repent of my deeds."
       elseif topic1 == df.emotion_type.RESENTMENT then
         -- "I feel resentful."
-      -- 134: N/A
       elseif topic1 == df.emotion_type.RIGHTEOUS_INDIGNATION then
         -- "I've been wronged."
       elseif topic1 == df.emotion_type.SADNESS then
         -- "I feel somewhat sad."
+        focus_sentence = ps.simple{
+          t'feel condition'{
+            experiencer=ps.me(context),
+            stimulus=ps.adj{q=k'somewhat', k'sad'},
+          },
+        }
       elseif topic1 == df.emotion_type.SATISFACTION then
         -- "That was satisfying."
-      -- 138: N/A
       elseif topic1 == df.emotion_type.SELF_PITY then
         -- "Why me?"
-      -- 140: N/A
       elseif topic1 == df.emotion_type.SERVILE then
         -- "I will serve."
       elseif topic1 == df.emotion_type.SHAKEN then
@@ -5183,22 +6599,22 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am ashamed."
       elseif topic1 == df.emotion_type.SHOCK then
         -- "I will master myself."
-      -- 145: N/A
-      -- 146: N/A
-      -- 147: N/A
-      -- 148: N/A
       elseif topic1 == df.emotion_type.SUSPICION then
         -- "How suspicious..."
+        focus_sentence = ps.sentence{
+          ps.fragment{
+            ps.adj{deg=k'how', k'suspicious'},
+          },
+          punct='...',
+        }
       elseif topic1 == df.emotion_type.SYMPATHY then
         -- "I'm sympathetic."
       elseif topic1 == df.emotion_type.TENDERNESS then
         -- "I feel tenderness."
-      -- 152: N/A
       elseif topic1 == df.emotion_type.TERROR then
         -- "Thrilling."
       elseif topic1 == df.emotion_type.THRILL then
         -- "Thrilling."
-      -- 155: N/A
       elseif topic1 == df.emotion_type.TRIUMPH then
         -- "I feel like a victor."
       elseif topic1 == df.emotion_type.UNEASINESS then
@@ -5207,7 +6623,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm unhappy."
       elseif topic1 == df.emotion_type.VENGEFULNESS then
         -- "This might require an answer."
-      -- 160: N/A
       elseif topic1 == df.emotion_type.WONDER then
         -- "It's wondrous."
       elseif topic1 == df.emotion_type.WORRY then
@@ -5216,15 +6631,13 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "The wrath rises within me..."
       elseif topic1 == df.emotion_type.ZEAL then
         -- "I am ready for this."
-      -- 165: N/A
-      -- 166: N/A
-      -- 167: N/A
       elseif topic1 == df.emotion_type.RESTLESS then
         -- "I feel restless."
       elseif topic1 == df.emotion_type.ADMIRATION then
         -- "I find this somewhat admirable."
       end
     elseif topic == df.talk_choice_type.ExpressLackEmotion then
+      ----1
       if topic1 == df.emotion_type.ACCEPTANCE then
         -- "I do not accept this."
       elseif topic1 == df.emotion_type.ADORATION then
@@ -5255,17 +6668,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This is nothing."
       elseif topic1 == df.emotion_type.ANNOYANCE then
         -- "No, that's not annoying."
-      -- 15: N/A
       elseif topic1 == df.emotion_type.ANXIETY then
         -- "I'm not anxious."
       elseif topic1 == df.emotion_type.APATHY then
         -- "If I thought about it more, I guess I'd be apathetic."
-      -- 18: N/A
       elseif topic1 == df.emotion_type.AROUSAL then
         -- "That is not in the least bit arousing."
       elseif topic1 == df.emotion_type.ASTONISHMENT then
         -- "Astonished?  No."
-      -- 21: N/A
       elseif topic1 == df.emotion_type.AVERSION then
         -- "I'm not averse to it."
       elseif topic1 == df.emotion_type.AWE then
@@ -5278,23 +6688,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "It isn't boring."
       elseif topic1 == df.emotion_type.CARING then
         -- "I don't care."
-      -- 28: N/A
       elseif topic1 == df.emotion_type.CONFUSION then
         -- "This isn't confusing."
       elseif topic1 == df.emotion_type.CONTEMPT then
         -- "I don't feel contempt."
       elseif topic1 == df.emotion_type.CONTENTMENT then
         -- "I am not contented."
-      -- 32: N/A
-      -- 33: N/A
       elseif topic1 == df.emotion_type.DEFEAT then
         -- "This isn't a defeat."
       elseif topic1 == df.emotion_type.DEJECTION then
         -- "There's nothing to be dejected about."
       elseif topic1 == df.emotion_type.DELIGHT then
         -- "I am not filled with delight."
-      -- 37: N/A
-      -- 38: N/A
       elseif topic1 == df.emotion_type.DESPAIR then
         -- "I will not despair."
       elseif topic1 == df.emotion_type.DISAPPOINTMENT then
@@ -5313,10 +6718,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This isn't distressing."
       elseif topic1 == df.emotion_type.DOUBT then
         -- "I have no doubts."
-      -- 48: N/A
       elseif topic1 == df.emotion_type.EAGERNESS then
         -- "I am not eager."
-      -- 50: N/A
       elseif topic1 == df.emotion_type.ELATION then
         -- "I'm not elated."
       elseif topic1 == df.emotion_type.EMBARRASSMENT then
@@ -5327,10 +6730,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "What's inside me isn't emptiness exactly..."
       elseif topic1 == df.emotion_type.ENJOYMENT then
         -- "I'm not enjoying this."
-      -- 56: N/A
       elseif topic1 == df.emotion_type.ENTHUSIASM then
         -- "I'm just not enthusiastic."
-      -- 58: N/A
       elseif topic1 == df.emotion_type.EUPHORIA then
         -- "I should be feeling great."
       elseif topic1 == df.emotion_type.EXASPERATION then
@@ -5353,10 +6754,8 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I guess that could have given me a fright."
       elseif topic1 == df.emotion_type.FRUSTRATION then
         -- "This isn't frustrating."
-      -- 70: N/A
       elseif topic1 == df.emotion_type.GAIETY then
         -- "There is no gaiety."
-      -- 72: N/A
       elseif topic1 == df.emotion_type.GLEE then
         -- "I'm not gleeful."
       elseif topic1 == df.emotion_type.GLOOM then
@@ -5365,7 +6764,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I don't feel glum."
       elseif topic1 == df.emotion_type.GRATITUDE then
         -- "I'm not feeling very grateful."
-      -- 77: N/A
       elseif topic1 == df.emotion_type.GRIEF then
         -- "Grief?  I feel nothing."
       elseif topic1 == df.emotion_type.GRIM_SATISFACTION then
@@ -5380,19 +6778,13 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am not happy."
       elseif topic1 == df.emotion_type.HATRED then
         -- "I feel no hatred."
-      -- 85: N/A
       elseif topic1 == df.emotion_type.HOPE then
         -- "I am not hopeful."
       elseif topic1 == df.emotion_type.HOPELESSNESS then
         -- "I will not lose hope."
       elseif topic1 == df.emotion_type.HORROR then
-      -- 89: N/A
       elseif topic1 == df.emotion_type.HUMILIATION then
         -- "No, this isn't humiliating."
-      -- 91: N/A
-      -- 92: N/A
-      -- 93: N/A
-      -- 94: N/A
       elseif topic1 == df.emotion_type.INSULT then
         -- "That doesn't insult me."
       elseif topic1 == df.emotion_type.INTEREST then
@@ -5401,7 +6793,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "This isn't irritating."
       elseif topic1 == df.emotion_type.ISOLATION then
         -- "I don't feel isolated."
-      -- 99: N/A
       elseif topic1 == df.emotion_type.JOLLINESS then
         -- "I'm not jolly."
       elseif topic1 == df.emotion_type.JOVIALITY then
@@ -5410,23 +6801,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I suppose this would be a joyous occasion."
       elseif topic1 == df.emotion_type.JUBILATION then
         -- "This isn't the time for jubilation."
-      -- 104: N/A
       elseif topic1 == df.emotion_type.LOATHING then
         -- "I am not filled with loathing."
       elseif topic1 == df.emotion_type.LONELINESS then
         -- "I'm not lonely."
-      -- 107: N/A
       elseif topic1 == df.emotion_type.LOVE then
         -- "There is no love."
-      -- 109: N/A
       elseif topic1 == df.emotion_type.LUST then
         -- "I am not burning with lust."
-      -- 111: N/A
       elseif topic1 == df.emotion_type.MISERY then
         -- "I'm not miserable."
       elseif topic1 == df.emotion_type.MORTIFICATION then
         -- "I am not mortified."
-      -- 114: N/A
       elseif topic1 == df.emotion_type.NERVOUSNESS then
         -- "I don't feel nervous."
       elseif topic1 == df.emotion_type.NOSTALGIA then
@@ -5443,7 +6829,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I'm not feeling passionate."
       elseif topic1 == df.emotion_type.PESSIMISM then
         -- "There's no reason to be pessimistic."
-      -- 123: N/A
       elseif topic1 == df.emotion_type.PLEASURE then
         -- "I take no pleasure in this."
       elseif topic1 == df.emotion_type.PRIDE then
@@ -5464,17 +6849,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I am not repentant."
       elseif topic1 == df.emotion_type.RESENTMENT then
         -- "I do not resent this."
-      -- 134: N/A
       elseif topic1 == df.emotion_type.RIGHTEOUS_INDIGNATION then
         -- "There's nothing to be indignant about."
       elseif topic1 == df.emotion_type.SADNESS then
         -- "I am not feeling sad right now."
       elseif topic1 == df.emotion_type.SATISFACTION then
         -- "That was not satisfying."
-      -- 138: N/A
       elseif topic1 == df.emotion_type.SELF_PITY then
         -- "I don't feel sorry for myself."
-      -- 140: N/A
       elseif topic1 == df.emotion_type.SERVILE then
         -- "I bow to no one."
       elseif topic1 == df.emotion_type.SHAKEN then
@@ -5483,22 +6865,16 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "I have no shame."
       elseif topic1 == df.emotion_type.SHOCK then
         -- "That did not shock me."
-      -- 145: N/A
-      -- 146: N/A
-      -- 147: N/A
-      -- 148: N/A
       elseif topic1 == df.emotion_type.SUSPICION then
         -- "Takes all kinds these days."
       elseif topic1 == df.emotion_type.SYMPATHY then
         -- "There will be no sympathy from me."
       elseif topic1 == df.emotion_type.TENDERNESS then
         -- "I don't feel tenderness."
-      -- 152: N/A
       elseif topic1 == df.emotion_type.TERROR then
         -- "I laugh in the face of death!"
       elseif topic1 == df.emotion_type.THRILL then
         -- "There was no thrill in it."
-      -- 155: N/A
       elseif topic1 == df.emotion_type.TRIUMPH then
         -- "There is no need for celebration."
       elseif topic1 == df.emotion_type.UNEASINESS then
@@ -5507,7 +6883,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "That doesn't make me unhappy."
       elseif topic1 == df.emotion_type.VENGEFULNESS then
         -- "There is no need to feel vengeful."
-      -- 160: N/A
       elseif topic1 == df.emotion_type.WONDER then
         -- "There is no sense of wonder."
       elseif topic1 == df.emotion_type.WORRY then
@@ -5516,15 +6891,14 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         -- "Wrath has not risen within me."
       elseif topic1 == df.emotion_type.ZEAL then
         -- "I have no zeal for this."
-      -- 165: N/A
-      -- 166: N/A
-      -- 167: N/A
       elseif topic1 == df.emotion_type.RESTLESS then
         -- "I don't feel restless."
       elseif topic1 == df.emotion_type.ADMIRATION then
         -- "There's not much to admire here."
       end
     end
+    constituent = ps.utterance{topic_sentence, focus_sentence}
+    -- TODO: some of those are multiple sentences
   elseif topic == 27 then  -- RespondJoinInsurrection
     -- topic1: invitation response
   elseif topic == 28 then
@@ -5557,47 +6931,51 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "."
   elseif topic == df.talk_choice_type.RequestSelfRescue then
     -- "Please help me!"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          polite=true,
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'help',
-          stimulus=cc('speaker', 'pronoun'),
-        },
-      }
+    constituent = ps.simple{
+      polite=true,
+      mood=k'IMPERATIVE',
+      t'help'{
+        agent=ps.thee(context),
+        stimulus=ps.me(context),
+      },
+      punct='!',
+    }
   elseif topic == df.talk_choice_type.AskWhatHappened then
     -- "What happened?"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PAST',
-          theme=k'what',
-          verb=k'happen',
-        },
-      }
+    constituent = ps.simple{
+      tense=k'PAST',
+      t'happen'{
+        theme=k'what',
+      },
+      punct='?',
+    }
   elseif topic == df.talk_choice_type.AskBeRescued then
     -- "Come with me and I'll bring you to safety."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'accompany',
-          theme=cc('speaker', 'pronoun'),
+    -- TODO: This is a conditional sentence but not transparently so in English.
+    constituent = ps.utterance{
+      ps.conj{
+        ps.sentence{
+          ps.infl{
+            mood=k'IMPERATIVE',
+            t'accompany'{
+              agent=ps.thee(context),
+              theme=ps.me(context),
+            },
+          },
         },
-        _'and if so then',
-        ps_infl{
-          tense=k'FUTURE',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'bring',
-          theme=cc('hearers', 'pronoun'),
-          goal=ps_np{n=k'safety'}
+        k'and if so then',
+        ps.sentence{
+          ps.infl{
+            tense=k'FUTURE',
+            t'bring'{
+              agent=ps.me(context),
+              theme=ps.thee(context),
+              goal=k'safety',
+            },
+          },
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.SayNotRemember then
     -- "I don't remember clearly."
   elseif topic == 44 then
@@ -5686,34 +7064,26 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- N/A
   elseif topic == df.talk_choice_type.AskCeaseHostilities then
     -- "Let us stop this pointless fighting!"
-    context.us = {speaker, hearers}
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'HORTATIVE',
-          agent=cc('us', 'pronoun'),
-          verb=k'stop',
-          theme=ps_xp{
-            head=k'this',  -- TODO: more precise deixis
-            complement=ps_xp{
-              k'pointless',
-              head=k'fighting',
-            },
-          },
+    constituent = ps.simple{
+      mood=k'HORTATIVE',
+      t'stop'{
+        agent=ps.us_inclusive(context),
+        theme=ps.np{
+          det=k'this',  -- TODO: more precise deixis
+          k'pointless',
+          k'fighting',
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.DemandYield then
     -- "You must yield!"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'must',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'yield',
-        },
-      }
+    constituent = ps.simple{
+      mood=k'must',
+      t'yield'{
+        agent=ps.thee(context),
+      },
+      punct='!',
+    }
   elseif topic == df.talk_choice_type.HawkWares then
     ----1
     -- "try" / "get your" / "your very own"
@@ -5738,46 +7108,51 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- topic3: ?
   elseif topic == df.talk_choice_type.YieldTerror then
     -- "Stop!  This isn't happening!"
-    -- TODO: aspect
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.infl{
           mood=k'IMPERATIVE',
-          -- TODO: The addressee might be the general situation, not a person.
-          agent=cc('hearers', 'pronoun'),
-          verb=k'stop',
+          t'stop'{
+            agent=ps.thee_inanimate(context),
+          }
         },
-        ps_infl{
-          -- TODO: progressive
-          tense=k'PRESENT',
-          neg=k'not',
-          theme=cc('it', 'pronoun'),
-          verb=k'happen',
+        punct='!',
+      },
+      ps.sentence{
+        ps.infl{
+          progressive=true,
+          neg=true,
+          t'happen'{
+            theme=ps.it(),
+          },
         },
-      }
+        punct='!',
+      },
+    }
   elseif topic == df.talk_choice_type.Yield then
     -- "I yield!  I yield!" / "We yield!  We yield!"
     local i_or_we
     if english:find('i yield') then
-      i_or_we = cc('speaker', 'pronoun')
+      i_or_we = ps.me(context)
     else
-      context.us = {speaker, true}
-      i_or_we = cc('us', 'pronoun')
+      i_or_we = ps.us_exclusive(context)
     end
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          agent=i_or_we,
-          verb=k'yield',
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.infl{
+          t'yield'{
+            agent=i_or_we,
+          }
         },
-        ps_infl{
-          tense=k'PRESENT',
-          agent=i_or_we,
-          verb=k'yield',
+      },
+      ps.sentence{
+        ps.infl{
+          t'yield'{
+            agent=i_or_we,
+          }
         },
-      }
+      },
+    }
   -- ExpressOverwhelmingEmotion: see StateOpinion
   -- ExpressGreatEmotion: see StateOpinion
   -- ExpressEmotion: see StateOpinion
@@ -5786,34 +7161,37 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.OutburstFleeConflict then
     -- "Help!  Save me!"
     -- TODO: Does this utterances have any hearers?
-    constituent =
-      ps_sentence{
-        ps_infl{
-          tense=k'PRESENT',
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.infl{
           mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'help',
+          t'help'{
+            agent=ps.thee(context),
+          },
         },
-        ps_infl{
-          tense=k'PRESENT',
+        punct='!',
+      },
+      ps.sentence{
+        ps.infl{
           mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'save',
-          theme=cc('speaker', 'pronoun'),
+          t'save'{
+            agent=ps.thee(context),
+            theme=ps.me(context),
+          },
         },
-      }
+        punct='!',
+      },
+    }
   elseif topic == df.talk_choice_type.StateFleeConflict then
     -- "I must withdraw!"
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'must',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'withdraw',
-        },
-      }
+    constituent = ps.simple{
+      mood=k'must',
+      t'withdraw'{
+        agent=ps.me(context),
+      },
+    }
   elseif topic == df.talk_choice_type.MentionJourney then
+    ----1
     -- "Now we will have to build our own future."
     -- / "Are we close?"
     -- / "You are bound to obey me."
@@ -5824,7 +7202,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / " Are you looking forward to the performance?"
     -- / " I've forgotten what I was going to say..."
   elseif topic == df.talk_choice_type.SummarizeTroubles then
-    ----1
     -- "Well, let's see..."
     -- ?
     -- / incident summary
@@ -5940,7 +7317,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ".  What do you command?"
   elseif topic == df.talk_choice_type.AskJoinService then
     -- "I would be honored to serve as a "
-    -- hearthperson
+    -- hearthperson / "lieutenant"
     -- ".  Will you have me?"
   elseif topic == df.talk_choice_type.AcceptService then
     -- "Gladly.  You are now one of my "
@@ -5955,8 +7332,10 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == 112 then
     -- topic1: invitation response
   elseif topic == df.talk_choice_type.AskTravelReason then
+    ----1
     -- "Why are you traveling?"
   elseif topic == df.talk_choice_type.TellTravelReason then
+    ----1
     -- "I'm returning to my home in"
     -- "I'm going to "
     -- " to take up my position"
@@ -5989,11 +7368,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == df.talk_choice_type.AskLocalRuler then
     -- "Tell me about the local ruler."
   elseif topic == df.talk_choice_type.ComplainAgreement then
-    -- ?
+    -- "We should have made it there by now."
+    -- "We should be making better progress."
+    -- "We are going the wrong way."
+    -- "We haven't performed for some time."
+    -- "We have arrived at our destination."
+    -- "The oppressor has been overthrown!"
+    -- "We must not abandon "
+    -- "We must go back."
   elseif topic == df.talk_choice_type.CancelAgreement then
     -- "We can no longer travel together."
     -- ? "  I'm giving up on this hopeless venture."
-    -- /   We were going to entertain the world!  It's a shame, but I'll have to make my own way now."
+    -- / "  We were going to entertain the world!  It's a shame, but I'll have to make my own way now."
     -- / "  I'm returning on my own."
   elseif topic == df.talk_choice_type.SummarizeConflict then
     ----1
@@ -6042,36 +7428,50 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ? "There's nothing organized here."
   elseif topic == df.talk_choice_type.RaiseAlarm then
     -- "Intruder!  Intruder!"
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.fragment{
+          k'intruder',
+        },
+        punct='!',
+      },
+      ps.sentence{
+        ps.fragment{
+          k'intruder',
+        },
+        punct='!',
+      },
+    }
   elseif topic == df.talk_choice_type.DemandDropWeapon then
     -- "Drop the "
     -- topic1: item key
     -- "!"
-    context.item = topic1
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'IMPERATIVE',
-          agent=cc('hearers', 'pronoun'),
-          verb=k'drop',
-          theme=ps_xp{
-            head=k'the',
-            complement=cc('item', 'item'),
-          },
-        },
-      }
+    constituent = ps.simple{
+      mood=k'IMPERATIVE',
+      t'drop'{
+        agent=ps.thee(context),
+        theme=ps.np{det=k'the', ps.item(topic1)},
+      },
+    }
   elseif topic == df.talk_choice_type.AgreeComplyDemand then
     -- "Okay!  I'll do it."
-    constituent =
-      ps_sentences{
-        k'okay',
-        ps_infl{
-          tense=k'FUTURE',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'do',
-          theme=cc('it', 'pronoun'),
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.fragment{
+          k'okay',
         },
-      }
+        punct='!',
+      },
+      ps.sentence{
+        ps.infl{
+          tense=k'FUTURE',
+          t'do'{
+            agent=ps.me(context),
+            theme=ps.it(),
+          }
+        },
+      },
+    }
   elseif topic == df.talk_choice_type.RefuseComplyDemand then
     -- "Over my dead body!"
     constituent = k'over my dead body'
@@ -6185,15 +7585,12 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ?
   elseif topic == df.talk_choice_type.AccuseTroublemaker then
     -- "You sound like a troublemaker."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          stimulus=cc('hearers', 'pronoun'),
-          verb=k'sound like',
-          theme=ps_np{det=k'a', n=k'troublemaker'},
-        },
-      }
+    constituent = ps.simple{
+      t'sound like'{
+        stimulus=ps.thee(context),
+        theme=ps.np{det=k'a', k'troublemaker'},
+      },
+    }
   elseif topic == df.talk_choice_type.AskAdopt then
     -- "Would you please adopt "
     -- ?
@@ -6203,22 +7600,27 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ?
   elseif topic == df.talk_choice_type.RefuseAdopt then
     -- "I'm sorry, but I'm unable to help."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          theme=cc('speaker', 'pronoun'),
-          verb=k'sorry',
+    constituent = ps.utterance{
+      ps.conj{
+        ps.infl{
+          subject=ps.me(context),
+          k'sorry',
         },
-        _'but',
-        ps_infl{
-          tense=k'PRESENT',
-          neg=k'not',
-          theme=cc('speaker', 'pronoun'),
-          verb=k'able',
-          -- TODO: role for "to help"
+        k'but',
+        ps.infl{
+          neg=true,
+          subject=ps.me(context),
+          t'able'{
+            theme=ps.infl{
+              tense=k'INFINITIVE',
+              t'help'{
+                agent=ps.me(context),  -- TODO: PRO?
+              },
+            },
+          },
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.RevokeService then
     -- ?
   elseif topic == df.talk_choice_type.InviteService then
@@ -6229,27 +7631,29 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "I'd rather not say."
   elseif topic == df.talk_choice_type.RefuseInviteService then
     -- "I cannot accept this honor.  I am sorry."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          mood=k'can',
-          neg=k'not',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'accept',
-          theme=ps_np{
-            det=k'this',
-            n=k'honor',
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.infl{
+          mood=k'can,X',
+          neg=true,
+          t'accept'{
+            agent=ps.me(context),
+            theme=ps.np{
+              det=k'this',
+              k'honor',
+            },
           },
         },
-        ps_infl{
-          tense=k'PRESENT',
-          theme=cc('speaker', 'pronoun'),
-          verb=k'sorry',
+      },
+      ps.sentence{
+        ps.infl{
+          subject=ps.me(context),
+          k'sorry',
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.RefuseRequestService then
-    -- "You are not worthy of such an honor yet."
+    -- "You are not worthy of such an honor yet.  I am sorry."
   elseif topic == df.talk_choice_type.OfferService then
     -- "Would you agree to become "
     -- "someone"
@@ -6258,34 +7662,34 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- ", taking over my duties and responsibilities?"
   elseif topic == df.talk_choice_type.AcceptPositionService then
     -- "I accept this honor."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'accept',
-          theme=ps_np{
-            det=k'this',
-            n=k'honor',
-          },
+    constituent = ps.simple{
+      t'accept'{
+        agent=ps.me(context),
+        theme=ps.np{
+          det=k'this',
+          k'honor',
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.RefusePositionService then
     -- "I am sorry, but I am otherwise disposed."
-    constituent =
-      ps_sentences{
-        ps_infl{
-          tense=k'PRESENT',
-          theme=cc('speaker', 'pronoun'),
-          verb=k'sorry',
+    constituent = ps.utterance{
+      ps.conj{
+        ps.sentence{
+          ps.infl{
+            subject=ps.me(context),
+            k'sorry',
+          },
         },
-        _'but',
-        ps_infl{
-          tense=k'PRESENT',
-          theme=cc('speaker', 'pronoun'),
-          -- TODO: otherwise disposed
+        k'but',
+        ps.sentence{
+          ps.infl{
+            subject=ps.me(context),
+            ps.adj{k'otherwise', k'disposed'},
+          },
         },
-      }
+      },
+    }
   elseif topic == df.talk_choice_type.InvokeNameBanish then
     -- topic2: identity key
     -- "!  The bond is broken!  Return to the Underworld and trouble us no more!"
@@ -6312,7 +7716,6 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- topic1: historical_figure key
     -- ?
   elseif topic == 172 then  -- AskFeelings
-    ----3
     -- "How are you feeling right now?"
   elseif topic == 173 then  -- TellThoughts
     ----1
@@ -6440,9 +7843,11 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == 174 then  -- AskServices
   elseif topic == 175 then  -- TellServices
     -- "We have many drinks to choose from."
+    -- / "The poet!  It's such an honor to have you here.  We have river spirits, potato wine and prickle berry wine.  All drinks cost 1 for a mug.  We rent out rooms for 17 a night."
     -- / "This is not that kind of establishment."
   elseif topic == 176 then  -- OrderDrink
     ----1
+    -- "I'd like the " drink "."
   elseif topic == 177 then  -- RentRoom
     -- "I'd like a room."
   elseif topic == 178 then  -- ExtendRoomRental
@@ -6452,9 +7857,11 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / "Your room is up the stairs, the first door on your right."
     -- / "You'll have the room for another day. I'm glad you're enjoying your stay."
   elseif topic == 180 then  -- AskJoinEntertainer
+    -- "Let's entertain the world together!"
   elseif topic == 181 then  -- RespondJoinEntertainer
    -- TODO
    -- "Can you manage a troupe so large?"
+   -- 5 "I'm sorry.  My duty is here."
   elseif topic == 182 then  -- AskJoinTroupe
   -- elseif topic == 183 then
   elseif topic == 184 then  -- RefuseTroupeApplication
@@ -6470,26 +7877,31 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   -- elseif topic == 191 then
   elseif topic == 192 then  -- TellBePatientForService
     -- "Please be patient. I'll have your order ready in a moment."
-    constituent =
-      ps_sentences{
-        ps_infl{
+    constituent = ps.utterance{
+      ps.sentence{
+        ps.infl{
           polite=true,
-          tense=k'PRESENT',
           mood=k'IMPERATIVE',
-          theme=cc('hearers', 'pronoun'),
-          verb=k'patient',
+          subject=ps.thee(context),
+          k'patient',
         },
-        ps_infl{
+      },
+      ps.sentence{
+        ps.infl{
           tense=k'FUTURE',
-          agent=cc('speaker', 'pronoun'),
-          verb=k'cause to be',
-          theme=ps_infl{
-            theme=k'order (noun)',
-            verb=k'ready',
+          t'cause to be'{
+            agent=ps.me(context),
+            theme=ps.infl{
+              subject=ps.np{rel=ps.thee(context), k'order,N'},
+              ps.adj{
+                t'within time span'{t=ps.np{det=k'a', k'moment'}},
+                k'ready',
+              },
+            },
           },
-          t'within time span'{t=ps_np{det=k'a', n=k'moment'}},
         },
-      }
+      },
+    }
   elseif topic == 193 then  -- TellNoServices
     -- "We don't offer any specific services here."
   elseif topic == 194 then  -- AskWaitUntilThere
@@ -6682,7 +8094,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "All of that so-called knowledge doesn't mean a thing."
       -- "Knowledge can be useful, but it can also be pointless or even dangerous."
     end
-  elseif topic == 199 then
+  elseif topic == 199 then  -- SayNoOrderYet
     -- "You haven't ordered anything. Would you like something?"
   elseif topic == 200 then  -- ProvideDirectionsBuilding
     -- topic1, topic2: building
@@ -6799,6 +8211,39 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
   elseif topic == 213 then  -- RefuseWork
   elseif topic == 214 then  -- GrantWorkGroup
   elseif topic == 215 then  -- RefuseWorkGroup
+  elseif topic == 216 then  -- GiveSquadOrder
+    -- "You must drive "
+    -- topic3: historical_entity / "an unknown civilization"
+    -- " from their home at "
+    -- topic4: world_site / "an unknown site"
+    -- / "You must kill the "
+    -- topic2: race " " name
+    -- "This "
+    -- "great beast" / "horrible beast" / "evil being" / "beast from the wilds"
+    -- " threatens our people with its very presence."
+    -- "This vile fiend has killed " number " in " his/her " lust for murder!"
+    -- "Seek your foe in "  -- This might go before "This vile fiend..."
+    -- "the town of " name / "the hamlet of " name
+    -- "Our hopes travel with you." / "Enjoy the hunt!"
+    -- / "You must drive the ruffians of "
+    -- topic3: historical_entity
+    -- " from "
+    -- topic4:
+    --   "our "
+    --   "hillocks"  -- based on world_site's type and flags
+    --   / "fortress"
+    --   / "cave"
+    --   / "hillocks"
+    --   / "forest retreat"
+    --   / "town" / "hamlet"
+    --   / "important location"
+    --   / "lair"
+    --   / "fortress"
+    --   / "camp"
+    --   / "monument"
+    --   " of " world_site
+    --   / "an unknown site"
+    -- ".  They have been harassing the people for too long."
   end
   if not constituent then
     -- TODO: This should never happen, once the above are all filled in.
@@ -6807,7 +8252,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / "I don't remember what I was going to say..."
     -- / "I've forgotten what I was going to say..."
     -- / "I am confused."
-    constituent = {text='... (' .. english .. ')', features={}, morphemes={}}
+    constituent = {text='... [' .. tostring(topic) .. ',' .. tostring(topic1) .. ',' .. tostring(topic2) .. ',' .. tostring(topic3) .. ',' .. tostring(topic4) .. '] (' .. english .. ')', features={}, morphemes={}}
   end
   return constituent, context
 end
@@ -8012,7 +9457,7 @@ local function spell_utterance(utterance)
   return s
 end
 
-if TEST then
+if TEST and TODO then
   assert_eq(
     spell_utterance(make_utterance(
       {features={}, morphemes={{text='a', pword={}, fusion={}, features={}},
@@ -8142,10 +9587,12 @@ if TEST then
     },
   }
   local fr_parameters = {strategies={gender=nil}}
-  local fr_belle_vieille_femme = ps_xp{
+  -- TODO: add example here with "la" to test that agreement works downward too
+  local fr_belle_vieille_femme = ps.xp{
+    false,
     r'beau',
     r'vieux',
-    head=r'femme',
+    r'femme',
   }
   assert_eq(spell_utterance(make_utterance(fr_belle_vieille_femme, fr_lect,
                                            fr_parameters)),
@@ -8172,7 +9619,7 @@ Returns:
 ]]
 local function translate(lect, should_abort, topic, topic1, topic2, topic3,
                          topic4, english, speaker, hearers)
-  print('translate ' .. tostring(lect) .. ' ' .. tostring(should_abort) .. '/' .. tostring(topic) .. '/' .. topic1 .. ' ' .. english)
+  print('translate ' .. tostring(lect) .. ' ' .. tostring(should_abort) .. ' [' .. tostring(topic) .. ',' .. tostring(topic1) .. ',' .. tostring(topic2) .. ',' .. tostring(topic3) .. ',' .. tostring(topic4) .. '] '.. english)
   if not lect then
     return english
   end
@@ -8197,6 +9644,9 @@ local function get_civ_native_lect(civ)
   if civ then
     print('      ' .. #lects)
     local _, lect = utils.linear_index(lects, civ, 'community')
+    if HACK_FOR_QUICK_TEST and not lect then
+      return lects[1]
+    end
     return lect
   end
 end
@@ -8207,87 +9657,356 @@ constituent keys mentioned in `get_constituent` or in context callbacks
 mentioned therein.
 ]]
 local DEFAULT_CONSTITUENT_KEYS = {
+  '!',
+  '-ly',
+  '...',
+  '0,D',
+  '0,N',
+  '?!',
+  '?',
+  '??',
   'FUTURE',
   'HORTATIVE',
   'IMPERATIVE',
+  'INFINITIVE',
+  'PASSIVE',
   'PAST',
+  'PAST_PARTICIPLE',
+  'PERFECT',
+  'POS',
   'PRESENT',
+  'PRESENT_PARTICIPLE',
+  'PROGRESSIVE',
   'PRONOUN',
+  'SENTENCE SEPARATOR',
   'SENTENCE_SEPARATOR',
   'a',
   'able',
   'about',
   'accept',
   'accompany',
+  'actually',
+  'admirable',
+  'adoration',
+  'affectionate',
+  'agitating',
+  'agony',
+  'agree',
+  'ah (fear)',
+  'ah (shock)',
+  'alienated',
+  'all around',
+  'all',
+  'amazing',
+  'amusing',
+  'and if so then',
+  'and',
+  'angry',
+  'anguish',
+  'anguished',
+  'annoyed',
+  'annoying',
+  'anxious',
   'any',
   'area',
+  'argument',
+  'aroused',
+  'arranged',
+  'as',
+  'astonishing',
   'at',
+  'attack',
+  'awake',
+  'awe-struck',
+  'baby',
+  'battle',
+  'be',
+  'behold',
+  'being',
   'believe',
+  'best',
+  'bitter',
+  'blight',
+  'bliss',
+  'blissful',
+  'blizzard',
+  'blood',
+  'body',
+  'boring',
+  'break,V',
+  'brief',
   'bring',
+  'but',
   'by',
+  'call',
   'can',
+  'can,X',
   'care',
   'cause to be',
+  'child of the night',
+  'child',
+  'clothing',
+  'come apart',
+  'come',
+  'complete',
+  'concur',
+  'confinement',
+  'conflict',
+  'confused',
+  'contempt',
+  'content',
+  'core',
+  'could',
+  'dead',
+  'death',
+  'deceased',
+  'defeated',
+  'dejected',
+  'delightful',
+  'describe',
+  'despair',
+  'disappointment',
+  'disaster',
+  'disgusting',
+  'dislike',
+  'displeased',
   'disposal',
+  'disposed',
+  'divine',
   'do',
+  'doubt',
+  'drink,V',
   'drop',
+  'easy',
+  'eek',
+  'embarrassing',
+  'end,V',
+  'enjoyable',
+  'euphoric',
+  'ever',
+  'everything',
+  'exhilarating',
+  'fall for',
   'family',
   'fear',
+  'fear,V',
+  'feed',
+  'feel condition',
+  'feel emotion',
+  'fight',
   'fighting',
+  'fleeting',
   'for the best',
   'for',
+  'fragile',
+  'free',
+  'frustrating',
+  'get away from',
+  'get into situation',
+  'ghost',
+  'glum',
+  'good',
+  'good,MN',
   'goodbye',
+  'grave,J',
   'greetings',
+  'gruesome',
+  'guilty',
+  'haha',
+  'hall',
   'happen',
   'hate',
+  'have (experience)',
+  'have',
   'hello',
   'help',
+  'helpless',
   'here',
   'hey',
   'honor',
+  'horror',
+  'how',
+  'improve',
+  'in tatters',
   'in way',
+  'in',
+  'incredible',
+  'indeed',
   'inevitable',
+  'injure',
+  'injury',
+  'intense',
+  'interesting',
+  'intruder',
+  'irritating',
+  'isolated',
+  'it',
   'join',
+  'joyous',
+  'just',
+  'keep,N',
   'know',
   'left-hand',
   'legend',
+  'less',
+  'library',
+  'life (in general)',
   'life',
+  'living',
+  'long',
+  'look like',
+  'lose',
+  'love,N',
   'made by entity',
   'made of material',
+  'master,V',
+  'masterpiece',
   'means',
+  'midst',
+  'mighty',
   'moment',
+  'mortal,N',
+  'much',
   'must',
+  'naive',
+  'name,V',
+  'nauseate',
+  'near',
+  'need',
+  'no',
+  'no,DET',
+  'none',
   'not',
+  'nuance',
+  'occasion',
+  'of',
+  'off',
+  'oh',
   'okay',
+  'old',
+  'on',
   'one way or another',
+  'or',
   'order (noun)',
+  'order,N',
+  'other',
+  'otherwise',
+  'out in',
   'over my dead body',
+  'overwhelm',
+  'overwhelming',
+  'own',
+  'pain',
+  'palpable',
+  'parent',
+  'part',
   'passive',
   'patient',
+  'patrol',
+  'pay',
+  'pet',
+  'pleasurable',
   'pointless',
+  'prey',
   'problem',
+  'quick',
+  'rage,V',
+  'rain,N',
+  'rain,V',
+  'rawr',
   'ready',
+  'really',
+  'rejected',
+  'release',
+  'restless',
+  'reunite',
+  'right',
   'right-hand',
+  'rot,V',
   'sad but not unexpected',
+  'sad',
   'safety',
   'salutations',
+  'same',
+  'satisfying',
   'save',
+  'scarcely',
+  'separate',
+  'session',
+  'shall',
   'should',
+  'skulk',
+  'slay',
+  'snow storm',
+  'snow,V',
+  'so',
+  'somebody',
+  'something',
+  'somewhat',
   'sorry',
   'sound like',
+  'sparring',
+  'spouse',
+  'stand by',
+  'stand',
   'stop',
+  'strike',
+  'such',
+  'sun',
+  'suspicious',
+  'sweet',
+  'tear',
   'tell about',
+  'temple',
   'terrible',
+  'terribly',
   'terrific',
   'terrifying',
+  'that',
+  'that,C',
   'the',
+  'there',
   'thing',
   'this',
+  'throw',
+  'tide',
+  'time (delimited)',
+  'to',
+  'together with',
+  'too much',
   'trade',
+  'trade,V',
   'troublemaker',
+  'true',
+  'turn,V',
+  'uh (shock)',
+  'uneasy',
+  'unexpected',
+  'up to',
+  'value',
+  'very',
+  'wa',
+  'warrior',
+  'way',
+  'we (in general)',
+  'weapon',
+  'wear',
   'what',
+  'where',
+  'which',
+  'who',
+  'why',
+  'with',
   'withdraw',
   'within time span',
+  'world',
+  'worthlessness',
+  'would',
+  'wound',
+  'wound,V',
+  'wow',
+  'wrack',
+  'wronged',
   'yield',
 }
 
@@ -8515,6 +10234,16 @@ local function expand_lexicons(f)
   for _, slab_type in ipairs(df.slab_engraving_type) do
     f(0, universal, 'item_slabst' .. WORD_ID_CHAR .. slab_type)
   end
+  for _, building_type in ipairs(df.building_type) do
+    f(0, universal, 'building_type' .. WORD_ID_CHAR .. building_type)
+  end
+  for _, job_skill in ipairs(df.job_skill) do
+    f(0, universal, 'job_skill' .. WORD_ID_CHAR .. job_skill)
+  end
+  for _, unit_relationship_type in ipairs(df.unit_relationship_type) do
+    f(0, universal,
+      'unit_relationship_type' .. WORD_ID_CHAR .. unit_relationship_type)
+  end
   for i, builtin in ipairs(df.builtin_mats) do
     -- TODO: coke vs charcoal
     local material = raws.mat_table.builtin[i]
@@ -8601,6 +10330,8 @@ local function expand_lexicons(f)
       creature.name[0],
       creature.name[1],
       creature.name[2])
+    --[[
+    TODO: Commented out temporarily because it is so slow.
     for _, material in ipairs(creature.material) do
       local state = get_state_at_usual_temperature(material)
       local prefix = material.prefix
@@ -8616,6 +10347,7 @@ local function expand_lexicons(f)
         prefix .. material.state_adj[state],
         true)
     end
+    ]]
   end
   --[[
   for _, food in ipairs(raws.itemdefs.food) do
@@ -8730,8 +10462,10 @@ local function expand_lexicons(f)
       gem_prefix .. shape.name,
       gem_prefix .. shape.name_plural)
   end
-  for _, entity in ipairs(df.global.world.entities.all) do
-    f(0, universal, 'ENTITY' .. WORD_ID_CHAR .. entity.id)
+  if not HACK_FOR_QUICK_TEST and lects[1] then
+    for _, entity in ipairs(df.global.world.entities.all) do
+      f(0, universal, 'ENTITY' .. WORD_ID_CHAR .. entity.id)
+    end
   end
   --[[
   for _, building in ipairs(raws.buildings.all) do
@@ -10047,6 +11781,9 @@ Args:
   civ: A historical entity.
 ]]
 local function create_lect(civ)
+  if HACK_FOR_QUICK_TEST and lects[1] then
+    return
+  end
   local translations = df.global.world.raws.language.translations
   translations:insert('#', {new=true, name=civ.id .. 'S'})
   -- TODO: Don't simply copy from the first translation.
@@ -10369,7 +12106,7 @@ local function update_fluency(acquirer, report_lect)
       acquirer.status.current_soul.mental_attrs.LINGUISTIC_ABILITY.value /
       UTTERANCES_PER_XP))
   print('strength <-- ' .. fluency_record.fluency)
-  if fluency_record.fluency == MAXIMUM_FLUENCY then
+  if fluency_record.fluency == MAXIMUM_FLUENCY and not HACK_FOR_QUICK_TEST then
     dfhack.gui.showAnnouncement(
       'You have learned the language of ' ..
       dfhack.TranslateName(report_lect.community.name) .. '.',
@@ -10438,6 +12175,8 @@ local function get_participant_preamble(report, conversation, adventurer)
     preamble = preamble .. ' (to ' ..
       (hearers[1] and df.profession.attrs[hearers[1].profession].caption or '?')
       .. ')'
+    -- TODO: titles, if available, instead of professions
+    -- TODO: descriptors like "squeaky-voiced"
   end
   return preamble .. ': ', speaker, hearers, should_abort
 end
@@ -10492,6 +12231,8 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
                             adventurer, report_lect)
   local conversation = df.activity_entry.find(conversation_id).events[0]
   local turn = conversation.anon_9
+  -- TODO: Investigate crash:
+  -- attempt to perform arithmetic on field '?' (a nil value)
   turn = turn[#turn - new_turn_counts[conversation_id]]
   new_turn_counts[conversation_id] = new_turn_counts[conversation_id] - 1
   local continuation = false
@@ -10583,7 +12324,7 @@ local function handle_new_reports()
       -- TODO: What if `report_lect == nil`?
       local adventurer = df.global.world.units.active[0]
       local adventurer_lects = get_unit_lects(adventurer)
-      if utils.linear_index(adventurer_lects, report_lect) then
+      if not HACK_FOR_QUICK_TEST and utils.linear_index(adventurer_lects, report_lect) then
         print('  adventurer understands: ' .. report.text)
         report.id = report.id + id_delta
         i = i + 1
