@@ -6899,7 +6899,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     end
     constituent = ps.utterance{topic_sentence, focus_sentence}
     -- TODO: some of those are multiple sentences
-  elseif topic == 27 then  -- RespondJoinInsurrection
+  elseif topic == df.talk_choice_type.RespondJoinInsurrection then
     -- topic1: invitation response
   elseif topic == 28 then
     -- "I'm with you on this."
@@ -7299,7 +7299,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / "I've defeated many fearsome opponents!"
   elseif topic == df.talk_choice_type.DescribeRelation then
     -- ?
-  elseif topic == 104 then  -- ClaimSite
+  elseif topic == df.talk_choice_type.ClaimSite then
     -- "I'm in charge of "
     -- this site
     -- " now.  Make way for "
@@ -7706,18 +7706,18 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "I have confidence in your abilities."
   elseif topic == df.talk_choice_type.PraiseTaskCompleter then
     -- "Commendable!  Your loyalty and bravery cannot be denied."
-  elseif topic == 169 then  -- AskAboutPersonMenu
+  elseif topic == df.talk_choice_type.AskAboutPersonMenu then
     -- N/A
-  elseif topic == 170 then  -- AskAboutPerson
+  elseif topic == df.talk_choice_type.AskAboutPerson then
     -- "What can you tell me about "
     -- topic1: historical_figure key
     -- "?"
-  elseif topic == 171 then  -- TellAboutPerson
+  elseif topic == df.talk_choice_type.TellAboutPerson then
     -- topic1: historical_figure key
     -- ?
-  elseif topic == 172 then  -- AskFeelings
+  elseif topic == df.talk_choice_type.AskFeelings then
     -- "How are you feeling right now?"
-  elseif topic == 173 then  -- TellThoughts
+  elseif topic == df.talk_choice_type.TellThoughts then
     ----1
     -- "I've" / "I have"
     -- " been "
@@ -7840,42 +7840,42 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / "I'm " / "I'm doing " / "I've been " / "I feel " / "Everything's "
     -- "fine" / "well" / "alright" / "good" / "just fine"
     -- "."
-  elseif topic == 174 then  -- AskServices
-  elseif topic == 175 then  -- TellServices
+  elseif topic == df.talk_choice_type.AskServices then
+  elseif topic == df.talk_choice_type.TellServices then
     -- "We have many drinks to choose from."
     -- / "The poet!  It's such an honor to have you here.  We have river spirits, potato wine and prickle berry wine.  All drinks cost 1 for a mug.  We rent out rooms for 17 a night."
     -- / "This is not that kind of establishment."
-  elseif topic == 176 then  -- OrderDrink
+  elseif topic == df.talk_choice_type.OrderDrink then
     ----1
     -- "I'd like the " drink "."
-  elseif topic == 177 then  -- RentRoom
+  elseif topic == df.talk_choice_type.RentRoom then
     -- "I'd like a room."
-  elseif topic == 178 then  -- ExtendRoomRental
+  elseif topic == df.talk_choice_type.ExtendRoomRental then
     -- "I'd like my room for another night."
-  elseif topic == 179 then  -- ConfirmServiceOrder
+  elseif topic == df.talk_choice_type.ConfirmServiceOrder then
     -- "I'll be back with your drink in a moment."
     -- / "Your room is up the stairs, the first door on your right."
     -- / "You'll have the room for another day. I'm glad you're enjoying your stay."
-  elseif topic == 180 then  -- AskJoinEntertainer
+  elseif topic == df.talk_choice_type.AskJoinEntertain then
     -- "Let's entertain the world together!"
-  elseif topic == 181 then  -- RespondJoinEntertainer
+  elseif topic == df.talk_choice_type.RespondJoinEntertain then
    -- TODO
    -- "Can you manage a troupe so large?"
    -- 5 "I'm sorry.  My duty is here."
-  elseif topic == 182 then  -- AskJoinTroupe
+  elseif topic == df.talk_choice_type.AskJoinTroupe then
   -- elseif topic == 183 then
-  elseif topic == 184 then  -- RefuseTroupeApplication
-  elseif topic == 185 then  -- InviteJoinTroupe
-  elseif topic == 186 then  -- AcceptTroupeInvitation 
-  elseif topic == 187 then  -- RefuseTroupeInvitation
-  elseif topic == 188 then  -- KickOutOfTroupe
-    -- "I kicking you out of "
+  elseif topic == df.talk_choice_type.RefuseTroupeApplication then
+  elseif topic == df.talk_choice_type.InviteJoinTroupe then
+  elseif topic == df.talk_choice_type.AcceptTroupeInvitation  then
+  elseif topic == df.talk_choice_type.RefuseTroupeInvitation then
+  elseif topic == df.talk_choice_type.KickOutOfTroupe then
+    -- "I'm kicking you out of "
     -- topic1: historical_entity key
     -- "."
-  elseif topic == 189 then  -- CreateTroupe
-  elseif topic == 190 then  -- LeaveTroupe
+  elseif topic == df.talk_choice_type.CreateTroupe then
+  elseif topic == df.talk_choice_type.LeaveTroupe then
   -- elseif topic == 191 then
-  elseif topic == 192 then  -- TellBePatientForService
+  elseif topic == df.talk_choice_type.TellBePatientForService then
     -- "Please be patient. I'll have your order ready in a moment."
     constituent = ps.utterance{
       ps.sentence{
@@ -7902,17 +7902,17 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
         },
       },
     }
-  elseif topic == 193 then  -- TellNoServices
+  elseif topic == df.talk_choice_type.TellNoServices then
     -- "We don't offer any specific services here."
-  elseif topic == 194 then  -- AskWaitUntilThere
+  elseif topic == df.talk_choice_type.AskWaitUntilThere then
     -- "Yes, I can serve you when we're both there."
-  elseif topic == 195 then  -- DenyWorkingHere
+  elseif topic == df.talk_choice_type.DenyWorkingHere then
     -- "I don't work here."
-  elseif topic == 196 then  -- ExpressEmotionMenu
+  elseif topic == df.talk_choice_type.ExpressEmotionMenu then
     -- N/A
-  elseif topic == 197 then  -- StateValueMenu
+  elseif topic == df.talk_choice_type.StateValueMenu then
     -- N/A
-  elseif topic == 198 then  -- StateValue
+  elseif topic == df.talk_choice_type.StateValue then
     ----1
     if topic1 == df.value_type.LAW then
       -- "One should always respect the law."
@@ -8089,19 +8089,19 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
       -- "Let there be peace throughout the world."
       -- "How I long for the beautiful spectacle of war!"
       -- "War is sometimes necessary, but peace must be valued as well, when we can have it."
-    elseif topic1 == 32 then  -- KNOWLEDGE
+    elseif topic1 == df.value_type.KNOWLEDGE then
       -- "The quest for knowledge never ends."
       -- "All of that so-called knowledge doesn't mean a thing."
       -- "Knowledge can be useful, but it can also be pointless or even dangerous."
     end
-  elseif topic == 199 then  -- SayNoOrderYet
+  elseif topic == df.talk_choice_type.SayNoOrderYet then
     -- "You haven't ordered anything. Would you like something?"
-  elseif topic == 200 then  -- ProvideDirectionsBuilding
+  elseif topic == df.talk_choice_type.ProvideDirectionsBuilding then
     -- topic1, topic2: building
     -- " is "
     -- direction
     -- "."
-  elseif topic == 201 then  -- Argue
+  elseif topic == df.talk_choice_type.Argue then
     ----1
     -- "No."
     -- "I disagree."
@@ -8114,7 +8114,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "Stop and reflect."
     -- "I don't agree."
     -- "Just think about it."
-  elseif topic == 202 then  -- Flatter
+  elseif topic == df.talk_choice_type.Flatter then
     ----1
     -- "Though I cannot agree fully on a slight technicality,"
     -- / "Despite some minor reservations..."
@@ -8130,7 +8130,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- / "no one can deny your genius!"
     -- / "you needn't indulge my trivial thoughts!"
     -- / "I am so nearly swayed by your greatness alone that we can simply assign you the victory!"
-  elseif topic == 203 then  -- DismissArgument
+  elseif topic == df.talk_choice_type.DismissArgument then
     ----1
     -- "No!"
     -- "Ha!"
@@ -8168,25 +8168,25 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "Unbelievable."
     -- "Really."
     -- "It's wrong."
-  elseif topic == 204 then  -- RespondPassively
+  elseif topic == df.talk_choice_type.RespondPassively then
     ----1
     -- "I don't want to argue."
     -- / "I don't know what to say."
     -- / "I guess I'm not sure."
     -- / "I just don't know."
-  elseif topic == 205 then  -- Acquiesce
+  elseif topic == df.talk_choice_type.Acquiesce then
     ----1
     -- "Maybe you're right."
     -- "Yes, I can see it clearly now."
     -- "I have been so foolish.  Yes, I agree."
     -- "You know, I think you're right."
-  elseif topic == 206 then  -- DerideFlattery
+  elseif topic == df.talk_choice_type.DerideFlattery then
     ----1
     -- "You insult me with your flattery, but let us move on."
-  elseif topic == 207 then  -- ExpressOutrageAtDismissal
+  elseif topic == df.talk_choice_type.ExpressOutrageAtDismissal then
     ----1
     -- "You insult me with your derision, but let us move on."
-  elseif topic == 208 then  -- PressArgument
+  elseif topic == df.talk_choice_type.PressArgument then
     ----1
     -- "I must insist."
     -- "You must be convinced."
@@ -8194,7 +8194,7 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "I sense you're wavering."
     -- "No, I mean it."
     -- TODO: others? see string dump
-  elseif topic == 209 then  -- DropArgument
+  elseif topic == df.talk_choice_type.DropArgument then
     ----1
     -- "If you insist so strongly, we can move on."
     -- / "Well, there must be something else to discuss."
@@ -8205,13 +8205,13 @@ local function get_constituent(should_abort, topic, topic1, topic2, topic3,
     -- "There must be something else to discuss."
     -- / "Let's drop the argument."
     -- / "Yes, let's move on."
-  elseif topic == 210 then  -- AskWork
-  elseif topic == 211 then  -- AskWorkGroup
-  elseif topic == 212 then  -- GrantWork
-  elseif topic == 213 then  -- RefuseWork
-  elseif topic == 214 then  -- GrantWorkGroup
-  elseif topic == 215 then  -- RefuseWorkGroup
-  elseif topic == 216 then  -- GiveSquadOrder
+  elseif topic == df.talk_choice_type.AskWork then
+  elseif topic == df.talk_choice_type.AskWorkGroup then
+  elseif topic == df.talk_choice_type.GrantWork then
+  elseif topic == df.talk_choice_type.RefuseWork then
+  elseif topic == df.talk_choice_type.GrantWorkGroup then
+  elseif topic == df.talk_choice_type.RefuseWorkGroup then
+  elseif topic == df.talk_choice_type.GiveSquadOrder then
     -- "You must drive "
     -- topic3: historical_entity / "an unknown civilization"
     -- " from their home at "
@@ -11205,7 +11205,9 @@ local function write_lect_files()
     local filename = 'lect_' .. string.format('%04d', i)
     local file = io.open(dir .. '/' .. filename .. '.txt', 'w')
     file:write(filename, '\n\n[OBJECT:LECT]\n\n[LECT]\n')
-    file:write('\t[PARENT:', utils.linear_index(lects, lect.parent), ']\n')
+    if lect.parent then
+      file:write('\t[PARENT:', utils.linear_index(lects, lect.parent), ']\n')
+    end
     file:write('\t[SEED:', lect.seed, ']\n')
     file:write('\t[LEMMAS:', lect.lemmas.name, ']\n')
     file:write('\t[COMMUNITY:', lect.community.id, ']\n')
@@ -12127,13 +12129,13 @@ Returns:
 ]]
 local function get_participants(report, conversation)
   local speaker_id = report.unk_v40_3
-  local participants = conversation.anon_1
+  local participants = conversation.participants
   local speaker = df.unit.find(speaker_id)
   -- TODO: hearer doesn't always exist.
   -- TODO: Solution: cache all <activity_event_conversationst>s' participants.
   -- TODO: Get all the hearers.
   local hearer = #participants > 1 and df.unit.find(
-    participants[speaker_id == participants[0].anon_1 and 1 or 0].anon_1)
+    participants[speaker_id == participants[0].unit_id and 1 or 0].unit_id)
   return speaker, {hearer}
 end
 
@@ -12159,10 +12161,8 @@ local function get_participant_preamble(report, conversation, adventurer)
   local should_abort = false
   local adventurer_is_hearer = utils.linear_index(hearers, adventurer)
   if adventurer_is_hearer or speaker == adventurer then
-    -- TODO: Figure out why 7 makes "Say goodbye" the only available option.
     -- TODO: df.global.ui_advmode.conversation.choices instead?
-    -- TODO: Cf. anon_15.
-    conversation.anon_2 = 7
+    conversation.menu = df.conversation_menu.RespondGoodbye
     if adventurer_is_hearer then
       -- TODO: unless this is the first turn of the conversation
       should_abort = true
@@ -12230,7 +12230,7 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
                             report, report_index, announcement_index,
                             adventurer, report_lect)
   local conversation = df.activity_entry.find(conversation_id).events[0]
-  local turn = conversation.anon_9
+  local turn = conversation.turns
   -- TODO: Investigate crash:
   -- attempt to perform arithmetic on field '?' (a nil value)
   turn = turn[#turn - new_turn_counts[conversation_id]]
@@ -12239,8 +12239,8 @@ local function replace_turn(conversation_id, new_turn_counts, english, id_delta,
   local preamble, speaker, hearers, should_abort =
     get_participant_preamble(report, conversation, adventurer)
   for _, line in ipairs(line_break(REPORT_LINE_LENGTH, preamble .. translate(
-    report_lect, should_abort, turn.anon_3, turn.anon_11, turn.anon_12,
-    turn.anon_13, turn.unk_v4014_1, english, speaker, hearers)))
+    report_lect, should_abort, turn.type, turn.anon_2, turn.anon_3, turn.anon_4,
+    turn.unk_v4014_1, english, speaker, hearers)))
   do
     id_delta = id_delta + 1
     local new_report = {
@@ -12363,7 +12363,11 @@ local function run()
     -- Only write files right before retiring or abandoning.
     if (viewscreen.in_retire_adv == 1 or
         viewscreen.in_retire_dwf_abandon_adv == 1 or
-        viewscreen.in_abandon_dwf == 1) then
+        viewscreen.in_abandon_dwf == 1 or
+        viewscreen.options[viewscreen.sel_idx] ==
+          df.viewscreen_optionst.T_options.AbortRetire or
+        viewscreen.options[viewscreen.sel_idx] ==
+          df.viewscreen_optionst.T_options.Abandon) then
       if dirty then
         write_fluency_data()
         write_lect_files()
