@@ -12411,6 +12411,65 @@ if #args >= 1 then
   elseif args[1] == 'stop' then
     enabled = false
     dfhack.timeout_active(timer)
+  elseif args[1] == 'functions' then
+    local own_path
+    for path, script in pairs(dfhack.internal.scripts) do
+      if script.env == _ENV then
+        own_path = path
+        break
+      end
+    end
+    if own_path then
+      local file = io.open(own_path)
+      local name
+      local graph = {}
+      for line in file:lines() do
+        line = line:gsub('%-%-.*', '')
+        if line == 'end' then
+          name = nil
+        end
+        local match = line:match('^local function ([%w_]+)%(')
+        if match then
+          name = match
+        else
+          match = line:match('^([%w_]+)[.%w_]* = function%(')
+          if match then
+            name = match
+          else
+            for match in line:gmatch('([.%w_]+)%(') do
+              if match and name then
+                match = match:match('[%w_]+')
+                if not graph[name] then
+                  graph[name] = {}
+                end
+                if match and name ~= match then
+                  graph[name][match] = true
+                end
+              end
+            end
+          end
+        end
+      end
+      file:close()
+      for f, calls in pairs(graph) do
+        for call in pairs(calls) do
+          if not graph[call] then
+            calls[call] = nil
+          end
+        end
+        if not next(calls) then
+          graph[f] = nil
+        end
+      end
+      for f, calls in pairs(graph) do
+        print(f)
+        for call in pairs(calls) do
+          print('  ' .. call)
+        end
+      end
+    else
+      qerror('Cannot find the path to this script')
+    end
   elseif args[1] == 'test' then
     finalize()
     initialize()
