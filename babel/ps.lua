@@ -1,8 +1,10 @@
 --@ module = true
 
+local testing = reqscript('babel/testing')
 local trees = reqscript('babel/trees')
 
 local WORD_ID_CHAR = trees.WORD_ID_CHAR
+local c = testing.coverage_test
 local cc = trees.cc
 local k = trees.k
 local m = trees.m
@@ -458,7 +460,7 @@ Args:
 ]]
 function building_type_name(arg)
   -- building_type
-  return r('building_type' .. WORD_ID_CHAR .. df.building_type[arg])
+  return r('building_type' .. WORD_ID_CHAR .. c(df.building_type, arg))
 end
 
 --[[
@@ -543,7 +545,7 @@ Args:
 ]]
 function job_skill(arg)
   -- job_skill
-  return r('job_skill' .. WORD_ID_CHAR .. df.job_skill[arg])
+  return r('job_skill' .. WORD_ID_CHAR .. c(df.job_skill, arg))
 end
 
 --[[
@@ -555,8 +557,8 @@ Args:
 function my_relationship_type_name(arg)
   -- unit_relationship_type
   return np{
-    t([[unit_relationship_type]] .. WORD_ID_CHAR ..
-      df.unit_relationship_type[arg])
+    t('unit_relationship_type' .. WORD_ID_CHAR ..
+      c(df.unit_relationship_type, arg))
       {relative=thee(context)}
   }
 end
@@ -570,7 +572,7 @@ Args:
 function relationship_type_name(arg)
   -- unit_relationship_type
   return r('unit_relationship_type' .. WORD_ID_CHAR ..
-           df.unit_relationship_type[arg])
+           c(df.unit_relationship_type, arg))
 end
 
 --[[

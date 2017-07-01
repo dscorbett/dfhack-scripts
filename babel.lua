@@ -3,11 +3,14 @@
 
 local utils = require('utils')
 
+local testing = reqscript('babel/testing')
 local translations = reqscript('babel/translations')
 local trees = reqscript('babel/trees')
 
-local context_callbacks = translations.context_callbacks
+local TEST = testing.ENABLED
 local WORD_ID_CHAR = trees.WORD_ID_CHAR
+local assert_eq = testing.assert_eq
+local context_callbacks = translations.context_callbacks
 local cc = trees.cc
 local k = trees.k
 local m = trees.m
@@ -41,7 +44,6 @@ TODO:
 * Orthography and spelling pronunciations
 ]]
 
-local TEST = true
 local HACK_FOR_QUICK_TEST = true
 
 local REPORT_LINE_LENGTH = 73
