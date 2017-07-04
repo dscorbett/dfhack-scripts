@@ -146,7 +146,7 @@ function infl(arg)
     local args = arg[#arg].args
     if args.theme then
       if args.agent then
-        table.insert(arg, #arg - 2, t'by'{theme=args.agent})
+        table.insert(arg, #arg - 1, t'by'{theme=args.agent})
         args.agent = nil
       end
       rv = xp{false, x{k'PASSIVE', xp(arg)}}
@@ -412,7 +412,7 @@ Args:
   arg!
   verb
 ]]
-function lets(arg)
+function lets(arg, context)
   if not arg.args then
     arg.args = {}
   end
@@ -460,7 +460,8 @@ Args:
 ]]
 function building_type_name(arg)
   -- building_type
-  return r('building_type' .. WORD_ID_CHAR .. c(df.building_type, arg))
+  return r(
+    'building_type' .. WORD_ID_CHAR .. c(df.building_type, arg, 'building_type'))
 end
 
 --[[
@@ -472,7 +473,7 @@ Args:
 function hf_name(arg)
   -- historical_figure ID
   return {text='\xae' ..
-          dfhack.TranslateName(df.artifact_record.find(arg).name) .. '\xaf'}
+          dfhack.TranslateName(df.historical_figure.find(arg).name) .. '\xaf'}
 end
 
 --[[
@@ -527,14 +528,14 @@ function item(arg)
       head_key = 'ITEM_TYPE' .. WORD_ID_CHAR .. item_type
     end
   end
-  local t = {false}
-  t[#t + 1] = coin_entity
-  t[#t + 1] = coin_ruler
-  t[#t + 1] = t'made of material'{theme=r(material)}
-  t[#t + 1] = handedness
-  t[#t + 1] = r(head_key)
+  local phrase = {false}
+  phrase[#phrase + 1] = coin_entity
+  phrase[#phrase + 1] = coin_ruler
+  phrase[#phrase + 1] = t'made of material'{theme=r(material)}
+  phrase[#phrase + 1] = handedness
+  phrase[#phrase + 1] = r(head_key)
   -- TODO: fallback: "object I can't remember"
-  return xp(t)
+  return xp(phrase)
 end
 
 --[[
@@ -545,7 +546,7 @@ Args:
 ]]
 function job_skill(arg)
   -- job_skill
-  return r('job_skill' .. WORD_ID_CHAR .. c(df.job_skill, arg))
+  return r('job_skill' .. WORD_ID_CHAR .. c(df.job_skill, arg, 'job_skill'))
 end
 
 --[[
@@ -554,11 +555,11 @@ end
 Args:
   arg:
 ]]
-function my_relationship_type_name(arg)
+function my_relationship_type_name(arg, context)
   -- unit_relationship_type
   return np{
     t('unit_relationship_type' .. WORD_ID_CHAR ..
-      c(df.unit_relationship_type, arg))
+      c(df.unit_relationship_type, arg, 'unit_relationship_type'))
       {relative=thee(context)}
   }
 end
@@ -572,7 +573,7 @@ Args:
 function relationship_type_name(arg)
   -- unit_relationship_type
   return r('unit_relationship_type' .. WORD_ID_CHAR ..
-           c(df.unit_relationship_type, arg))
+           c(df.unit_relationship_type, arg, 'unit_relationship_type'))
 end
 
 --[[

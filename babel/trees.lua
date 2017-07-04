@@ -3,7 +3,7 @@
 WORD_ID_CHAR = '/'
 
 function cc(callback_name, key)
-  return {context_key=key, context_callback=callback_name}
+  return {context_key=key, context_callback=callback_name, features={}}
 end
 
 --[[

@@ -420,33 +420,6 @@ Usage:
 end
 
 --[[
-Asserts that two values are equal.
-
-If the values are both tables, it compares the elements of the tables.
-
-Args:
-  actual: A value.
-  expected: A value.
-]]
-local function assert_eq(actual, expected, _k)
-  if type(actual) == 'table' and type(expected) == 'table' then
-    for k, v in pairs(expected) do
-      assert_eq(actual[k], v, k)
-    end
-    for k, v in pairs(actual) do
-      assert_eq(v, expected[k], k)
-    end
-  else
-    local k = ''
-    if _k then
-      k = ', index: ' .. tostring(_k)
-    end
-    assert(expected == actual, 'expected: ' .. tostring(expected) ..
-           ', actual: ' .. tostring(actual) .. k)
-  end
-end
-
---[[
 Concatenates two sequences.
 
 Args:
@@ -2504,8 +2477,12 @@ TODO
 local function contextualize(constituent, context)
   local context_key = constituent.context_key
   if context_key then
-    return context_callbacks[constituent.context_callback](
+    local rv = context_callbacks[constituent.context_callback](
       context[context_key], context)
+    if constituent.features then
+      utils.fillTable(rv.features, constituent.features)
+    end
+    return rv
   end
   return {
     n1=constituent.n1 and contextualize(constituent.n1, context),
@@ -6701,7 +6678,8 @@ if #args >= 1 then
     else
       qerror('Cannot find the path to this script')
     end
-  elseif args[1] == 'test' then
+  elseif args[1] == 'slow-test' then
+    testing.run_slow_tests()
   else
     usage()
   end
