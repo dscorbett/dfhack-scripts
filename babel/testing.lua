@@ -73,8 +73,11 @@ function assert_eq(actual, expected, _k)
     if _k then
       k = ', index: ' .. tostring(_k)
     end
-    assert(expected == actual, 'expected: ' .. tostring(expected) ..
-           ', actual: ' .. tostring(actual) .. k)
+    if expected ~= actual then
+      qerror('expected: ' .. tostring(expected) ..
+        ', actual: ' .. tostring(actual) .. k .. '\n' ..
+        debug.traceback())
+    end
   end
 end
 
