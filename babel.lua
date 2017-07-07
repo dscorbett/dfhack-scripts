@@ -208,8 +208,8 @@ A pair of a dimension value and an index.
   candidate: A dimension value.
 
 Bitfield:
-A sequence of 32-bit unsigned integers representing a bitfield. Bit `b`
-of element `e` represents bit `(e - 1) * 32 + b` in that bitfield. The
+A sequence of 64-bit Lua integers representing a bitfield. Bit `b` of
+element `e` represents bit `(e - 1) * 64 + b` in that bitfield. The
 minimum bit is 0. There is no maximum bit; the bitfield will grow when
 needed.
 
@@ -1310,7 +1310,7 @@ Returns:
 local function bitfield_or(a, b)
   local rv = copyall(a)
   for i = 1, #b do
-    rv[i] = a[i] and bit32.bor(a[i], b[i]) or b[i]
+    rv[i] = a[i] and a[i] | b[i] or b[i]
   end
   return rv
 end
@@ -1336,20 +1336,14 @@ Returns:
     the masks in `...`.
 ]]
 local function bitfield_equals(a, b, ...)
-  local m = math.max(#a, #b)
-  local masks_inside_out = {}
-  for _, mask in ipairs({...}) do
-    m = math.min(#mask)
-    for i = 1, m do
-      if not masks_inside_out[i] then
-        masks_inside_out[i] = {}
-      end
-      masks_inside_out[i][#masks_inside_out[i] + 1] = mask[i]
+  local masks = {...}
+  local max = math.max(#a, #b)
+  for e = 1, max do
+    local diff = (a[e] or 0) ~ (b[e] or 0)
+    for _, mask in ipairs(masks) do
+      diff = diff & mask[e]
     end
-  end
-  for i = 1, m do
-    if bit32.btest(bit32.bxor(a[i] or 0, b[i] or 0),
-                   table.unpack(masks_inside_out[i] or {})) then
+    if diff ~= 0 then
       return false
     end
   end
@@ -1569,13 +1563,13 @@ Returns:
   The value of bit `b` in `bitfield` (0 or 1).
 ]]
 local function bitfield_get(bitfield, b)
-  local int = bitfield[math.floor(b / 32) + 1]
-  return int and bit32.extract(int, b % 32) or 0
+  local int = bitfield[b // 64 + 1]
+  return int and int >> b % 64 & 1 or 0
 end
 
 if TEST then
   assert_eq(bitfield_get({}, 158), 0)
-  assert_eq(bitfield_get({0x0, 0x0, 0x2}, 65), 1)
+  assert_eq(bitfield_get({0x0, 0x0, 0x2}, 129), 1)
 end
 
 --[[
@@ -1590,22 +1584,22 @@ Returns:
   `bitfield`.
 ]]
 local function bitfield_set(bitfield, b, v)
-  local e = math.floor(b / 32) + 1
+  local e = b // 64 + 1
   local int = bitfield[e]
   if not int then
     for i = #bitfield + 1, e do
       bitfield[i] = 0
     end
   end
-  bitfield[e] = bit32.replace(bitfield[e], v, b % 32)
+  bitfield[e] = bitfield[e] & ~(1 << b % 64) | v << b % 64
   return bitfield
 end
 
 if TEST then
   assert_eq(bitfield_set({}, 0, 1), {0x1})
   assert_eq(bitfield_set({}, 1, 1), {0x2})
-  assert_eq(bitfield_set({}, 31, 1), {0x80000000})
-  assert_eq(bitfield_set({}, 32, 1), {0x0, 0x1})
+  assert_eq(bitfield_set({}, 63, 1), {0x8000000000000000})
+  assert_eq(bitfield_set({}, 64, 1), {0x0, 0x1})
   assert_eq(bitfield_set({0xA0}, 0, 1), {0xA1})
   assert_eq(bitfield_set({0xA0}, 5, 0), {0x80})
 end
@@ -2557,7 +2551,7 @@ local function random_word(lect, word_id)
   local parameters = get_parameters(lect)
   -- TODO: random sonority parameters
   local min_peak_sonority = parameters.max_sonority
-  local min_sonority_delta = math.max(1, math.floor((parameters.max_sonority - parameters.min_sonority) / 2))
+  local min_sonority_delta = math.max(1, (parameters.max_sonority - parameters.min_sonority) // 2)
   -- TODO: more realistic syllable count distribution
   local syllables_left = math.random(2)
   -- TODO: make sure this is low enough so it never triggers a new syllable on the first phoneme (here and below)
@@ -4791,7 +4785,7 @@ local function load_phonologies()
       local current_parent = 0
       local current_dimension
       local nodes_in_dimension_tree = {}
-      for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
+      for tag in io.read('a'):gmatch('%[([^]\n]*)%]?') do
         local subtags = {}
         for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
           table.insert(subtags, subtag)
@@ -5471,7 +5465,7 @@ local function load_lects()
       local current_morpheme
       local morphemes_to_backpatch = {}
       local constituent_stack
-      for tag in io.read('*all'):gmatch('%[([^]\n]*)%]?') do
+      for tag in io.read('a'):gmatch('%[([^]\n]*)%]?') do
         local subtags = {}
         for subtag in string.gmatch(tag .. ':', '([^]:]*):') do
           table.insert(subtags, subtag)
@@ -5742,7 +5736,7 @@ local function has_language_object(path)
   io.input(path)
   -- TODO: check for legal variants of this regex and false positives
   local rv = false
-  if io.read('*all'):find('%[OBJECT:LANGUAGE%]') then
+  if io.read('a'):find('%[OBJECT:LANGUAGE%]') then
     rv = true
   end
   io.input():close()
